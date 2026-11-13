@@ -395,8 +395,13 @@ async fn typing_note(app: St<'_>, ch: u64, key: u8, vel: Option<f32>, on: bool) 
 }
 
 #[tauri::command]
-async fn pattern_play(app: St<'_>, pattern: Option<u64>) -> R<()> {
-    app.engine.pattern_play(pattern).map_err(es)
+async fn pattern_play(app: St<'_>, pattern: Option<u64>, from: Option<f64>, range: Option<(f64, f64)>) -> R<()> {
+    app.engine.pattern_play(pattern, from.unwrap_or(0.0), range).map_err(es)
+}
+
+#[tauri::command]
+async fn pattern_loop(app: St<'_>, range: Option<(f64, f64)>) -> R<()> {
+    app.engine.pattern_loop(range).map_err(es)
 }
 
 #[tauri::command]
@@ -996,6 +1001,7 @@ pub fn run(project_arg: Option<&str>) {
             note_audition,
             typing_note,
             pattern_play,
+            pattern_loop,
             audio_hosts,
             audio_devices,
             audio_get_config,

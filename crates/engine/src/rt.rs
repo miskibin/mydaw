@@ -641,8 +641,16 @@ pub enum Cmd {
         len: f32,
         pattern: Option<Id>,
     },
-    /// Loop one pattern on its own (`None` stops). Exclusive with the song transport.
-    PatPlay(Option<Id>),
+    /// Loop one pattern on its own (`None` stops), from `from` beats into it, within `range`
+    /// (beats; `None` = the whole pattern). Exclusive with the song transport.
+    PatPlay {
+        id: Option<Id>,
+        from: f64,
+        range: Option<(f64, f64)>,
+    },
+    /// The pattern loop's range changed while it plays (`None` = the whole pattern): the
+    /// position stays, or goes to the range's start when it falls outside it.
+    PatRange(Option<(f64, f64)>),
     /// Live MIDI key down/up on a channel. It plays where the song plays the channel (its own
     /// insert, else the track of its pattern); `ins` (the armed track's insert) only for a
     /// channel the song does not play yet, else the master.
@@ -723,9 +731,10 @@ pub struct Rt {
     taps: Taps,
     record: rtrb::Producer<f32>,
     preview: Option<Box<Preview>>,
-    /// Pattern loop preview: pattern id and beats into it.
+    /// Pattern loop preview: pattern id, beats into it and the part of it that loops.
     pat_play: Option<Id>,
     pat_beat: f64,
+    pat_range: Option<(f64, f64)>,
     /// Skip effect chains that are silent past their tails (see [`gate`]).
     skip_silent: bool,
     /// Live MIDI events (see `Engine::midi_event`).
@@ -807,6 +816,7 @@ impl Rt {
             preview: None,
             pat_play: None,
             pat_beat: 0.0,
+            pat_range: None,
             skip_silent: true,
             midi: None,
             workers: 0,
@@ -1122,15 +1132,24 @@ impl Rt {
                         self.trash(Garbage::Synth(old));
                     }
                 }
-                Cmd::PatPlay(id) => {
+                Cmd::PatPlay { id, from, range } => {
                     if id.is_some() && self.playing {
                         self.stop(false);
                     }
+                    if id.is_some() && self.pat_play == id {
+                        // a jump inside a playing loop: what sounds now must not ring on
+                        self.voices.clear();
+                        self.synths.stop_all();
+                    }
                     self.set_pat_play(id);
+                    self.pat_range = range;
                     if id.is_some() {
+                        self.pat_beat = if from.is_finite() { from.max(0.0) } else { 0.0 };
+                        self.shared.pat_beat.store(self.pat_beat.to_bits(), Relaxed);
                         self.jump();
                     }
                 }
+                Cmd::PatRange(range) => self.pat_range = range,
             }
         }
     }
@@ -1138,10 +1157,13 @@ impl Rt {
     fn set_pat_play(&mut self, id: Option<Id>) {
         self.pat_play = id;
         self.pat_beat = 0.0;
+        self.pat_range = None;
         self.shared.pat_beat.store((if id.is_some() { 0f64 } else { -1f64 }).to_bits(), Relaxed);
     }
 
-    /// The pattern loop preview: schedules the notes of `[pat_beat, +n samples)` and wraps.
+    /// The pattern loop preview: schedules the notes of `[pat_beat, +n samples)` and wraps at
+    /// the end of the loop range (the whole pattern without one). Notes starting before the
+    /// range are not played; one starting inside it plays its full length.
     fn schedule_pattern(&mut self, n: usize, bps: f64, spb: f64) {
         let Some(pid) = self.pat_play else { return };
         let tl = &*self.timeline;
@@ -1152,12 +1174,21 @@ impl Rt {
         if pat.len <= 0.0 {
             return;
         }
-        let b0 = self.pat_beat;
+        let (la, lb) = loop_span(self.pat_range, pat.len);
+        let span = lb - la;
+        if !(la..lb).contains(&self.pat_beat) {
+            self.pat_beat = la;
+        }
+        // positions in the loop, from its start
+        let b0 = self.pat_beat - la;
         let b1 = b0 + n as f64 * bps;
-        let (r0, r1) = ((b0 / pat.len).floor() as i64, (b1 / pat.len).floor() as i64);
+        let (r0, r1) = ((b0 / span).floor() as i64, (b1 / span).floor() as i64);
         for r in r0..=r1 {
             for nt in &pat.notes {
-                let nb = r as f64 * pat.len + nt.beat;
+                if nt.beat < la || nt.beat >= lb {
+                    continue;
+                }
+                let nb = r as f64 * span + nt.beat - la;
                 if nb < b0 || nb >= b1 {
                     continue;
                 }
@@ -1182,7 +1213,7 @@ impl Rt {
                 );
             }
         }
-        self.pat_beat = b1.rem_euclid(pat.len);
+        self.pat_beat = la + b1.rem_euclid(span);
         self.shared.pat_beat.store(self.pat_beat.to_bits(), Relaxed);
     }
 
@@ -2080,3 +2111,19 @@ fn apply_automation(tl: &mut Timeline, g: &mut Graph, synths: &mut crate::poly::
 
 /// The range an audio clip's gain automation spans, dB (the sample editor's VOL knob).
 pub const CLIP_GAIN_DB: (f32, f32) = (-24.0, 12.0);
+
+/// The part of a pattern `len` beats long that its loop preview plays: `range` kept inside the
+/// pattern, or the whole pattern when there is none or it is too short to loop (< 1/64 beat).
+fn loop_span(range: Option<(f64, f64)>, len: f64) -> (f64, f64) {
+    match range {
+        Some((a, b)) if a.is_finite() && b.is_finite() => {
+            let (a, b) = (a.min(b).clamp(0.0, len), a.max(b).clamp(0.0, len));
+            if b - a >= 1.0 / 64.0 {
+                (a, b)
+            } else {
+                (0.0, len)
+            }
+        }
+        _ => (0.0, len),
+    }
+}

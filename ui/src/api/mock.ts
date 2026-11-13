@@ -2,6 +2,7 @@
 // Holds the demo project, applies ops with undo/gestures, plays a fake transport and
 // streams binary telemetry frames (encoded exactly like the real ones).
 import { delayMs, loopGain } from '../lib/delay';
+import { loopPos, type BeatRange } from '../lib/patLoop';
 import type { Backend, EventMap, OsDropEvent } from './backend';
 import { encodeFrame, SCOPE_LEN, SPEC_BANDS, type EncFx } from './telemetry';
 import { BUILTIN, emptyProject, mockCatalog, sketchProject } from './mockData';
@@ -114,7 +115,8 @@ export class MockBackend implements Backend {
   private audition: Record<string, Id> = {};
   private preview: null | { t0: number; dur: number; off: number; rate?: number } = null;
   /** Pattern loop preview (engine `pattern_play`) and recent auditions (insert id → time) for the meters. */
-  private patPlay: null | { id: Id; t0: number } = null;
+  /** The pattern loop: since `t0` (ms) it plays on from `from` beats, within `range`. */
+  private patPlay: null | { id: Id; t0: number; from: number; range: BeatRange | null } = null;
   private flash = new Map<Id, number>();
   private srcMeta = new Map<Id, MockSource>();
   private takeN = 0;
@@ -301,7 +303,7 @@ export class MockBackend implements Backend {
       const pt = this.p.patterns.find(x => x.id === this.patPlay!.id);
       if (!pt) this.patPlay = null;
       else {
-        patBeat = ((performance.now() - this.patPlay.t0) / 1000 / spb) % pt.len;
+        patBeat = this.patPos(pt.len, spb);
         const ins = this.patHome(pt.id) ?? 0, pf = ((patBeat % 1) + 1) % 1;
         live.set(ins, Math.max(live.get(ins) ?? 0, 0.25 + 0.55 * Math.exp(-pf * 5)));
       }
@@ -874,10 +876,24 @@ export class MockBackend implements Backend {
     this.flash.set(ins, performance.now());
   }
   async typingNote(a: { ch: Id; key: number; vel?: number; on: boolean }) { if (a.on) await this.noteAudition({ ch: a.ch, key: a.key, vel: a.vel }); }
-  async patternPlay(id: Id | null) {
+  async patternPlay(id: Id | null, o?: { from?: number; range?: BeatRange | null }) {
+    const from = o?.from ?? 0, r = o?.range ?? null;
+    if (!Number.isFinite(from) || (r && (!Number.isFinite(r.a) || !Number.isFinite(r.b)))) throw new Error('pattern position: not a number');
     if (id != null && !this.p.patterns.some(x => x.id === id)) throw new Error('no pattern ' + id);
     if (id != null && this.tr.playing) { this.finishRec(); this.tr = { ...this.tr, playing: false }; this.changedTransport(); }
-    this.patPlay = id == null ? null : { id, t0: performance.now() };
+    this.patPlay = id == null ? null : { id, t0: performance.now(), from: Math.max(0, from), range: r ? { a: r.a, b: r.b } : null };
+  }
+  async patternLoop(range: BeatRange | null) {
+    if (range && (!Number.isFinite(range.a) || !Number.isFinite(range.b))) throw new Error('pattern loop: not a number');
+    const pp = this.patPlay; if (!pp) return;
+    const pt = this.p.patterns.find(x => x.id === pp.id); if (!pt) return;
+    // like the engine: the position stays (outside the new range it goes to its start)
+    this.patPlay = { ...pp, t0: performance.now(), from: this.patPos(pt.len, this.spb()), range: range ? { a: range.a, b: range.b } : null };
+  }
+  /** The pattern loop's position now (beats into the pattern). */
+  private patPos(len: number, spb: number) {
+    const pp = this.patPlay!;
+    return loopPos(pp.from, (performance.now() - pp.t0) / 1000 / spb, pp.range, len);
   }
 
   // ---------- audio device ----------

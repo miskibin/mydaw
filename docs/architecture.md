@@ -141,7 +141,14 @@ pan, volume, mixer insert, name, steps — "+ / −" bars, swing, and the graph 
 per-step velocity and key of the selected channel) and the **Piano roll** (F7: the selected
 channel's notes in the current pattern, any channel; the pattern's other channels as ghost
 notes, double right-click one to switch). PAT mode (L) loops the current pattern and follows
-it when it changes. *To new pattern* (Ctrl+Shift+X, or the button shown while notes are
+it when it changes. The Playlist, the Piano roll and the Pitch editor share one overview bar
+on top (`ui/ZoomScrollbar` with a minimap: drag = scroll, drag an end = zoom) and one time
+ruler (`ui/timeRuler.ts`, `lib/rulerEdit.ts`: click = start, drag = loop, drag a loop edge =
+resize, Shift+drag inside = move, double-click = no loop). The Piano roll's ruler is in
+pattern beats: a click in SONG mode, with the pattern in the playlist, moves the song to that
+beat of the clip playing it (or the next one); otherwise it sets where the pattern loop starts
+(PAT mode). A drag there sets the part of the pattern its loop plays (`pattern_play` /
+`pattern_loop` `range`; per pattern, for the session, not an edit) and switches to PAT mode. *To new pattern* (Ctrl+Shift+X, or the button shown while notes are
 selected) moves the selected notes to a new pattern at the same steps. Both patterns keep
 the source's length, and every playlist clip of the source gets a clip of the new pattern
 beside it, on the nearest lane below that is free over its span (a new lane when none is),
@@ -281,7 +288,8 @@ client: take them from `project.nextId` and increase locally (the engine bumps
 | `flatten_comp` | `{clipId}` | `{sourceId}` — renders a comp clip to a new file; the clip becomes an `audio` clip, the takes go (one undo step) |
 | `comp_audition` | `{compId, takeId?}` | – ; plays one whole take instead of the comp (`null` = the comp). Live only: not saved, not undone, ignored by renders |
 | `note_audition` | `{ch, key?, vel?, pattern?}` | – ; plays one note of a channel now (step clicks, piano-roll keys). `pattern`: the edited pattern, so a track-routed channel is heard through that pattern's track. Not an edit |
-| `pattern_play` | `{pattern}` (`null` stops) | – ; loops one pattern on its own. Starting it stops the song, starting the song stops it (FL's PAT / SONG). Position in telemetry `patBeat` |
+| `pattern_play` | `{pattern, from?, range?}` (`null` stops) | – ; loops one pattern on its own from `from` beats, within `range` `[a, b]` beats (none = the whole pattern). Starting it stops the song, starting the song stops it (FL's PAT / SONG). Position in telemetry `patBeat` |
+| `pattern_loop` | `{range}` | – ; changes the playing pattern loop's range without restarting it (`null` = the whole pattern) |
 | `preview_clip` / `preview_file` / `preview_stop` | `{clipId, from?}` / `{path}` / – | – — `from` (seconds of the source): the take alone with its pitch edits at the source's speed from there to the clip's end (the pitch editor's Solo); rejects when nothing is left |
 | `audio_hosts` | – | `[{id, name}]` (ids like `"wasapi"`, `"asio"`, `"alsa"`) |
 | `audio_devices` | `{host}` | `{outputs: string[], inputs: string[]}` |
@@ -595,8 +603,9 @@ speeds renders exactly as before they existed. The editor's Correct macro writes
 (`shift` toward the scale note), Speed and Flatten (`drift`) onto the notes; its presets
 (Natural 80 %/120 ms/20 %, Pop 100/50/50, Tight 100/15/80, Robot 100/0/100) are UI only.
 
-**Playback in the editor.** The ruler is the Playlist's: a click sets the start marker (playback
-jumps there), a drag sets the project loop (`setLoop`, one undo step), a double-click removes it;
+**Playback in the editor.** The ruler is the Playlist's (`ui/timeRuler.ts`): a click sets the
+start marker (playback jumps there), a drag sets the project loop (`setLoop`, one undo step),
+dragging a loop edge resizes it, Shift+drag inside moves it, a double-click removes it;
 Space and Play run the song from the marker in SONG mode, so the vocal is heard in its mix.
 Solo is `preview_clip` with `from`.
 

@@ -16,6 +16,7 @@ import { planMoveNotes } from '../lib/moveNotes';
 import { unwrap } from 'solid-js/store';
 import { allocId, plain, plainNotes, S } from './store';
 import { curBeat, tele } from './telemetry';
+import { loopSpan, type BeatRange } from '../lib/patLoop';
 import { say, setU, U } from './ui';
 
 /** Channel Rack geometry shared with the view (sizes the window to its content). */
@@ -429,10 +430,37 @@ export async function togglePreview(id: Id) {
     previewId = id;
     if (U.playing) setU('playing', false);
     // queued behind pending edits: a pattern made a moment ago must reach the engine first
-    await enqueue(() => be().patternPlay(id));
+    const pt = patById(id);
+    await enqueue(() => be().patternPlay(id, { from: pt ? patFrom(pt) : 0, range: patLoopOf(id) }));
     setU('patPlaying', true);
     say(t('b.st.prevSay', { mode: t(patMode() ? 'b.st.modePatWord' : 'b.st.modePrevWord'), name: patById(id)?.name ?? t('b.st.patternWord'), hint: patMode() ? '' : t('b.st.prevHint') }));
   } catch (e) { say(t('b.st.prevErr', { err: String(e) })); }
+}
+// ---- the pattern loop's start position and range (the Piano roll's ruler, FL's pattern-mode
+// position and time selection): per pattern, for this session — not saved, not an edit.
+const [patLoops, setPatLoops] = createSignal<ReadonlyMap<Id, BeatRange>>(new Map());
+const [patStarts, setPatStarts] = createSignal<ReadonlyMap<Id, number>>(new Map());
+/** The part of pattern `id` its loop plays (null = all of it). */
+export const patLoopOf = (id: Id): BeatRange | null => patLoops().get(id) ?? null;
+/** Where pattern `id`'s loop starts playing (beats), as last clicked on its ruler. */
+export const patStartOf = (id: Id): number => patStarts().get(id) ?? 0;
+/** Where the loop of `pt` starts: its start position when inside the loop range, else the range's start. */
+export function patFrom(pt: Pattern): number {
+  const r = loopSpan(patLoopOf(pt.id), pt.len), s = patStartOf(pt.id);
+  return s >= r.a && s < r.b ? s : r.a;
+}
+/** Sets (null clears) the loop range of pattern `id`; a loop of it that plays follows at once. */
+export function setPatLoop(id: Id, r: BeatRange | null) {
+  setPatLoops(m => { const n = new Map(m); if (r) n.set(id, { a: r.a, b: r.b }); else n.delete(id); return n; });
+  if (U.patPlaying && previewId === id) void enqueue(() => be().patternLoop(r)).catch(e => say(t('b.st.prevErr', { err: String(e) })));
+}
+/** The loop of pattern `id` starts at `beat` from now on; a loop of it that plays jumps there. */
+export function setPatStart(id: Id, beat: number) {
+  setPatStarts(m => new Map(m).set(id, Math.max(0, beat)));
+  if (U.patPlaying && previewId === id) {
+    const pt = patById(id); if (!pt) return;
+    void enqueue(() => be().patternPlay(id, { from: patFrom(pt), range: patLoopOf(id) })).catch(e => say(t('b.st.prevErr', { err: String(e) })));
+  }
 }
 export async function stopPreview() {
   try { await enqueue(() => be().patternPlay(null)); setU('patPlaying', false); } catch (e) { console.warn(e); }

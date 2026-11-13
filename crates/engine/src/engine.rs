@@ -1440,9 +1440,11 @@ impl Engine {
         Ok(())
     }
 
-    /// Loops one pattern on its own (`None` stops). Starting it stops the song; starting the
-    /// song stops it (they are exclusive, like FL Studio's PAT / SONG). Not an edit.
-    pub fn pattern_play(&self, pattern: Option<Id>) -> Result<(), EngineError> {
+    /// Loops one pattern on its own (`None` stops), from `from` beats into it and within
+    /// `range` (beats; `None` = the whole pattern; kept inside the pattern). Starting it stops
+    /// the song; starting the song stops it (they are exclusive, like FL Studio's PAT / SONG).
+    /// Starting the pattern that plays again jumps to `from`. Not an edit.
+    pub fn pattern_play(&self, pattern: Option<Id>, from: f64, range: Option<(f64, f64)>) -> Result<(), EngineError> {
         let mut c = self.core.lock();
         if let Some(id) = pattern {
             if !c.project.patterns.iter().any(|p| p.id == id) {
@@ -1452,11 +1454,26 @@ impl Engine {
                 return Err(EngineError::Msg("recording: stop it first".into()));
             }
         }
-        send(&mut c, Cmd::PatPlay(pattern));
+        if !from.is_finite() || range.is_some_and(|(a, b)| !a.is_finite() || !b.is_finite()) {
+            return Err(EngineError::Msg("pattern position: not a number".into()));
+        }
+        send(&mut c, Cmd::PatPlay { id: pattern, from: from.max(0.0), range });
         if pattern.is_some() && c.transport.playing {
             c.transport.playing = false;
             self.changed(c);
         }
+        Ok(())
+    }
+
+    /// Changes the range the pattern loop plays (`None` = the whole pattern) without
+    /// restarting it: the position stays, or goes to the range's start when outside it.
+    /// Does nothing while no pattern loops. Not an edit.
+    pub fn pattern_loop(&self, range: Option<(f64, f64)>) -> Result<(), EngineError> {
+        if range.is_some_and(|(a, b)| !a.is_finite() || !b.is_finite()) {
+            return Err(EngineError::Msg("pattern loop: not a number".into()));
+        }
+        let mut c = self.core.lock();
+        send(&mut c, Cmd::PatRange(range));
         Ok(())
     }
 
@@ -1487,7 +1504,7 @@ impl Engine {
             return;
         }
         send(&mut c, Cmd::Stop);
-        send(&mut c, Cmd::PatPlay(None));
+        send(&mut c, Cmd::PatPlay { id: None, from: 0.0, range: None });
         c.transport.playing = false;
         let mut project = project;
         project.migrate();
@@ -1606,7 +1623,7 @@ impl Engine {
             }
         }
         send(&mut c, Cmd::Stop);
-        send(&mut c, Cmd::PatPlay(None));
+        send(&mut c, Cmd::PatPlay { id: None, from: 0.0, range: None });
         c.transport.playing = false;
         c.sources = store;
         c.project = p;

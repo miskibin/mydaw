@@ -442,9 +442,68 @@ fn pattern_preview_and_auditions_are_not_edits() {
     let r = e.revision();
     let k = e.project().channels[0].id;
     e.note_audition(k, None, 0.8, Some(1)).unwrap();
-    e.pattern_play(Some(1)).unwrap();
-    e.pattern_play(None).unwrap();
+    e.pattern_play(Some(1), 2.0, Some((1.0, 3.0))).unwrap();
+    e.pattern_loop(None).unwrap();
+    e.pattern_play(None, 0.0, None).unwrap();
     assert_eq!(e.revision(), r);
     assert!(e.note_audition(424242, None, 1.0, None).is_err());
-    assert!(e.pattern_play(Some(424242)).is_err());
+    assert!(e.pattern_play(Some(424242), 0.0, None).is_err());
+    assert!(e.pattern_play(Some(1), f64::NAN, None).is_err());
+    assert!(e.pattern_loop(Some((0.0, f64::INFINITY))).is_err());
+}
+
+/// Runs the live audio thread for `frames` and returns the master's peak.
+fn run_rt(rt: &mut Rt, frames: usize) -> f32 {
+    const B: usize = 256;
+    let (mut l, mut r) = (vec![0f32; B], vec![0f32; B]);
+    let (mut peak, mut done) = (0f32, 0);
+    while done < frames {
+        let n = B.min(frames - done);
+        rt.process(&mut l[..n], &mut r[..n], None);
+        peak = l[..n].iter().chain(r[..n].iter()).fold(peak, |a, x| a.max(x.abs()));
+        done += n;
+    }
+    peak
+}
+
+#[test]
+fn pattern_loop_starts_where_asked_and_stays_in_its_range() {
+    let p = Project::routed();
+    let k = chan(&p, "Kick");
+    // one kick on beat 0 (step 0) of a 4-beat pattern
+    let e = Engine::new(one_pattern(vec![Note::new(k, 0.0, 1.0, None)], 4.0, 0.0), Arc::new(NoPlugins));
+    let bps = e.project().bpm / 60.0 / SR as f64;
+    let mut rt = e.create_rt(SR as f32, 256);
+    let sh = e.shared();
+
+    // from beat 3: the position starts there and moves on with the audio
+    e.pattern_play(Some(1), 3.0, None).unwrap();
+    run_rt(&mut rt, 256);
+    assert!((sh.pat_beat() - (3.0 + 256.0 * bps)).abs() < 1e-6, "pat beat {}", sh.pat_beat());
+
+    // a range that leaves out the kick: silence however long it loops, and the position never leaves it
+    e.pattern_play(Some(1), 0.0, Some((2.0, 3.0))).unwrap();
+    for _ in 0..(SR as usize * 3 / 256) {
+        run_rt(&mut rt, 256);
+        let b = sh.pat_beat();
+        assert!((2.0..3.0).contains(&b), "left the loop range: {b}");
+    }
+    assert!(run_rt(&mut rt, SR as usize) < 1e-4, "a note outside the range played");
+
+    // the range changed while it plays: the kick's beat is in it now and it sounds
+    e.pattern_loop(Some((0.0, 1.0))).unwrap();
+    assert!(run_rt(&mut rt, SR as usize) > 0.01, "the kick in the new range is silent");
+    assert!((0.0..1.0).contains(&sh.pat_beat()));
+
+    // a reversed, out-of-bounds range is kept inside the pattern; a too short one loops it all
+    e.pattern_loop(Some((9.0, 3.5))).unwrap();
+    run_rt(&mut rt, 256);
+    assert!((3.5..4.0).contains(&sh.pat_beat()), "{}", sh.pat_beat());
+    e.pattern_loop(Some((1.0, 1.0))).unwrap();
+    run_rt(&mut rt, SR as usize * 3);
+    assert!((0.0..4.0).contains(&sh.pat_beat()));
+
+    e.pattern_play(None, 0.0, None).unwrap();
+    run_rt(&mut rt, 256);
+    assert_eq!(sh.pat_beat(), -1.0);
 }

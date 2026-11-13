@@ -140,3 +140,27 @@ describe('make unique (audio) in the mock', () => {
     expect((await be.getState()).project).toEqual(before);
   });
 });
+
+describe('pattern loop in the mock (like the engine)', () => {
+  it('starts where asked, loops the range, and keeps its place when the range changes', async () => {
+    const be = new MockBackend();
+    const p = (await be.getState()).project, pt = p.patterns.find(x => x.len >= 4)!, spb = 60 / p.bpm;
+    let now = 1000;
+    const clock = vi.spyOn(performance, 'now').mockImplementation(() => now);
+    const pos = () => (be as unknown as { patPos(len: number, spb: number): number }).patPos(pt.len, spb);
+    try {
+      await be.patternPlay(pt.id, { from: 2, range: { a: 1, b: 3 } });
+      expect(pos()).toBe(2);
+      now += 1000 * spb * 1.5; // 1.5 beats: past the range's end, wrapped
+      expect(pos()).toBeCloseTo(1.5);
+      await be.patternLoop({ a: 0, b: 1 }); // outside the new range: its start
+      expect(pos()).toBe(0);
+      now += 1000 * spb * 0.25;
+      await be.patternLoop(null); // inside the whole pattern: stays
+      expect(pos()).toBeCloseTo(0.25);
+      await expect(be.patternPlay(pt.id, { from: NaN })).rejects.toThrow();
+      await expect(be.patternLoop({ a: 0, b: Infinity })).rejects.toThrow();
+      await expect(be.patternPlay(424242)).rejects.toThrow();
+    } finally { clock.mockRestore(); }
+  });
+});

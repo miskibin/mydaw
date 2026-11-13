@@ -20,7 +20,10 @@ import { dblCheck, dragCursor, edgeScroller, panDrag, track } from '../ui/drag';
 import { fitSpan, zoomScroll, zoomToRange } from '../lib/viewNav';
 import { barsText } from '../lib/pattern';
 import { addFrameTask, fitCanvas, fonts } from '../ui/frameLoop';
-import { drawFades, drawGrid, drawOverlaps, drawRuler, type View } from './playlistDraw';
+import { drawFades, drawGrid, drawOverlaps, type View } from './playlistDraw';
+import { drawRuler, rulerCursor, rulerDown as rulerPress, RULER_H, type RulerHost } from '../ui/timeRuler';
+import { ZoomScrollbar } from '../ui/ZoomScrollbar';
+import type { ZRange } from '../lib/zoomBar';
 import { laneOverlaps } from '../lib/overlaps';
 import { damageRects, followScroll, planTile, snapPx, type Rect, type Tile } from './playlistTile';
 import { autoDisplay, isAutomated, paramMenu } from '../state/automation';
@@ -311,7 +314,7 @@ export function Playlist() {
         gridCv.style.transform = fadeCv.style.transform = `translate(${x0}px, ${tile.y}px) scaleX(${k})`;
         const rt: Tile = { x: snapPx(Math.max(0, sx - 96), dpr), y: 0, w: Math.min(gridW(), W + 192), h: 26 };
         paintRuler(rt, dpr);
-        if (dirtyOv) { dirtyOv = false; drawOverview(); }
+        if (dirtyOv) { dirtyOv = false; bumpOv(); }
         placePlayhead(beat);
         return;
       }
@@ -364,13 +367,13 @@ export function Playlist() {
     }
     // the ruler is cheap: redrawn whole whenever its tile moves
     if (dirtyRuler || !rulerTile || rulerTile.x !== t.x || rulerTile.w !== t.w) paintRuler(t, dpr);
-    if (dirtyOv) { dirtyOv = false; drawOverview(); }
+    if (dirtyOv) { dirtyOv = false; bumpOv(); }
     placePlayhead(beat);
   };
   const paintRuler = (t: Tile, dpr: number) => {
     dirtyRuler = false;
     rulerTile = t;
-    fitCanvas(rulerCv, t.w, 26);
+    fitCanvas(rulerCv, t.w, RULER_H);
     const g = rulerCv.getContext('2d')!;
     g.setTransform(dpr, 0, 0, dpr, 0, 0);
     drawRuler(g, t.x, t.w, U.bw, S.project.loop, U.start);
@@ -1138,55 +1141,23 @@ export function Playlist() {
     ], 180);
   }
 
-  // ---------- ruler ----------
-  /** Ruler x near the loop's start / end (8 px) → that edge; inside with Shift → body. */
-  const loopEdge = (clientX: number, shift = false): 'a' | 'b' | 'body' | null => {
-    const lp = S.project.loop; if (!lp) return null;
-    const x = clientX - gridEl.getBoundingClientRect().left, xa = lp.a * U.bw, xb = lp.b * U.bw;
-    if (Math.abs(x - xa) <= 8) return 'a';
-    if (Math.abs(x - xb) <= 8) return 'b';
-    return shift && x > xa && x < xb ? 'body' : null;
+  // ---------- ruler (ui/timeRuler: the same gestures in the Piano roll and the Pitch editor) ----------
+  const ruler: RulerHost = {
+    // the grid's live rect: the view may scroll under the drag (edge auto-scroll)
+    beatAt: x => (x - gridLeft()) / U.bw,
+    bw: () => U.bw,
+    unit: alt => unit(alt),
+    max: () => TOTAL,
+    loop: () => S.project.loop ?? null,
+    edit: label => { const g = new Gesture(label); return { set: r => g.update([{ op: 'setLoop', loop: { a: r.a, b: r.b } }]), end: () => g.end() }; },
+    clear: () => { A.setLoop(null, tl('a.pl.deleteLoop')); say(tl('a.pl.loopDeleted')); },
+    seek: b => A.seekSong(b),
+    drawn: r => A.seekSong(r.a),
+    track: (m, u, c) => trackEdge(m, u, c, { x: true }),
+    key: 'ruler',
   };
-  const rulerHover = (e: PointerEvent) => {
-    const ed = loopEdge(e.clientX, e.shiftKey);
-    (e.currentTarget as HTMLElement).style.cursor = ed === 'a' || ed === 'b' ? 'ew-resize' : ed === 'body' ? 'grab' : '';
-  };
-  const rulerDown = (e: PointerEvent) => {
-    if (e.button !== 0) return;
-    e.preventDefault(); closeMenu();
-    if (dblCheck('ruler')) { if (S.project.loop) { A.setLoop(null, tl('a.pl.deleteLoop')); say(tl('a.pl.loopDeleted')); } return; }
-    // later positions come from the grid's live rect: the view may scroll under the drag (edge auto-scroll)
-    const r = gridEl.getBoundingClientRect(), ex = { x: true };
-    const b0 = clamp(snapRound((e.clientX - r.left) / U.bw, unit(e.altKey)), 0, TOTAL);
-    let g: Gesture | null = null;
-    // an existing loop: grab its start or end edge (or drag its body) instead of drawing a new one
-    const lp = S.project.loop, edge = loopEdge(e.clientX, e.shiftKey);
-    if (lp && edge) {
-      const len = lp.b - lp.a, raw0 = (e.clientX - r.left) / U.bw;
-      trackEdge(ev => {
-        const raw = (ev.clientX - gridLeft()) / U.bw, u = unit(ev.altKey);
-        if (!g && Math.abs(ev.clientX - e.clientX) > 2) g = new Gesture(edge === 'body' ? tl('a.pl.moveLoop') : tl('a.pl.loopRange'));
-        if (!g) return;
-        let a = lp.a, z = lp.b;
-        if (edge === 'a') a = clamp(snapRound(raw, u), 0, lp.b - u);
-        else if (edge === 'b') z = clamp(snapRound(raw, u), lp.a + u, TOTAL);
-        else { a = clamp(snapRound(lp.a + raw - raw0, u), 0, TOTAL - len); z = a + len; }
-        const now = S.project.loop;
-        if (now && now.a === a && now.b === z) return;
-        g.update([{ op: 'setLoop', loop: { a, b: z } }]);
-      }, () => { if (g) g.end(); else A.seekSong(b0); }, edge === 'body' ? 'grabbing' : 'ew-resize', ex);
-      return;
-    }
-    trackEdge(ev => {
-      const b1 = clamp(snapRound((ev.clientX - gridLeft()) / U.bw, unit(ev.altKey)), 0, TOTAL);
-      if (!g && Math.abs(ev.clientX - e.clientX) > 4) g = new Gesture(tl('a.pl.loop'));
-      const a = Math.min(b0, b1), z = Math.max(b0, b1), now = S.project.loop;
-      if (g && b1 !== b0 && !(now && now.a === a && now.b === z)) g.update([{ op: 'setLoop', loop: { a, b: z } }]);
-    }, () => {
-      if (!g) A.seekSong(b0);
-      else { g.end(); if (S.project.loop) A.seekSong(S.project.loop.a); }
-    }, 'ew-resize', ex);
-  };
+  const rulerHover = (e: PointerEvent) => { (e.currentTarget as HTMLElement).style.cursor = rulerCursor(ruler, e); };
+  const rulerDown = (e: PointerEvent) => { if (e.button === 0) closeMenu(); rulerPress(ruler, e); };
 
   // ---------- header splitter ----------
   const headSplit = (e: PointerEvent) => {
@@ -1198,9 +1169,7 @@ export function Playlist() {
 
   const mq = () => { const m = U.marquee; return m && { x: Math.min(m.x0, m.x1), y: Math.min(m.y0, m.y1), w: Math.abs(m.x1 - m.x0), h: Math.abs(m.y1 - m.y0) }; };
 
-  // ---------- overview scrollbar (FL-style: on top, wide thumb over a minimap of the song) ----------
-  let ovCv!: HTMLCanvasElement;
-  const [ovW, setOvW] = createSignal(600);
+  // ---------- overview bar (FL-style: on top, a minimap of the song under the view's thumb) ----------
   /** Beats the overview spans: the song plus some room, at least what is visible. */
   // memos: this was a walk over every clip through the store on each scroll / zoom step
   const songEnd = createMemo(() => {
@@ -1210,65 +1179,34 @@ export function Playlist() {
     return end;
   });
   const ovRange = createMemo(() => Math.min(TOTAL, Math.max(64, songEnd() * 1.15 + 16, (scroll().x + cw()) / U.bw)));
-  const thumb = () => {
-    const R = ovRange(), W = ovW();
-    const a = scroll().x / U.bw / R * W, w = Math.max(24, cw() / U.bw / R * W);
-    return { x: Math.min(a, W - w), w };
+  // repainted when the frame loop says the arrangement changed (a drag changes it on every move)
+  const [ovVer, setOvVer] = createSignal(0);
+  const bumpOv = () => setOvVer(v => v + 1);
+  const ovView = (): ZRange => ({ pos: scroll().x / U.bw, len: cw() / U.bw });
+  const ovLimits = () => ({ total: ovRange(), minLen: cw() / A.BW_MAX, maxLen: cw() / A.BW_MIN });
+  const ovChange = (r: ZRange) => {
+    holdFollow();
+    const bw = clamp(cw() / r.len, A.BW_MIN, A.BW_MAX);
+    if (bw !== U.bw) setU('bw', bw);
+    scrollEl.scrollLeft = Math.max(0, r.pos * bw);
+    syncScroll();
   };
-  onMount(() => {
-    const ro = new ResizeObserver(() => setOvW(ovCv.clientWidth)); ro.observe(ovCv);
-    onCleanup(() => ro.disconnect());
-  });
-  // drawn from the frame loop: a drag changes the arrangement on every pointer move
-  createEffect(() => { ovW(); ovRange(); arrVersion(); theme.epoch; dirtyOv = true; });
-  function drawOverview() {
-    const W = ovW(), H = 18, R = ovRange();
-    fitCanvas(ovCv, W, H);
-    const g = ovCv.getContext('2d')!, P = unwrap(S.project), n = Math.max(1, P.tracks.length);
-    g.clearRect(0, 0, W, H);
+  function paintOverview(g: CanvasRenderingContext2D, W: number, H: number, span: number) {
+    const P = unwrap(S.project), n = Math.max(1, P.tracks.length);
     const lh = Math.max(1, (H - 4) / n);
     for (const c of P.clips) {
       const t = P.tracks[c.track]; if (!t) continue;
       g.globalAlpha = c.muted ? 0.25 : 0.75; g.fillStyle = t.color;
-      g.fillRect(c.start / R * W, 2 + c.track * lh, Math.max(1, c.len / R * W), Math.max(1, lh - (lh > 2 ? 0.5 : 0)));
+      g.fillRect(c.start / span * W, 2 + c.track * lh, Math.max(1, c.len / span * W), Math.max(1, lh - (lh > 2 ? 0.5 : 0)));
     }
     g.globalAlpha = 1;
   }
-  const ovDown = (e: PointerEvent) => {
-    holdFollow();
-    if (e.button !== 0) return;
-    e.preventDefault(); e.stopPropagation();
-    const r = ovCv.getBoundingClientRect(), x = e.clientX - r.left, th = thumb(), R = ovRange(), W = ovW();
-    const toBeat = (px: number) => px / W * R;
-    const edge = x < th.x + 6 && x > th.x - 4 ? 'l' : x > th.x + th.w - 6 && x < th.x + th.w + 4 ? 'r' : null;
-    if (edge) {
-      // drag an edge = zoom, the other edge stays put
-      const b0 = scroll().x / U.bw, b1 = (scroll().x + cw()) / U.bw;
-      track(ev => {
-        const b = clamp(toBeat(ev.clientX - r.left), 0, R);
-        const [lo, hi] = edge === 'l' ? [Math.min(b, b1 - 1), b1] : [b0, Math.max(b, b0 + 1)];
-        const bw = clamp(cw() / (hi - lo), A.BW_MIN, A.BW_MAX);
-        setU('bw', bw); scrollEl.scrollLeft = lo * bw;
-      }, null, 'ew-resize');
-      return;
-    }
-    // outside the thumb: centre the view there, then drag as if grabbed
-    let grab = x - th.x;
-    if (x < th.x || x > th.x + th.w) { grab = th.w / 2; scrollEl.scrollLeft = toBeat(x - grab) * U.bw; }
-    track(ev => { scrollEl.scrollLeft = Math.max(0, toBeat(ev.clientX - r.left - grab) * U.bw); }, null, 'grabbing');
-  };
-  const ovHover = (e: PointerEvent) => {
-    const x = e.clientX - ovCv.getBoundingClientRect().left, th = thumb();
-    ovCv.style.cursor = Math.abs(x - th.x) < 6 || Math.abs(x - th.x - th.w) < 6 ? 'ew-resize' : x >= th.x && x <= th.x + th.w ? 'grab' : 'pointer';
-  };
 
   return (
     <div class="plwrap" onPointerDown={() => A.playlistFront()}>
-      <div class="ploverview" style={{ 'padding-left': U.headW + 'px' }}>
-        <div class="ovtrack">
-          <canvas ref={ovCv} onPointerDown={ovDown} onPointerMove={ovHover} title={tl('a.pl.ovTip')} />
-          <div class="ovthumb" style={{ left: thumb().x + 'px', width: thumb().w + 'px' }} />
-        </div>
+      <div class="ovrow" style={{ 'padding-left': U.headW + 'px' }}>
+        <ZoomScrollbar orient="h" class="ov" range={ovView} limits={ovLimits} onChange={ovChange} title={tl('a.pl.ovTip')}
+          paint={paintOverview} paintKey={ovVer} />
       </div>
       <div ref={scrollEl} class="plscroll" onPointerDown={panDown} onMouseDown={e => { if (e.button === 1) e.preventDefault(); }}
         onPointerMove={e => { lastPtr = { x: e.clientX, y: e.clientY }; }} onPointerLeave={() => { lastPtr = null; }}>

@@ -2,6 +2,7 @@
 // When `window.__TAURI_INTERNALS__` is absent (plain browser) the in-browser mock is used.
 import { Channel, invoke } from '@tauri-apps/api/core';
 import { listen } from '@tauri-apps/api/event';
+import type { BeatRange } from '../lib/patLoop';
 import type {
   AudioConfig, AudioDevices, AudioHost, AudioStatus, LatencyReport, Catalog, CliStatus, ExportAudioOptions, ExportProgress, ExportResult, ExportStemsOptions, ExportStemsResult, F0ModelStatus, Id, ImportResult, LibFile,
   KeysStatus, LibraryList, LibraryProgress, Melody, MelodyChannel, MidiDevice, MidiNoteEvent, MidiStatus, ModelProgress, AppInfo, UpdateInfo, UpdateProgress, MusicAnalysis, AutoVocalPlan, AutoVocalStyle, Op, OpenResult, PitchAnalysis, PitchTarget, RecoveredProject, RefTune, SaveResult, StateDto, TransportDto, Vst3Info, Vst3Param,
@@ -89,8 +90,12 @@ export interface Backend {
   noteAudition(args: { ch: Id; key?: number; vel?: number; pattern?: Id }): Promise<void>;
   /** Computer keyboard as a piano: key down (`on`) / up on a channel. */
   typingNote(args: { ch: Id; key: number; vel?: number; on: boolean }): Promise<void>;
-  /** Loop one pattern on its own (null stops). Exclusive with the song transport. */
-  patternPlay(pattern: Id | null): Promise<void>;
+  /** Loop one pattern on its own (null stops), from `from` beats into it (default 0) and only
+   *  over `range` (beats; none = the whole pattern). Exclusive with the song transport. Starting
+   *  the pattern that plays again jumps to `from`. */
+  patternPlay(pattern: Id | null, opts?: { from?: number; range?: BeatRange | null }): Promise<void>;
+  /** The playing pattern loop's range (null = the whole pattern), without restarting it. */
+  patternLoop(range: BeatRange | null): Promise<void>;
   audioHosts(): Promise<AudioHost[]>;
   audioDevices(host: string): Promise<AudioDevices>;
   audioGetConfig(): Promise<AudioStatus>;
@@ -250,7 +255,8 @@ export function tauriBackend(): Backend {
     previewStop: () => invoke('preview_stop'),
     typingNote: a => invoke('typing_note', { ch: a.ch, key: a.key, vel: a.vel ?? null, on: a.on }),
     noteAudition: a => invoke('note_audition', { ch: a.ch, key: a.key ?? null, vel: a.vel ?? null, pattern: a.pattern ?? null }),
-    patternPlay: pattern => invoke('pattern_play', { pattern }),
+    patternPlay: (pattern, o) => invoke('pattern_play', { pattern, from: o?.from ?? null, range: o?.range ? [o.range.a, o.range.b] : null }),
+    patternLoop: range => invoke('pattern_loop', { range: range ? [range.a, range.b] : null }),
     audioHosts: () => invoke('audio_hosts'),
     audioDevices: host => invoke('audio_devices', { host }),
     audioGetConfig: () => invoke('audio_get_config'),
