@@ -13,7 +13,7 @@ fn main() -> std::process::ExitCode {
         attach_console();
         return wave_cli::run_cli(args[1..].to_vec());
     }
-    wave_app::run();
+    wave_app::run(args.first().map(String::as_str));
     std::process::ExitCode::SUCCESS
 }
 

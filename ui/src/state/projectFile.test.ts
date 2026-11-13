@@ -41,6 +41,33 @@ describe('opening a project', () => {
     expect(store.S.revision).toBe(before);
     expect(store.S.path).toBeNull();
   });
+  it('opens an Explorer path directly, including spaces and Unicode', async () => {
+    const path = 'C:\\Muzyka\\Nowy utwór.WAVE';
+    mock.dismissNextDialog = true;
+    await A.projectOpen(path);
+    expect(store.S.path).toBe(path);
+    expect(mock.dismissNextDialog).toBe(true);
+  });
+  it('keeps unsaved edits when an Explorer open is cancelled', async () => {
+    const current = 'C:\\Muzyka\\First.wave';
+    await A.projectOpen(current);
+    await mock.applyOps([{ op: 'setBpm', bpm: 137 }]);
+    store.replaceState(await mock.getState());
+    answer = 'cancel';
+    await A.projectOpen('C:\\Muzyka\\Second.wave');
+    expect(store.S.path).toBe(current);
+    expect(store.S.project.bpm).toBe(137);
+    expect(store.S.dirty).toBe(true);
+  });
+  it('keeps unsaved edits when the same project is opened again from Explorer', async () => {
+    const path = 'C:\\Muzyka\\First.wave';
+    await A.projectOpen(path);
+    await mock.applyOps([{ op: 'setBpm', bpm: 137 }]);
+    store.replaceState(await mock.getState());
+    await A.projectOpen(path);
+    expect(store.S.project.bpm).toBe(137);
+    expect(store.S.dirty).toBe(true);
+  });
 });
 
 describe('saving a project', () => {

@@ -129,15 +129,16 @@ export async function projectNew() {
   flushNotebook();
   try { acceptReply(await enqueue(() => be().projectNew())); afterProjectLoad(); if (!S.project.clips.length) openRack(); say(t('d.act.newproj')); } catch (e) { say(t('d.act.newfail', { err: String(e) })); }
 }
-export async function projectOpen() {
+export async function projectOpen(path?: string) {
+  if (path && path === S.path) return;
   if (!(await guardUnsaved(t('d.act.guard.open')))) return;
   flushNotebook();
   try {
-    const r = await enqueue(() => be().projectOpen());
+    const r = await enqueue(() => be().projectOpen(path));
     if (r.cancelled) return;
     acceptReply(r.state); afterProjectLoad();
-    const path = S.path ?? '';
-    say(r.warnings.length ? t('d.act.openedwarn', { path, n: r.warnings.length, first: r.warnings[0] }) : t('d.act.opened', { path }));
+    const openedPath = S.path ?? '';
+    say(r.warnings.length ? t('d.act.openedwarn', { path: openedPath, n: r.warnings.length, first: r.warnings[0] }) : t('d.act.opened', { path: openedPath }));
   } catch (e) { say(t('d.act.openfail', { err: String(e) })); }
 }
 export async function projectSave(saveAs = false): Promise<boolean> {

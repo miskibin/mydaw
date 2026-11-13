@@ -11,6 +11,7 @@ export interface OsDropEvent { type: 'over' | 'drop' | 'leave'; paths: string[];
 
 export interface EventMap {
   state: StateDto;
+  'project-open-requested': null;
   'library-progress': LibraryProgress;
   /** WAVE Keys: the piano started loading, is ready, or is not on this computer. */
   'keys-status': KeysStatus;
@@ -116,6 +117,8 @@ export interface Backend {
   projectNew(): Promise<StateDto>;
   /** The file dialog when `path` is omitted. */
   projectOpen(path?: string): Promise<OpenResult>;
+  /** Project paths received at launch or forwarded by another instance. */
+  takeProjectOpenRequests(): Promise<string[]>;
   /** The save dialog when the project has no path yet or `saveAs`. */
   projectSave(saveAs?: boolean): Promise<SaveResult>;
   /** Autosave tick for a project that was never saved: keeps its crash-recovery copy current
@@ -266,6 +269,7 @@ export function tauriBackend(): Backend {
     libraryRemoveFolder: path => invoke('library_remove_folder', { path }),
     projectNew: () => invoke('project_new'),
     projectOpen: path => invoke('project_open', { path: path ?? null }),
+    takeProjectOpenRequests: () => invoke('take_project_open_requests'),
     projectSave: saveAs => invoke('project_save', { saveAs: !!saveAs }),
     recoveryWrite: () => invoke('recovery_write'),
     recoveryList: () => invoke('recovery_list'),

@@ -980,6 +980,7 @@ export class MockBackend implements Backend {
     this.recovery = null;
     return { state: this.dto(), warnings: [] };
   }
+  async takeProjectOpenRequests(): Promise<string[]> { return []; }
   async projectSave(saveAs?: boolean): Promise<SaveResult> {
     if (!this.path || saveAs) {
       if (!this.dialog()) return { cancelled: true };

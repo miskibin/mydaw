@@ -15,7 +15,7 @@ import { initPrefs } from './state/prefs';
 import { initUpdates } from './state/updates';
 import { t } from './lib/i18n';
 import { loadStdLib } from './state/library';
-import { offerRecovery } from './state/actions';
+import { offerRecovery, projectOpen } from './state/actions';
 
 initTheme();
 initPrefs();
@@ -27,6 +27,8 @@ async function boot() {
   setS('catalog', catalog);
   replaceState(state);
   await be.on('state', onStateEvent);
+  const launchProjects = await be.takeProjectOpenRequests();
+  for (const path of launchProjects) await projectOpen(path);
   await startTelemetry();
   void be.audioGetConfig().then(a => watchAudio(a, cb => be.on('audio-status', cb), say));
   // the standard library's file list, so the first "add channel" menu already offers it
@@ -36,14 +38,27 @@ async function boot() {
   if (voc) setU({ mixSel: voc.id, fxSel: voc.fx[1]?.id ?? voc.fx[0]?.id ?? null });
   const p = S.project.patterns[0];
   setU('cur', p ? { kind: 'pat', ref: p.id } : S.project.sources[0] ? { kind: 'audio', ref: S.project.sources[0].id } : null);
-  setU('playing', state.transport.playing);
+  setU('playing', S.transport.playing);
   const root = document.getElementById('root')!;
   root.replaceChildren(); // the loading bar from index.html
   render(() => <App />, root);
   // nothing on the playlist yet: start on the Channel Rack, where a beat begins (FL)
   if (!S.project.clips.length && S.project.patterns.length) openRack();
   void initUpdates(); // version, "What's new" after an update, the first automatic check
-  void offerRecovery(); // an unsaved project a crashed WAVE left behind
+  let offerStartupRecovery = !launchProjects.length;
+  let projectOpens = Promise.resolve();
+  const openRequestedProjects = () => {
+    projectOpens = projectOpens.then(async () => {
+      const paths = await be.takeProjectOpenRequests();
+      for (const path of paths) await projectOpen(path);
+      if (offerStartupRecovery) {
+        offerStartupRecovery = false;
+        if (!paths.length) await offerRecovery();
+      }
+    }).catch(e => console.error('[wave] project open request:', e));
+  };
+  await be.on('project-open-requested', openRequestedProjects);
+  openRequestedProjects(); // also catch launches received while the webview was starting
 }
 
 boot().catch(e => {
