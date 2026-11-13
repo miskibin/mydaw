@@ -7,6 +7,7 @@ import { clampMove, duplicateSpan, insertTrackOps, moveClips, muteOps, pasteClip
 import { clamp, fmtPos } from '../lib/format';
 import { loadPreset as loadPresetFx, newFx, presetInfo, presetList } from '../lib/presets';
 import { snapName, snapRes } from '../lib/snap';
+import { samePath } from '../lib/paths';
 import { deletePoints } from '../lib/envEdit';
 import { acceptReply, commit, endWheelGestures, enqueue, inGesture, projectRevision, resync } from './edit';
 import { flushNotebook } from './notebook';
@@ -119,7 +120,7 @@ export async function undo() { if (!S.canUndo) return say(t('d.act.noUndo')); fl
 export async function redo() { if (!S.canRedo) return say(t('d.act.noRedo')); flushNotebook(); endWheelGestures(); acceptReply(await enqueue(() => be().redo())); say(t('d.act.redone')); }
 /** Ask about unsaved changes; false = the user cancelled (or the save failed). */
 export async function guardUnsaved(what: string): Promise<boolean> {
-  if (U.openingProject) return false;
+  if (U.openingProject) { say(t('d.act.guard.opening')); return false; }
   flushNotebook();
   const a = await confirmUnsaved(what);
   if (a === 'busy') { say(t('d.act.guard.busy')); return false; }
@@ -132,20 +133,20 @@ export async function projectNew() {
   try { acceptReply(await enqueue(() => be().projectNew())); afterProjectLoad(); if (!S.project.clips.length) openRack(); say(t('d.act.newproj')); } catch (e) { say(t('d.act.newfail', { err: String(e) })); }
 }
 export async function projectOpen(path?: string) {
-  if (path && path === S.path) return;
+  if (path && samePath(path, S.path)) return;
   endWheelGestures();
   flushNotebook();
   await enqueue(() => Promise.resolve());
-  if (U.openingProject || inGesture()) { say(t('d.act.guard.busy')); return; }
+  if (U.openingProject || inGesture()) { say(t('d.act.guard.busy.open')); return; }
   const revision = projectRevision();
   const answer = await confirmUnsaved(t('d.act.guard.open'));
-  if (answer === 'busy') { say(t('d.act.guard.busy')); return; }
+  if (answer === 'busy') { say(t('d.act.guard.busy.open')); return; }
   if (answer === 'cancel' || U.openingProject) return;
-  if (inGesture()) { say(t('d.act.guard.busy')); return; }
+  if (inGesture()) { say(t('d.act.guard.busy.open')); return; }
   setU('openingProject', true);
   try {
     if (answer === 'save' && !(await projectSave(false))) return;
-    if (answer === 'save' && S.dirty) { say(t('d.act.guard.busy')); return; }
+    if (answer === 'save' && S.dirty) { say(t('d.act.guard.busy.open')); return; }
     const approvedRevision = answer === 'save' ? projectRevision() : revision;
     const r = await enqueue(() => be().projectOpen(path, approvedRevision));
     if (r.cancelled) return;
@@ -170,12 +171,14 @@ export async function recoveryTick() {
 /**
  * Startup: offer back the unsaved projects a WAVE that crashed or was killed left behind,
  * newest first. "Not now" keeps them for the next start; one restore ends the round.
+ * Also runs after a launch that opened a file (Explorer double-click): the question names
+ * that project, and its unsaved edits go through the usual Save / Discard / Cancel.
  */
 export async function offerRecovery() {
   let list: RecoveredProject[];
   try { list = await be().recoveryList(); } catch { return; }
   for (const r of list) {
-    const a = await confirmRecover(r.savedMs);
+    const a = await confirmRecover(r.savedMs, S.path);
     if (a === 'later') return;
     if (a === 'discard') { await be().recoveryDiscard(r.id).catch(e => say(t('d.act.err', { err: String(e) }))); continue; }
     if (!(await guardUnsaved(t('d.act.guard.open')))) return;

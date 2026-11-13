@@ -5,6 +5,7 @@ import type { MockBackend } from '../api/mock';
 let answer: 'save' | 'discard' | 'cancel' | 'busy' = 'discard';
 let recAnswer: 'restore' | 'discard' | 'later' = 'restore';
 let recAsked = 0;
+let recPath: string | null = null;
 let editDuringConfirm: (() => Promise<void>) | undefined;
 vi.mock('../ui/Confirm', () => ({
   confirmUnsaved: async () => {
@@ -12,7 +13,7 @@ vi.mock('../ui/Confirm', () => ({
     await editDuringConfirm?.();
     return choice;
   },
-  confirmRecover: async () => { recAsked++; return recAnswer; },
+  confirmRecover: async (_ms: number, openPath: string | null = null) => { recAsked++; recPath = openPath; return recAnswer; },
 }));
 beforeAll(() => {
   const noop = () => {};
@@ -33,6 +34,7 @@ beforeEach(async () => {
   answer = 'discard';
   recAnswer = 'restore';
   recAsked = 0;
+  recPath = null;
   editDuringConfirm = undefined;
 });
 
@@ -92,6 +94,33 @@ describe('opening a project', () => {
     expect(store.S.project.bpm).toBe(137);
     expect(store.S.dirty).toBe(true);
   });
+  it('recognizes the open project spelled differently by Explorer or a terminal', async () => {
+    const path = 'C:\\Muzyka\\First.wave';
+    await A.projectOpen(path);
+    await mock.applyOps([{ op: 'setBpm', bpm: 137 }]);
+    store.replaceState(await mock.getState());
+    answer = 'discard'; // a prompt would be answered with Discard: the edit must not reach it
+    await A.projectOpen('c:/muzyka/FIRST.WAVE');
+    expect(store.S.path).toBe(path);
+    expect(store.S.project.bpm).toBe(137);
+    expect(store.S.dirty).toBe(true);
+  });
+  it('refuses to open while a take is recording, like the engine', async () => {
+    const current = 'C:\\Muzyka\\First.wave';
+    await A.projectOpen(current);
+    const track = store.S.project.tracks[0];
+    await mock.applyOps([{ op: 'putTrack', track: { ...track, arm: true } }]);
+    await mock.transportSet({ rec: true });
+    await mock.transportPlay(0);
+    store.replaceState(await mock.getState());
+    await expect(mock.projectOpen('C:\\Muzyka\\Second.wave', store.S.revision)).rejects.toThrow('recording: stop it first');
+    // checked before the revision, in the engine's order
+    await expect(mock.projectOpen('C:\\Muzyka\\Second.wave', -1)).rejects.toThrow('recording: stop it first');
+    await A.projectOpen('C:\\Muzyka\\Second.wave');
+    expect(store.S.path).toBe(current);
+    expect((await import('./ui')).U.readout).toContain('recording: stop it first');
+    await mock.transportStop();
+  });
   it('explains how to retry an Explorer open while another confirmation is active', async () => {
     await A.projectOpen('C:\\Muzyka\\First.wave');
     await mock.applyOps([{ op: 'setBpm', bpm: 137 }]);
@@ -112,6 +141,26 @@ describe('opening a project', () => {
     expect(store.S.path).toBe(current);
     expect(store.S.project.bpm).toBe(137);
     expect(store.S.dirty).toBe(true);
+  });
+});
+
+describe('other actions while a project is opening', () => {
+  it('refuse with feedback that fits the action', async () => {
+    const ui = await import('./ui');
+    ui.setU('openingProject', true);
+    expect(await A.closeWindowGuarded()).toBe(false);
+    expect(ui.U.readout).toContain('still opening');
+    expect(ui.U.readout).not.toContain('opening the project again');
+    ui.setU('openingProject', false);
+  });
+  it('word the busy message for the action when another question is open', async () => {
+    const ui = await import('./ui');
+    store.replaceState({ ...(await mock.getState()), dirty: true });
+    answer = 'busy';
+    expect(await A.closeWindowGuarded()).toBe(false);
+    expect(ui.U.readout).not.toContain('opening the project');
+    await A.projectOpen('C:\\Muzyka\\Second.wave');
+    expect(ui.U.readout).toContain('try opening the project again');
   });
 });
 
@@ -169,6 +218,27 @@ describe('crash recovery of a project that was never saved', () => {
     recAnswer = 'discard';
     await A.offerRecovery();
     expect(await mock.recoveryList()).toEqual([]);
+  });
+  it('offers the copy after a launch that opened a file, naming that project', async () => {
+    await crashWithUnsavedWork();
+    const opened = 'C:\\Muzyka\\Opened.wave';
+    await A.projectOpen(opened); // the Explorer double-click that started WAVE
+    recAnswer = 'later';
+    await A.offerRecovery();
+    expect(recAsked).toBe(1);
+    expect(recPath).toBe(opened);
+    expect(store.S.path).toBe(opened);
+  });
+  it('keeps edits to the launched project when its Save / Discard question is cancelled', async () => {
+    await crashWithUnsavedWork();
+    await A.projectOpen('C:\\Muzyka\\Opened.wave');
+    await mock.applyOps([{ op: 'setBpm', bpm: 99 }]);
+    store.replaceState(await mock.getState());
+    answer = 'cancel';
+    await A.offerRecovery();
+    expect(store.S.project.bpm).toBe(99);
+    expect(store.S.dirty).toBe(true);
+    expect((await mock.recoveryList()).length).toBe(1); // still offered at the next start
   });
   it('asks nothing after a normal session', async () => {
     await A.offerRecovery();

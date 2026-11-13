@@ -971,6 +971,8 @@ export class MockBackend implements Backend {
   private dialog(): boolean { const ok = !this.dismissNextDialog; this.dismissNextDialog = false; return ok; }
   async projectOpen(path?: string, ifRevision?: number): Promise<OpenResult> {
     if (path == null && !this.dialog()) return { cancelled: true };
+    // the engine's `open_at_revision`: a take in progress first, then the approved revision
+    if (this.rec) throw new Error('recording: stop it first');
     if (ifRevision != null && ifRevision !== this.revision) throw new Error('REVISION_CONFLICT: project changed');
     this.resetTo(sketchProject(this.cat), path ?? 'C:\\Users\\michal\\Music\\Demo.wave');
     this.recovery = null;

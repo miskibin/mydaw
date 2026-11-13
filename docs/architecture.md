@@ -228,7 +228,8 @@ source), `putSource{source}`,
 `removeSource{id}`, `putAutomation{automation}`, `removeAutomation{id}`,
 `transformNotes{pattern, verb, seed, select}` (deterministic note transforms: verb kinds
 `humanize|quantize|euclidFill|strum|euclidDrums|melody`; same seed and notes ⇒ identical
-notes; `select` limits the notes touched), `setKey{key, scale}` (project key/scale for the
+notes; `select` limits the notes touched by humanize/quantize/strum — the generators
+`euclidFill|euclidDrums|melody` always replace every note of their target channel), `setKey{key, scale}` (project key/scale for the
 scale-aware tools),
 `putComp{comp}`, `removeComp{id}`, `putNotebook{notebook}`, `setBpm{bpm}`, `setLoop{loop}`.
 
@@ -418,7 +419,9 @@ Projects without `comps` open unchanged (`#[serde(default)]`).
   folder instead (recordings stay in the scratch folder, so the copy finds them).
   Each running WAVE holds an exclusive lock on its own `<session>.lock`; a copy
   whose lock nobody holds belongs to a session that crashed or was killed, and
-  the UI offers it at the next start (`Engine::open_recovered`: no path, dirty).
+  the UI offers it at the next start (`Engine::open_recovered`: no path, dirty),
+  also when that start opened a project from File Explorer (after it opens; the
+  question names the project a restore would replace).
   New, Open, Save and a normal exit remove the session's copy.
 * **Takes line up with what was heard.** Input captured at a frame was sung
   to playback heard *round trip + PDC* frames earlier. `finalize_take` drops

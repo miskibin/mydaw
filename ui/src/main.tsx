@@ -49,9 +49,11 @@ async function boot() {
     projectOpens = projectOpens.then(async () => {
       const paths = await be.takeProjectOpenRequests();
       for (const path of paths) await projectOpen(path);
+      // once, after the launch's own project opened (Explorer double-click after a crash too):
+      // a restore replaces it only through the question, which names it, and guardUnsaved
       if (offerStartupRecovery) {
         offerStartupRecovery = false;
-        if (!paths.length) await offerRecovery();
+        await offerRecovery();
       }
     }).catch(e => console.error('[wave] project open request:', e));
   };

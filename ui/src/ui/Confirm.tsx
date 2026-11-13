@@ -15,13 +15,18 @@ export function confirmUnsaved(what: string): Promise<Answer | 'busy'> {
 }
 
 export type RecoverAnswer = 'restore' | 'discard' | 'later';
-const [askRec, setAskRec] = createSignal<{ savedMs: number; done: (a: RecoverAnswer) => void } | null>(null);
+const [askRec, setAskRec] = createSignal<{ savedMs: number; openPath: string | null; done: (a: RecoverAnswer) => void } | null>(null);
 
-/** "WAVE closed unexpectedly…": restore the project, delete it, or keep it for the next start. */
-export function confirmRecover(savedMs: number): Promise<RecoverAnswer> {
-  return new Promise(res => setAskRec({ savedMs, done: a => { setAskRec(null); res(a); } }));
+/**
+ * "WAVE closed unexpectedly…": restore the project, delete it, or keep it for the next start.
+ * `openPath`: the project file open now (e.g. the one just opened from Explorer), which a
+ * restore replaces in this window; the question says so.
+ */
+export function confirmRecover(savedMs: number, openPath: string | null = null): Promise<RecoverAnswer> {
+  return new Promise(res => setAskRec({ savedMs, openPath, done: a => { setAskRec(null); res(a); } }));
 }
 
+const fileName = (path: string) => path.split(/[\\/]/).pop()!;
 const when = (ms: number) => new Date(ms).toLocaleString(lang() === 'pl' ? 'pl-PL' : 'en-GB', { dateStyle: 'medium', timeStyle: 'short' });
 
 export function ConfirmDialog() {
@@ -32,7 +37,10 @@ export function ConfirmDialog() {
           <div class="dialog" role="alertdialog" aria-labelledby="rec-hd" style={{ width: 'min(440px,92vw)' }}
             onKeyDown={e => { e.stopPropagation(); if (e.key === 'Escape') q().done('later'); if (e.key === 'Enter') q().done('restore'); }}>
             <div class="hd"><span id="rec-hd">{t('d.ui.recover')}</span><button title={t('d.ui.recover.later.tip')} onClick={() => q().done('later')}>×</button></div>
-            <p style={{ margin: '4px 0 16px', color: 'var(--fg2)', 'font-size': '13px' }}>{t('d.ui.recover.body', { when: when(q().savedMs) })}</p>
+            <p style={{ margin: '4px 0 16px', color: 'var(--fg2)', 'font-size': '13px' }}>
+              {t('d.ui.recover.body', { when: when(q().savedMs) })}
+              <Show when={q().openPath}>{p => <> {t('d.ui.recover.replaces', { name: t('d.ui.named', { name: fileName(p()) }) })}</>}</Show>
+            </p>
             <div class="row" style={{ gap: '8px', 'justify-content': 'flex-end' }}>
               <button class="smallbtn" title={t('d.ui.recover.later.tip')} onClick={() => q().done('later')}>{t('d.ui.recover.later')}</button>
               <button class="smallbtn danger" onClick={() => q().done('discard')}>{t('d.ui.recover.discard')}</button>
@@ -49,7 +57,7 @@ export function ConfirmDialog() {
             onKeyDown={e => { e.stopPropagation(); if (e.key === 'Escape') q().done('cancel'); if (e.key === 'Enter') q().done('save'); }}>
             <div class="hd"><span>{t('d.ui.unsaved')}</span><button onClick={() => q().done('cancel')}>×</button></div>
             <p style={{ margin: '4px 0 16px', color: 'var(--fg2)', 'font-size': '13px' }}>
-              {t('d.ui.unsaved.body', { name: S.path ? t('d.ui.named', { name: S.path.split(/[\\/]/).pop()! }) : t('d.ui.unnamed'), what: q().what })}
+              {t('d.ui.unsaved.body', { name: S.path ? t('d.ui.named', { name: fileName(S.path) }) : t('d.ui.unnamed'), what: q().what })}
             </p>
             <div class="row" style={{ gap: '8px', 'justify-content': 'flex-end' }}>
               <button class="smallbtn" onClick={() => q().done('cancel')}>{t('d.ui.cancel')}</button>
