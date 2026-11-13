@@ -144,7 +144,7 @@ fn encode(audio: &Audio, seed: u64) -> Result<Vec<u8>, String> {
     let content = audio.content();
     let mut rng = Rng(seed | 1);
     let mut samples = Vec::with_capacity(audio.frames * channels);
-    for frame in content.chunks_exact(2) {
+    for frame in content.as_chunks::<2>().0 {
         for &v in &frame[..channels] {
             samples.push(quantize(v, rng.tpdf()));
         }
