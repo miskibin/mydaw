@@ -8,7 +8,7 @@ import { clamp, fmtPos } from '../lib/format';
 import { loadPreset as loadPresetFx, newFx, presetInfo, presetList } from '../lib/presets';
 import { snapName, snapRes } from '../lib/snap';
 import { deletePoints } from '../lib/envEdit';
-import { acceptReply, commit, endWheelGestures, enqueue, resync } from './edit';
+import { acceptReply, commit, endWheelGestures, enqueue, inGesture, resync } from './edit';
 import { flushNotebook } from './notebook';
 import { clearPeaks } from './peaks';
 import { modePattern, openRack, patMode, setPatMode, stopPreview, togglePreview } from './pattern';
@@ -119,20 +119,26 @@ export async function undo() { if (!S.canUndo) return say(t('d.act.noUndo')); fl
 export async function redo() { if (!S.canRedo) return say(t('d.act.noRedo')); flushNotebook(); endWheelGestures(); acceptReply(await enqueue(() => be().redo())); say(t('d.act.redone')); }
 /** Ask about unsaved changes; false = the user cancelled (or the save failed). */
 export async function guardUnsaved(what: string): Promise<boolean> {
+  if (U.openingProject) return false;
+  flushNotebook();
   const a = await confirmUnsaved(what);
+  if (a === 'busy') { say(t('d.act.guard.busy')); return false; }
   if (a === 'cancel') return false;
   if (a === 'save') return projectSave(false);
   return true;
 }
 export async function projectNew() {
   if (!(await guardUnsaved(t('d.act.guard.new')))) return;
-  flushNotebook();
   try { acceptReply(await enqueue(() => be().projectNew())); afterProjectLoad(); if (!S.project.clips.length) openRack(); say(t('d.act.newproj')); } catch (e) { say(t('d.act.newfail', { err: String(e) })); }
 }
 export async function projectOpen(path?: string) {
   if (path && path === S.path) return;
-  if (!(await guardUnsaved(t('d.act.guard.open')))) return;
-  flushNotebook();
+  endWheelGestures();
+  await enqueue(() => Promise.resolve());
+  if (U.openingProject || inGesture()) { say(t('d.act.guard.busy')); return; }
+  if (!(await guardUnsaved(t('d.act.guard.open'))) || U.openingProject) return;
+  if (inGesture()) { say(t('d.act.guard.busy')); return; }
+  setU('openingProject', true);
   try {
     const r = await enqueue(() => be().projectOpen(path));
     if (r.cancelled) return;
@@ -140,6 +146,7 @@ export async function projectOpen(path?: string) {
     const openedPath = S.path ?? '';
     say(r.warnings.length ? t('d.act.openedwarn', { path: openedPath, n: r.warnings.length, first: r.warnings[0] }) : t('d.act.opened', { path: openedPath }));
   } catch (e) { say(t('d.act.openfail', { err: String(e) })); }
+  finally { setU('openingProject', false); }
 }
 export async function projectSave(saveAs = false): Promise<boolean> {
   flushNotebook();
@@ -165,7 +172,6 @@ export async function offerRecovery() {
     if (a === 'later') return;
     if (a === 'discard') { await be().recoveryDiscard(r.id).catch(e => say(t('d.act.err', { err: String(e) }))); continue; }
     if (!(await guardUnsaved(t('d.act.guard.open')))) return;
-    flushNotebook();
     try {
       const res = await enqueue(() => be().recoveryRestore(r.id));
       acceptReply(res.state); afterProjectLoad();

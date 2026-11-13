@@ -67,6 +67,7 @@ function typingTarget() {
 const patWinFocused = () => !!(document.activeElement as HTMLElement | null)?.closest?.('.patwin');
 
 function onKey(e: KeyboardEvent) {
+  if (U.openingProject) { e.preventDefault(); return; }
   if (e.key === 'Alt') { e.preventDefault(); if (!U.alt) setU('alt', true); return; }
   if (typingIn(e.target as HTMLElement)) return;
   const k = e.key.toLowerCase(), m = e.ctrlKey || e.metaKey;
@@ -185,6 +186,7 @@ export function App() {
     window.addEventListener('blur', onBlur);
     let offDrop: (() => void) | null = null;
     be().onOsDrop(ev => {
+      if (U.openingProject) return;
       if (ev.type === 'over') { if (!U.dragOver) setU('dragOver', true); }
       else if (ev.type === 'leave') setU('dragOver', false);
       else { setU('dragOver', false); if (ev.paths.length) void importAt(ev.paths, ev.x, ev.y, U.alt); }
@@ -215,7 +217,8 @@ export function App() {
   createEffect(() => { be().setTitle((S.path ? baseName(S.path) : tl('a.tb.untitled')) + (S.dirty ? ' •' : '') + ' — WAVE'); });
 
   return (
-    <div class="app" onContextMenu={e => e.preventDefault()}>
+    <>
+    <div class="app" inert={U.openingProject} onContextMenu={e => e.preventDefault()}>
       <Toolbar />
       <div style={{ flex: 1, 'min-height': 0, display: 'flex' }}>
         <Show when={U.pickOpen}><Browser /></Show>
@@ -242,5 +245,11 @@ export function App() {
       <FxPickerHost />
       <MusicDialog />
     </div>
+    <Show when={U.openingProject}>
+      <div class="overlay" style={{ 'z-index': 400 }}>
+        <div class="dialog" role="status">{tl('d.act.opening')}</div>
+      </div>
+    </Show>
+    </>
   );
 }

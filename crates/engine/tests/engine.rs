@@ -149,6 +149,18 @@ fn save_and_open_round_trip() {
 }
 
 #[test]
+fn a_stale_open_does_not_replace_newer_edits() {
+    let e = Engine::new(Project::empty(), Arc::new(NoPlugins));
+    let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/demo_v1.wave");
+    let revision = e.revision();
+    e.apply(&[Op::SetBpm { bpm: 137.0 }], false, None).unwrap();
+    let error = e.open_at_revision(&path, Some(revision)).unwrap_err();
+    assert!(error.to_string().starts_with("REVISION_CONFLICT:"));
+    assert_eq!(e.project().bpm, 137.0);
+    assert!(e.state().path.is_none());
+}
+
+#[test]
 fn live_rt_follows_edits_and_transport() {
     let e = Engine::new(Project::sketch(), Arc::new(NoPlugins));
     let mut rt = e.create_rt(48000.0, 256);
@@ -226,6 +238,24 @@ fn feed(rt: &mut Rt, secs: f64) {
 
 fn takes(e: &Engine) -> Vec<Clip> {
     e.project().clips.into_iter().filter(|c| c.kind == ClipKind::Audio).collect()
+}
+
+#[test]
+fn opening_a_project_while_recording_keeps_the_take_in_its_project() {
+    let e = armed_engine();
+    let mut rt = e.create_rt(48000.0, 256);
+    e.set_transport(None, Some(false), Some(true), None);
+    e.play(0.0);
+    feed(&mut rt, 0.2);
+    let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/demo_v1.wave");
+    let error = e.open(&path).unwrap_err();
+    assert_eq!(error.to_string(), "recording: stop it first");
+    assert!(e.state().transport.playing);
+    assert!(e.state().path.is_none());
+    e.stop();
+    assert_eq!(takes(&e).len(), 1);
+    e.open(&path).unwrap();
+    assert!(takes(&e).is_empty());
 }
 
 #[test]

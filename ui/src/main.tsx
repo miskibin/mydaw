@@ -27,8 +27,6 @@ async function boot() {
   setS('catalog', catalog);
   replaceState(state);
   await be.on('state', onStateEvent);
-  const launchProjects = await be.takeProjectOpenRequests();
-  for (const path of launchProjects) await projectOpen(path);
   await startTelemetry();
   void be.audioGetConfig().then(a => watchAudio(a, cb => be.on('audio-status', cb), say));
   // the standard library's file list, so the first "add channel" menu already offers it
@@ -45,7 +43,7 @@ async function boot() {
   // nothing on the playlist yet: start on the Channel Rack, where a beat begins (FL)
   if (!S.project.clips.length && S.project.patterns.length) openRack();
   void initUpdates(); // version, "What's new" after an update, the first automatic check
-  let offerStartupRecovery = !launchProjects.length;
+  let offerStartupRecovery = true;
   let projectOpens = Promise.resolve();
   const openRequestedProjects = () => {
     projectOpens = projectOpens.then(async () => {

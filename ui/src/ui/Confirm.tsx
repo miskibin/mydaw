@@ -8,8 +8,8 @@ type Answer = 'save' | 'discard' | 'cancel';
 const [ask, setAsk] = createSignal<{ what: string; done: (a: Answer) => void } | null>(null);
 
 /** Resolves 'discard' straight away when nothing is unsaved. */
-export function confirmUnsaved(what: string): Promise<Answer> {
-  if (ask()) return Promise.resolve('cancel'); // keep the first confirmation actionable
+export function confirmUnsaved(what: string): Promise<Answer | 'busy'> {
+  if (ask()) return Promise.resolve('busy'); // keep the first confirmation actionable
   if (!S.dirty) return Promise.resolve('discard');
   return new Promise(res => setAsk({ what, done: a => { setAsk(null); res(a); } }));
 }

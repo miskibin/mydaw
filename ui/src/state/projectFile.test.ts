@@ -2,13 +2,16 @@ import { beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { MockBackend } from '../api/mock';
 
 // The real actions against the mock backend, which replies like the engine's commands.
-let answer: 'save' | 'discard' | 'cancel' = 'discard';
+let answer: 'save' | 'discard' | 'cancel' | 'busy' = 'discard';
 let recAnswer: 'restore' | 'discard' | 'later' = 'restore';
 let recAsked = 0;
-vi.mock('../ui/Confirm', () => ({ confirmUnsaved: async () => answer, confirmRecover: async () => { recAsked++; return recAnswer; } }));
+vi.mock('../ui/Confirm', () => ({
+  confirmUnsaved: async () => (await import('./store')).S.dirty ? answer : 'discard',
+  confirmRecover: async () => { recAsked++; return recAnswer; },
+}));
 beforeAll(() => {
   const noop = () => {};
-  vi.stubGlobal('window', { addEventListener: noop, removeEventListener: noop, innerWidth: 1600, innerHeight: 900 });
+  vi.stubGlobal('window', { addEventListener: noop, removeEventListener: noop, innerWidth: 1600, innerHeight: 900, setTimeout });
   vi.stubGlobal('localStorage', { getItem: () => null, setItem: noop, removeItem: noop });
 });
 
@@ -59,6 +62,21 @@ describe('opening a project', () => {
     expect(store.S.project.bpm).toBe(137);
     expect(store.S.dirty).toBe(true);
   });
+  it('guards notebook text typed just before an Explorer open', async () => {
+    const current = 'C:\\Muzyka\\First.wave';
+    await A.projectOpen(current);
+    await mock.applyOps([{ op: 'putNotebook', notebook: { pages: [{ id: 8000, name: 'Verse', text: '', startBar: 1 }] } }]);
+    await mock.projectSave();
+    store.replaceState(await mock.getState());
+    const notebook = await import('./notebook');
+    notebook.typeText(8000, 'A line I just typed');
+    expect(store.S.dirty).toBe(false);
+    answer = 'cancel';
+    await A.projectOpen('C:\\Muzyka\\Second.wave');
+    expect(store.S.path).toBe(current);
+    expect(store.S.project.notebook?.pages[0].text).toBe('A line I just typed');
+    expect(store.S.dirty).toBe(true);
+  });
   it('keeps unsaved edits when the same project is opened again from Explorer', async () => {
     const path = 'C:\\Muzyka\\First.wave';
     await A.projectOpen(path);
@@ -67,6 +85,15 @@ describe('opening a project', () => {
     await A.projectOpen(path);
     expect(store.S.project.bpm).toBe(137);
     expect(store.S.dirty).toBe(true);
+  });
+  it('explains how to retry an Explorer open while another confirmation is active', async () => {
+    await A.projectOpen('C:\\Muzyka\\First.wave');
+    await mock.applyOps([{ op: 'setBpm', bpm: 137 }]);
+    store.replaceState(await mock.getState());
+    answer = 'busy';
+    await A.projectOpen('C:\\Muzyka\\Second.wave');
+    expect(store.S.path).toBe('C:\\Muzyka\\First.wave');
+    expect((await import('./ui')).U.readout).toContain('try opening the project again');
   });
 });
 

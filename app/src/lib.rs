@@ -549,7 +549,11 @@ async fn project_open(app: St<'_>, handle: AppHandle, path: Option<String>) -> R
     let Some(path) = path else { return Ok(json!({ "cancelled": true })) };
     let e = app.engine.clone();
     let p2 = path.clone();
-    let warnings = tauri::async_runtime::spawn_blocking(move || e.open(&p2)).await.map_err(es)?.map_err(es)?;
+    let revision = e.revision();
+    let warnings = tauri::async_runtime::spawn_blocking(move || e.open_at_revision(&p2, Some(revision)))
+        .await
+        .map_err(es)?
+        .map_err(es)?;
     app.recovery.clear();
     let mut s = app.settings.lock();
     s.last_project = Some(path.display().to_string());
@@ -923,6 +927,7 @@ fn start_app(tapp: &mut tauri::App, boot: Arc<boot::Boot>, reopen_last: bool) {
         .filter(|p| reopen_last && std::path::Path::new(p).is_file())
         .cloned();
     let engine = Engine::new(Project::empty(), plugins.factory());
+    let startup_revision = engine.revision();
     let loading = boot.loading();
     let events: Arc<std::sync::OnceLock<AppHandle>> = Arc::new(std::sync::OnceLock::new());
     // an output the device or driver stopped is reopened by the audio thread: tell the UI
@@ -1026,7 +1031,7 @@ fn start_app(tapp: &mut tauri::App, boot: Arc<boot::Boot>, reopen_last: bool) {
         .spawn(move || {
             let _loading = loading; // released when this thread ends, however it ends
             if let Some(p) = last_project {
-                match a.engine.open(std::path::Path::new(&p)) {
+                match a.engine.open_at_revision(std::path::Path::new(&p), Some(startup_revision)) {
                     Ok(_) => {}
                     Err(e) => log::warn!("could not reopen {p}: {e}"),
                 }
