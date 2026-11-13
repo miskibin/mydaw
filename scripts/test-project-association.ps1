@@ -27,6 +27,10 @@ function Run-Installer($program, $arguments) {
     if ($process.ExitCode -ne 0) { throw "$program failed with exit code $($process.ExitCode)" }
 }
 
+function Get-WaveProcess {
+    Get-Process -Name 'wave-app' -ErrorAction SilentlyContinue | Where-Object { $_.Path -eq $exe }
+}
+
 $extension = 'HKCU:\Software\Classes\.wave'
 $progId = 'HKCU:\Software\Classes\WAVE.Project'
 $originalProgId = 'WAVE.AssociationTest.Previous'
@@ -42,10 +46,15 @@ try {
 
     Invoke-Item -LiteralPath $first
     Wait-ForProject $first
-    $pidBefore = (Get-Process -Name 'wave-app').Id
+    $pidBefore = (Get-WaveProcess).Id
     Invoke-Item -LiteralPath $second
     Wait-ForProject $second
-    if ((Get-Process -Name 'wave-app').Id -ne $pidBefore) { throw 'Opening the second project changed the WAVE process' }
+    for ($attempt = 0; $attempt -lt 30; $attempt++) {
+        $waveProcesses = @(Get-WaveProcess)
+        if ($waveProcesses.Count -eq 1 -and $waveProcesses[0].Id -eq $pidBefore) { break }
+        Start-Sleep -Seconds 1
+    }
+    if ($attempt -eq 30) { throw 'Opening the second project did not keep the original WAVE process' }
 
     Stop-Process -Id $pidBefore
     Wait-Process -Id $pidBefore -Timeout 15 -ErrorAction SilentlyContinue
@@ -58,6 +67,5 @@ try {
         throw 'Uninstall did not remove the icon and restore the previous association'
     }
 } finally {
-    Get-Process -Name 'wave-app' -ErrorAction SilentlyContinue |
-        Where-Object { $_.Path -eq $exe } | Stop-Process -ErrorAction SilentlyContinue
+    Get-WaveProcess | Stop-Process -ErrorAction SilentlyContinue
 }

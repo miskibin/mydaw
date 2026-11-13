@@ -5,8 +5,13 @@ import type { MockBackend } from '../api/mock';
 let answer: 'save' | 'discard' | 'cancel' | 'busy' = 'discard';
 let recAnswer: 'restore' | 'discard' | 'later' = 'restore';
 let recAsked = 0;
+let editDuringConfirm: (() => Promise<void>) | undefined;
 vi.mock('../ui/Confirm', () => ({
-  confirmUnsaved: async () => (await import('./store')).S.dirty ? answer : 'discard',
+  confirmUnsaved: async () => {
+    const choice = (await import('./store')).S.dirty ? answer : 'discard';
+    await editDuringConfirm?.();
+    return choice;
+  },
   confirmRecover: async () => { recAsked++; return recAnswer; },
 }));
 beforeAll(() => {
@@ -28,6 +33,7 @@ beforeEach(async () => {
   answer = 'discard';
   recAnswer = 'restore';
   recAsked = 0;
+  editDuringConfirm = undefined;
 });
 
 describe('opening a project', () => {
@@ -94,6 +100,18 @@ describe('opening a project', () => {
     await A.projectOpen('C:\\Muzyka\\Second.wave');
     expect(store.S.path).toBe('C:\\Muzyka\\First.wave');
     expect((await import('./ui')).U.readout).toContain('try opening the project again');
+  });
+  it('keeps an edit made after the revision approved for opening', async () => {
+    const current = 'C:\\Muzyka\\First.wave';
+    await A.projectOpen(current);
+    editDuringConfirm = async () => {
+      await mock.applyOps([{ op: 'setBpm', bpm: 137 }]);
+      store.replaceState(await mock.getState());
+    };
+    await A.projectOpen('C:\\Muzyka\\Second.wave');
+    expect(store.S.path).toBe(current);
+    expect(store.S.project.bpm).toBe(137);
+    expect(store.S.dirty).toBe(true);
   });
 });
 

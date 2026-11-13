@@ -8,7 +8,7 @@ import { clamp, fmtPos } from '../lib/format';
 import { loadPreset as loadPresetFx, newFx, presetInfo, presetList } from '../lib/presets';
 import { snapName, snapRes } from '../lib/snap';
 import { deletePoints } from '../lib/envEdit';
-import { acceptReply, commit, endWheelGestures, enqueue, inGesture, resync } from './edit';
+import { acceptReply, commit, endWheelGestures, enqueue, inGesture, projectRevision, resync } from './edit';
 import { flushNotebook } from './notebook';
 import { clearPeaks } from './peaks';
 import { modePattern, openRack, patMode, setPatMode, stopPreview, togglePreview } from './pattern';
@@ -134,13 +134,20 @@ export async function projectNew() {
 export async function projectOpen(path?: string) {
   if (path && path === S.path) return;
   endWheelGestures();
+  flushNotebook();
   await enqueue(() => Promise.resolve());
   if (U.openingProject || inGesture()) { say(t('d.act.guard.busy')); return; }
-  if (!(await guardUnsaved(t('d.act.guard.open'))) || U.openingProject) return;
+  const revision = projectRevision();
+  const answer = await confirmUnsaved(t('d.act.guard.open'));
+  if (answer === 'busy') { say(t('d.act.guard.busy')); return; }
+  if (answer === 'cancel' || U.openingProject) return;
   if (inGesture()) { say(t('d.act.guard.busy')); return; }
   setU('openingProject', true);
   try {
-    const r = await enqueue(() => be().projectOpen(path));
+    if (answer === 'save' && !(await projectSave(false))) return;
+    if (answer === 'save' && S.dirty) { say(t('d.act.guard.busy')); return; }
+    const approvedRevision = answer === 'save' ? projectRevision() : revision;
+    const r = await enqueue(() => be().projectOpen(path, approvedRevision));
     if (r.cancelled) return;
     acceptReply(r.state); afterProjectLoad();
     const openedPath = S.path ?? '';

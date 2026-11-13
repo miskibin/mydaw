@@ -15,6 +15,8 @@ let gestures = 0;          // gestures between begin and end
 let lastReplyRev = 0;      // newest revision the engine reported for one of *our* batches
 let stash: StateDto | null = null;
 
+export const projectRevision = () => Math.max(S.revision, lastReplyRev);
+
 /** True while a drag gesture is open (begin_gesture sent, end_gesture not yet answered). */
 export const inGesture = () => gestures > 0;
 setGestureProbe(inGesture);

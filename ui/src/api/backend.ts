@@ -116,7 +116,7 @@ export interface Backend {
   libraryRemoveFolder(path: string): Promise<string[]>;
   projectNew(): Promise<StateDto>;
   /** The file dialog when `path` is omitted. */
-  projectOpen(path?: string): Promise<OpenResult>;
+  projectOpen(path?: string, ifRevision?: number): Promise<OpenResult>;
   /** Project paths received at launch or forwarded by another instance. */
   takeProjectOpenRequests(): Promise<string[]>;
   /** The save dialog when the project has no path yet or `saveAs`. */
@@ -268,7 +268,7 @@ export function tauriBackend(): Backend {
     libraryAddFolder: () => invoke('library_add_folder'),
     libraryRemoveFolder: path => invoke('library_remove_folder', { path }),
     projectNew: () => invoke('project_new'),
-    projectOpen: path => invoke('project_open', { path: path ?? null }),
+    projectOpen: (path, ifRevision) => invoke('project_open', { path: path ?? null, ifRevision }),
     takeProjectOpenRequests: () => invoke('take_project_open_requests'),
     projectSave: saveAs => invoke('project_save', { saveAs: !!saveAs }),
     recoveryWrite: () => invoke('recovery_write'),

@@ -541,7 +541,8 @@ fn open_reply(state: StateDto, warnings: Vec<String>) -> Value {
 }
 
 #[tauri::command]
-async fn project_open(app: St<'_>, handle: AppHandle, path: Option<String>) -> R<Value> {
+async fn project_open(app: St<'_>, handle: AppHandle, path: Option<String>, if_revision: Option<u64>) -> R<Value> {
+    let revision = if_revision.unwrap_or_else(|| app.engine.revision());
     let path = match path {
         Some(p) => Some(PathBuf::from(p)),
         None => handle.dialog().file().add_filter("WAVE project", &["wave"]).blocking_pick_file().and_then(|p| p.into_path().ok()),
@@ -549,7 +550,6 @@ async fn project_open(app: St<'_>, handle: AppHandle, path: Option<String>) -> R
     let Some(path) = path else { return Ok(json!({ "cancelled": true })) };
     let e = app.engine.clone();
     let p2 = path.clone();
-    let revision = e.revision();
     let warnings = tauri::async_runtime::spawn_blocking(move || e.open_at_revision(&p2, Some(revision)))
         .await
         .map_err(es)?

@@ -974,8 +974,9 @@ export class MockBackend implements Backend {
   /** Tests: the next native file dialog is dismissed, as when the user presses Cancel. */
   dismissNextDialog = false;
   private dialog(): boolean { const ok = !this.dismissNextDialog; this.dismissNextDialog = false; return ok; }
-  async projectOpen(path?: string): Promise<OpenResult> {
+  async projectOpen(path?: string, ifRevision?: number): Promise<OpenResult> {
     if (path == null && !this.dialog()) return { cancelled: true };
+    if (ifRevision != null && ifRevision !== this.revision) throw new Error('REVISION_CONFLICT: project changed');
     this.resetTo(sketchProject(this.cat), path ?? 'C:\\Users\\michal\\Music\\Demo.wave');
     this.recovery = null;
     return { state: this.dto(), warnings: [] };
