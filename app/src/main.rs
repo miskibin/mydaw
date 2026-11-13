@@ -10,7 +10,7 @@ fn main() -> std::process::ExitCode {
     // `WAVE --cli …` is the `wave` command (see cli_shim): same binary, no window.
     if args.first().map(String::as_str) == Some("--cli") {
         attach_console();
-        return wave_cli::run_cli(args[1..].to_vec());
+        return wave_app::cli_main(args[1..].to_vec());
     }
     wave_app::run();
     std::process::ExitCode::SUCCESS

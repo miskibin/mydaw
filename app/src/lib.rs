@@ -4,6 +4,7 @@
 mod actions;
 mod boot;
 mod cli_shim;
+mod headless;
 mod keys;
 mod library;
 mod models;
@@ -58,6 +59,37 @@ impl App {
         *self.status.lock() = s.clone();
         s
     }
+}
+
+impl actions::Host for App {
+    fn engine(&self) -> &Arc<Engine> {
+        &self.engine
+    }
+    fn plugins(&self) -> &Arc<plugins::Plugins> {
+        &self.plugins
+    }
+    fn live(&self) -> bool {
+        true
+    }
+    fn audio_json(&self) -> Value {
+        json!(self.audio_status())
+    }
+    fn cli_json(&self) -> Value {
+        json!(*self.cli.lock())
+    }
+    fn model_error(&self) -> Option<String> {
+        self.model_error.lock().clone()
+    }
+    fn wait_keys(&self) -> R<()> {
+        keys::wait(self);
+        Ok(())
+    }
+}
+
+/// `WAVE --cli …`: the `wave` command. Commands go to the running app, or with
+/// `--project FILE` run here, on the file, with no window and no audio device.
+pub fn cli_main(args: Vec<String>) -> std::process::ExitCode {
+    wave_cli::run_cli_with(args, Some(&headless::Files))
 }
 
 type St<'a> = State<'a, Arc<App>>;
@@ -188,7 +220,7 @@ async fn watch_fx(app: St<'_>, ids: Vec<u64>) -> R<()> {
 #[tauri::command]
 async fn import_audio(app: St<'_>, paths: Vec<String>, track: Option<u32>, beat: Option<f64>) -> R<Value> {
     let a = app.inner().clone();
-    tauri::async_runtime::spawn_blocking(move || actions::import(&a, &json!({ "paths": paths, "track": track, "beat": beat })))
+    tauri::async_runtime::spawn_blocking(move || actions::import(&*a, &json!({ "paths": paths, "track": track, "beat": beat })))
         .await
         .map_err(es)?
 }
@@ -613,7 +645,7 @@ async fn export_audio(app: St<'_>, handle: AppHandle, use_loop: bool, tail: f64,
     let a = app.inner().clone();
     let out = path.clone();
     let result = tauri::async_runtime::spawn_blocking(move || {
-        actions::render_to_file(&a, &out, from, to, tail, sample_rate, &a.export_cancel, fmt)
+        actions::render_to_file(&*a, &out, from, to, tail, sample_rate, &a.export_cancel, fmt)
     })
     .await
     .map_err(es)?;
@@ -703,7 +735,7 @@ async fn vst3_scan(app: St<'_>, rescan: bool) -> R<Vec<Value>> {
 
 #[tauri::command]
 async fn vst3_add(app: St<'_>, insert_id: u64, path: String, cid: String, index: Option<usize>) -> R<Value> {
-    let (id, rev) = actions::vst3_add(&app, insert_id, &path, &cid, index)?;
+    let (id, rev) = actions::vst3_add(&**app, insert_id, &path, &cid, index)?;
     Ok(json!({ "fxId": id, "revision": rev }))
 }
 
@@ -937,7 +969,7 @@ pub fn run() {
                     let weak = Arc::downgrade(&a);
                     let handler: Arc<wave_session::Handler> = Arc::new(move |req: &wave_session::Request| {
                         let Some(app) = weak.upgrade() else { return Err(wave_session::ErrorBody::new("GONE", "the app is closing")) };
-                        let res = actions::control(&app, &req.command, &req.args, req.if_revision);
+                        let res = actions::control(&*app, &req.command, &req.args, req.if_revision);
                         let rev = app.engine.revision();
                         res.map(|d| (d, rev)).map_err(|m| {
                             let code = m.split(':').next().filter(|c| c.chars().all(|ch| ch.is_ascii_uppercase() || ch == '_') && c.len() > 2).unwrap_or("REFUSED").to_string();

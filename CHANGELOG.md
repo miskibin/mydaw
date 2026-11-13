@@ -4,6 +4,17 @@ What changed in each release of WAVE. The newest version comes first; its sectio
 shown in the app after an update and is published as the release notes (see
 `docs/releasing.md`). Write for musicians: what you can do now, not how it works inside.
 
+## Unreleased
+
+### Added
+- **Edit and render projects from the command line without opening WAVE.** `wave new song.wave`
+  creates a project, and `wave --project song.wave <command>` (or `-p`) runs any edit or read on
+  the file and saves it back: change the tempo, write patterns, add effects, then
+  `render --out mix.wav` or `--stems` for batch bounces, build servers and AI agents. `script
+  edits.txt` runs many commands with one load and one save, and writes nothing if a line fails.
+  `--dry-run` tries an edit without saving, `--save-as` writes a copy. A file the app has open is
+  never overwritten behind its back.
+
 ## 0.9.12 — 2026-11-12
 
 ### Added
