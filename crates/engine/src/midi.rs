@@ -16,16 +16,34 @@ pub const MIN_NOTE_STEPS: f32 = 0.25;
 /// A decoded channel-voice message. `ch` is the MIDI channel 0..15.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub enum MidiMsg {
-    NoteOn { ch: u8, key: u8, vel: u8 },
-    NoteOff { ch: u8, key: u8 },
+    NoteOn {
+        ch: u8,
+        key: u8,
+        vel: u8,
+    },
+    NoteOff {
+        ch: u8,
+        key: u8,
+    },
     /// CC 64 (damper pedal): down at value ≥ 64.
-    Sustain { ch: u8, down: bool },
+    Sustain {
+        ch: u8,
+        down: bool,
+    },
     /// Pitch bend in −8192..=8191 (0 = centre).
-    PitchBend { ch: u8, value: i16 },
+    PitchBend {
+        ch: u8,
+        value: i16,
+    },
     /// CC 1 (mod wheel), 0..=127.
-    ModWheel { ch: u8, value: u8 },
+    ModWheel {
+        ch: u8,
+        value: u8,
+    },
     /// CC 120 (all sound off) / CC 123 (all notes off).
-    AllNotesOff { ch: u8 },
+    AllNotesOff {
+        ch: u8,
+    },
 }
 
 impl MidiMsg {

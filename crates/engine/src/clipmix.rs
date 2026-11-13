@@ -244,7 +244,21 @@ mod tests {
         let a = audio(48000, 1.0);
         let spb = 0.5;
         let bps = 1.0 / (48000.0 * spb);
-        let mut c = ClipRt { id: 1, track: 0, start: 0.0, end: 4.0, offset: 0.0, rate: 1.0, gain: 0.0, pan: 0.0, fade_in: 0.0, fade_out: 0.0, src: ClipSrc::Audio(a.clone()), gain0: -24.0, pan0: 0.0 };
+        let mut c = ClipRt {
+            id: 1,
+            track: 0,
+            start: 0.0,
+            end: 4.0,
+            offset: 0.0,
+            rate: 1.0,
+            gain: 0.0,
+            pan: 0.0,
+            fade_in: 0.0,
+            fade_out: 0.0,
+            src: ClipSrc::Audio(a.clone()),
+            gain0: -24.0,
+            pan0: 0.0,
+        };
         let (mut l, mut r) = (vec![0f32; 512], vec![0f32; 512]);
         mix_audio_clip(&c, &a, 0.5, bps, spb, &mut l, &mut r);
         // the reference at the old and the new gain bound the glide; it starts at the old one
@@ -332,7 +346,21 @@ mod tests {
             let a = audio(file_sr, 10.0);
             let spb = 60.0 / 120.0;
             let bps = 1.0 / (spb * 48000.0);
-            let c = ClipRt { id: 1, track: 0, start: 0.0, end: 16.0, offset: 0.3, rate: 1.0, gain: -3.0, pan: 0.2, fade_in: 0.01, fade_out: 0.01, src: ClipSrc::Audio(a.clone()), gain0: -3.0, pan0: 0.2 };
+            let c = ClipRt {
+                id: 1,
+                track: 0,
+                start: 0.0,
+                end: 16.0,
+                offset: 0.3,
+                rate: 1.0,
+                gain: -3.0,
+                pan: 0.2,
+                fade_in: 0.01,
+                fade_out: 0.01,
+                src: ClipSrc::Audio(a.clone()),
+                gain0: -3.0,
+                pan0: 0.2,
+            };
             let (mut l, mut r) = (vec![0f32; 512], vec![0f32; 512]);
             let reps = 20000;
             let t = std::time::Instant::now();

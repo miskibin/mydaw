@@ -66,10 +66,7 @@ fn run(src: &Path, out: &Path) -> Result<Summary, String> {
         .map_err(|e| format!("{}: {e}", src.display()))?
         .flatten()
         .map(|e| e.path())
-        .filter(|p| {
-            p.extension()
-                .is_some_and(|x| x.eq_ignore_ascii_case("flac"))
-        })
+        .filter(|p| p.extension().is_some_and(|x| x.eq_ignore_ascii_case("flac")))
         .collect();
     files.sort();
     if files.is_empty() {
@@ -77,13 +74,9 @@ fn run(src: &Path, out: &Path) -> Result<Summary, String> {
     }
     std::fs::create_dir_all(out).map_err(|e| format!("{}: {e}", out.display()))?;
 
-    let threads = std::thread::available_parallelism()
-        .map(|n| n.get())
-        .unwrap_or(2)
-        .clamp(1, 8);
+    let threads = std::thread::available_parallelism().map(|n| n.get()).unwrap_or(2).clamp(1, 8);
     let next = AtomicUsize::new(0);
-    let results: Vec<Mutex<Option<Result<Prepared, String>>>> =
-        files.iter().map(|_| Mutex::new(None)).collect();
+    let results: Vec<Mutex<Option<Result<Prepared, String>>>> = files.iter().map(|_| Mutex::new(None)).collect();
     std::thread::scope(|s| {
         for _ in 0..threads {
             s.spawn(|| loop {
@@ -97,10 +90,7 @@ fn run(src: &Path, out: &Path) -> Result<Summary, String> {
 
     let mut summary = Summary::default();
     for slot in results {
-        let p = slot
-            .into_inner()
-            .unwrap()
-            .unwrap_or_else(|| Err("not processed".into()))?;
+        let p = slot.into_inner().unwrap().unwrap_or_else(|| Err("not processed".into()))?;
         summary.files += 1;
         summary.bytes_in += p.bytes_in;
         summary.bytes_out += p.bytes_out;
@@ -110,10 +100,7 @@ fn run(src: &Path, out: &Path) -> Result<Summary, String> {
     // The whole folder goes into the installer: a recording removed from the manifest, or a
     // `.part` left by an interrupted run, must not linger there.
     let keep: Vec<_> = files.iter().filter_map(|p| p.file_name()).collect();
-    for entry in std::fs::read_dir(out)
-        .map_err(|e| format!("{}: {e}", out.display()))?
-        .flatten()
-    {
+    for entry in std::fs::read_dir(out).map_err(|e| format!("{}: {e}", out.display()))?.flatten() {
         let name = entry.file_name();
         let path = entry.path();
         let ext = path.extension().map(|x| x.to_ascii_lowercase());
@@ -148,11 +135,7 @@ fn prepare_file(path: &Path, out: &Path) -> Result<Prepared, String> {
         }
     };
     std::fs::rename(&part, &dst).map_err(|e| format!("{}: {e}", dst.display()))?;
-    Ok(Prepared {
-        bytes_in,
-        bytes_out: flac.len() as u64,
-        max_error,
-    })
+    Ok(Prepared { bytes_in, bytes_out: flac.len() as u64, max_error })
 }
 
 /// 16-bit FLAC of `audio` (mono when the recording is mono), TPDF-dithered.
@@ -166,25 +149,17 @@ fn encode(audio: &Audio, seed: u64) -> Result<Vec<u8>, String> {
             samples.push(quantize(v, rng.tpdf()));
         }
     }
-    let config = flacenc::config::Encoder::default()
-        .into_verified()
-        .map_err(|e| format!("encoder settings: {e:?}"))?;
-    let source =
-        flacenc::source::MemSource::from_samples(&samples, channels, 16, audio.sr as usize);
-    let mut stream = flacenc::encode_with_fixed_block_size(&config, source, config.block_size)
-        .map_err(|e| format!("FLAC encoding failed: {e:?}"))?;
+    let config = flacenc::config::Encoder::default().into_verified().map_err(|e| format!("encoder settings: {e:?}"))?;
+    let source = flacenc::source::MemSource::from_samples(&samples, channels, 16, audio.sr as usize);
+    let mut stream =
+        flacenc::encode_with_fixed_block_size(&config, source, config.block_size).map_err(|e| format!("FLAC encoding failed: {e:?}"))?;
     // flacenc counts the short last block in the minimum block size. The format excludes it,
     // and symphonia (the app's decoder) refuses such a file, so this fixed-block stream says
     // min = max as it should.
     let max_block = stream.stream_info().max_block_size();
-    stream
-        .stream_info_mut()
-        .set_block_sizes(max_block, max_block)
-        .map_err(|e| format!("FLAC header: {e:?}"))?;
+    stream.stream_info_mut().set_block_sizes(max_block, max_block).map_err(|e| format!("FLAC header: {e:?}"))?;
     let mut sink = flacenc::bitsink::ByteSink::new();
-    stream
-        .write(&mut sink)
-        .map_err(|e| format!("FLAC writing failed: {e:?}"))?;
+    stream.write(&mut sink).map_err(|e| format!("FLAC writing failed: {e:?}"))?;
     Ok(sink.as_slice().to_vec())
 }
 
@@ -196,34 +171,23 @@ fn quantize(v: f32, dither: f32) -> i32 {
 /// Decodes the FLAC file at `path` the way the app will and compares it with `audio`.
 /// Returns the largest error.
 fn check(path: &Path, audio: &Audio) -> Result<f32, String> {
-    let decoded = wave_audio_file::decode_stereo(path, |_| None)
-        .map_err(|e| format!("the encoded file does not decode: {e}"))?;
+    let decoded = wave_audio_file::decode_stereo(path, |_| None).map_err(|e| format!("the encoded file does not decode: {e}"))?;
     if decoded.frames != audio.frames || decoded.sample_rate.round() as u32 != audio.sr {
         return Err(format!(
             "the encoded file has {} frames at {} Hz, expected {} at {}",
             decoded.frames, decoded.sample_rate, audio.frames, audio.sr
         ));
     }
-    let max_error = decoded
-        .data
-        .iter()
-        .zip(audio.content())
-        .map(|(a, b)| (a - b).abs())
-        .fold(0.0_f32, f32::max);
+    let max_error = decoded.data.iter().zip(audio.content()).map(|(a, b)| (a - b).abs()).fold(0.0_f32, f32::max);
     if max_error > MAX_ERROR_LSB / 32768.0 {
-        return Err(format!(
-            "the encoded file differs from the recording by {:.2} steps",
-            max_error * 32768.0
-        ));
+        return Err(format!("the encoded file differs from the recording by {:.2} steps", max_error * 32768.0));
     }
     Ok(max_error)
 }
 
 /// FNV-1a: a stable seed per file name, so a rebuild writes the same bytes.
 fn seed_of(name: &str) -> u64 {
-    name.bytes().fold(0xcbf2_9ce4_8422_2325, |h, b| {
-        (h ^ u64::from(b)).wrapping_mul(0x0100_0000_01b3)
-    })
+    name.bytes().fold(0xcbf2_9ce4_8422_2325, |h, b| (h ^ u64::from(b)).wrapping_mul(0x0100_0000_01b3))
 }
 
 /// xorshift64*: enough for dither, and the same on every machine.
@@ -253,11 +217,7 @@ mod tests {
         for i in 0..frames {
             let t = i as f32 / sr as f32;
             let l = 0.5 * (std::f32::consts::TAU * 220.0 * t).sin() * (-t * 0.3).exp();
-            let r = if stereo {
-                0.4 * (std::f32::consts::TAU * 330.0 * t).sin()
-            } else {
-                l
-            };
+            let r = if stereo { 0.4 * (std::f32::consts::TAU * 330.0 * t).sin() } else { l };
             data.extend([l, r]);
         }
         Audio::from_stereo(data, sr, if stereo { 2 } else { 1 })
@@ -296,11 +256,7 @@ mod tests {
         let loaded = Audio::load(&path).unwrap();
         let again = keys::trimmed(Audio::load(&path).unwrap());
         assert_eq!(again.frames, loaded.frames);
-        assert_eq!(
-            again.content(),
-            loaded.content(),
-            "loading must not fade the tail a second time"
-        );
+        assert_eq!(again.content(), loaded.content(), "loading must not fade the tail a second time");
         let _ = std::fs::remove_dir_all(dir);
     }
 
@@ -335,9 +291,7 @@ mod tests {
         // 4096-sample blocks: one short frame, an exact multiple, and a short last frame
         let dir = scratch("blocks");
         for frames in [1000_usize, 8192, 8192 + 2944] {
-            let data: Vec<f32> = (0..frames)
-                .flat_map(|i| [0.1 * (i as f32 * 0.01).sin(); 2])
-                .collect();
+            let data: Vec<f32> = (0..frames).flat_map(|i| [0.1 * (i as f32 * 0.01).sin(); 2]).collect();
             let a = Audio::from_stereo(data, 48_000, 2);
             let path = dir.join(format!("C4v{frames}.flac"));
             std::fs::write(&path, encode(&a, 9).unwrap()).unwrap();
@@ -349,10 +303,7 @@ mod tests {
     #[test]
     fn output_is_deterministic() {
         let a = tone(1.0, 48_000, true);
-        assert_eq!(
-            encode(&a, seed_of("D1v4.flac")).unwrap(),
-            encode(&a, seed_of("D1v4.flac")).unwrap()
-        );
+        assert_eq!(encode(&a, seed_of("D1v4.flac")).unwrap(), encode(&a, seed_of("D1v4.flac")).unwrap());
     }
 
     #[test]
@@ -366,11 +317,7 @@ mod tests {
             sum += f64::from(d);
         }
         assert!(lo > -1.0 && hi < 1.0, "{lo} {hi}");
-        assert!(
-            (sum / 100_000.0).abs() < 0.01,
-            "dither must have no DC: {}",
-            sum / 100_000.0
-        );
+        assert!((sum / 100_000.0).abs() < 0.01, "dither must have no DC: {}", sum / 100_000.0);
         assert_eq!(quantize(1.5, 0.0), 32767);
         assert_eq!(quantize(-1.5, 0.0), -32768);
         assert_eq!(quantize(0.0, 0.4), 0);
@@ -381,11 +328,7 @@ mod tests {
         let src = scratch("src");
         let out = scratch("out");
         for name in ["C4v1.flac", "C4v2.flac"] {
-            std::fs::write(
-                src.join(name),
-                encode(&tone(11.0, 48_000, true), 5).unwrap(),
-            )
-            .unwrap();
+            std::fs::write(src.join(name), encode(&tone(11.0, 48_000, true), 5).unwrap()).unwrap();
         }
         std::fs::write(out.join("Old1v1.flac"), b"stale").unwrap();
         std::fs::write(out.join("C4v1.flac.part"), b"interrupted").unwrap();
@@ -393,11 +336,7 @@ mod tests {
         let s = run(&src, &out).unwrap();
         assert_eq!(s.files, 2);
         assert!(s.bytes_out < s.bytes_in, "{s:?}");
-        let mut names: Vec<_> = std::fs::read_dir(&out)
-            .unwrap()
-            .flatten()
-            .map(|e| e.file_name().into_string().unwrap())
-            .collect();
+        let mut names: Vec<_> = std::fs::read_dir(&out).unwrap().flatten().map(|e| e.file_name().into_string().unwrap()).collect();
         names.sort();
         assert_eq!(names, ["ATTRIBUTION.txt", "C4v1.flac", "C4v2.flac"]);
         assert_eq!(keys::KeysBank::load(&out).map(|_| ()), Ok(()));
@@ -408,9 +347,7 @@ mod tests {
     #[test]
     fn missing_or_empty_folder_is_an_error() {
         let empty = scratch("empty");
-        assert!(run(&empty, &empty.join("out"))
-            .unwrap_err()
-            .contains("no FLAC"));
+        assert!(run(&empty, &empty.join("out")).unwrap_err().contains("no FLAC"));
         assert!(run(&empty.join("nope"), &empty.join("out")).is_err());
         let _ = std::fs::remove_dir_all(empty);
     }

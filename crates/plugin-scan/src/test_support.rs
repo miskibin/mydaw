@@ -31,10 +31,7 @@ impl Drop for ScratchDir {
 pub fn scratch_dir(tag: &str) -> ScratchDir {
     static COUNTER: AtomicU32 = AtomicU32::new(0);
     let unique = COUNTER.fetch_add(1, Ordering::Relaxed);
-    let path = std::env::temp_dir().join(format!(
-        "wave-plugin-scan-{tag}-{}-{unique}",
-        std::process::id()
-    ));
+    let path = std::env::temp_dir().join(format!("wave-plugin-scan-{tag}-{}-{unique}", std::process::id()));
     let _ = std::fs::remove_dir_all(&path);
     std::fs::create_dir_all(&path).expect("scratch dir");
     ScratchDir(path)
@@ -47,11 +44,7 @@ pub fn scratch_dir(tag: &str) -> ScratchDir {
 /// all the way down.
 pub fn trivial_worker(script: &str) -> std::io::Result<Child> {
     let mut command = shell(script);
-    command
-        .stdin(Stdio::null())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::null())
-        .spawn()
+    command.stdin(Stdio::null()).stdout(Stdio::piped()).stderr(Stdio::null()).spawn()
 }
 
 /// A worker that will still be running when any sane deadline passes.
@@ -72,11 +65,7 @@ pub fn sleeping_worker() -> std::io::Result<Child> {
     // Spawn the sleeper itself, not `shell -> sleeper`. The timeout path kills
     // the returned child; a sleeper behind a shell wrapper would survive as an
     // orphaned grandchild holding stdout open after its parent was killed.
-    command
-        .stdin(Stdio::null())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::null())
-        .spawn()
+    command.stdin(Stdio::null()).stdout(Stdio::piped()).stderr(Stdio::null()).spawn()
 }
 
 #[cfg(windows)]

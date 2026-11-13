@@ -50,11 +50,7 @@ pub(crate) const ARCH_DIR: &str = "MacOS";
 pub(crate) const ARCH_DIR: &str = "x86_64-linux";
 #[cfg(all(unix, not(target_os = "macos"), target_arch = "aarch64"))]
 pub(crate) const ARCH_DIR: &str = "aarch64-linux";
-#[cfg(not(any(
-    windows,
-    target_os = "macos",
-    all(unix, any(target_arch = "x86_64", target_arch = "aarch64"))
-)))]
+#[cfg(not(any(windows, target_os = "macos", all(unix, any(target_arch = "x86_64", target_arch = "aarch64")))))]
 pub(crate) const ARCH_DIR: &str = "unsupported";
 
 /// Extension of the binary inside a bundle: `.vst3` on Windows, `.so` on Linux.
@@ -133,9 +129,7 @@ impl serde::Serialize for ClassId {
 impl<'de> serde::Deserialize<'de> for ClassId {
     fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
         let text = String::deserialize(deserializer)?;
-        Self::from_hex(&text).ok_or_else(|| {
-            serde::de::Error::custom(format!("{text:?} is not a 32-digit VST3 class id"))
-        })
+        Self::from_hex(&text).ok_or_else(|| serde::de::Error::custom(format!("{text:?} is not a 32-digit VST3 class id")))
     }
 }
 
@@ -160,28 +154,19 @@ pub(crate) fn resolve_binary(path: &Path) -> Result<PathBuf, Vst3Error> {
         let mut candidates: Vec<PathBuf> = entries
             .flatten()
             .map(|entry| entry.path())
-            .filter(|candidate| {
-                candidate.is_file()
-                    && candidate
-                        .extension()
-                        .is_some_and(|ext| ext.eq_ignore_ascii_case(BINARY_EXTENSION))
-            })
+            .filter(|candidate| candidate.is_file() && candidate.extension().is_some_and(|ext| ext.eq_ignore_ascii_case(BINARY_EXTENSION)))
             .collect();
         candidates.sort();
         if let Some(only) = candidates.into_iter().next() {
             return Ok(only);
         }
     }
-    Err(Vst3Error::NoBinary {
-        path: path.to_path_buf(),
-        looked_in: format!("{CONTENTS_DIR}/{ARCH_DIR}"),
-    })
+    Err(Vst3Error::NoBinary { path: path.to_path_buf(), looked_in: format!("{CONTENTS_DIR}/{ARCH_DIR}") })
 }
 
 /// Whether a path ends in `.vst3`, in any case.
 pub(crate) fn has_vst3_extension(path: &Path) -> bool {
-    path.extension()
-        .is_some_and(|ext| ext.eq_ignore_ascii_case("vst3"))
+    path.extension().is_some_and(|ext| ext.eq_ignore_ascii_case("vst3"))
 }
 
 /// A loaded VST3 module and its plugin factory. Lives for the process.
@@ -211,9 +196,7 @@ impl Module {
         // Opened without holding the lock: loading runs vendor code, which can
         // take seconds.
         let module = Arc::new(Self::open(path)?);
-        Ok(Arc::clone(
-            modules.lock().entry(path.to_path_buf()).or_insert(module),
-        ))
+        Ok(Arc::clone(modules.lock().entry(path.to_path_buf()).or_insert(module)))
     }
 
     /// Load the module at `path` and take its factory.
@@ -226,29 +209,15 @@ impl Module {
         // contains.
         let opened = catch_unwind(AssertUnwindSafe(|| -> Result<_, Vst3Error> {
             if !unsafe { library.enter() } {
-                return Err(Vst3Error::InitRefused {
-                    path: path.to_path_buf(),
-                });
+                return Err(Vst3Error::InitRefused { path: path.to_path_buf() });
             }
-            let get_factory =
-                unsafe { library.symbol::<GetPluginFactoryFn>(b"GetPluginFactory\0") }.ok_or_else(
-                    || Vst3Error::NoEntryPoint {
-                        path: path.to_path_buf(),
-                    },
-                )?;
+            let get_factory = unsafe { library.symbol::<GetPluginFactoryFn>(b"GetPluginFactory\0") }
+                .ok_or_else(|| Vst3Error::NoEntryPoint { path: path.to_path_buf() })?;
             // An already-addRef'ed pointer the caller owns: `from_raw`'s contract.
-            unsafe { ComPtr::from_raw(get_factory()) }.ok_or_else(|| Vst3Error::NoFactory {
-                path: path.to_path_buf(),
-            })
+            unsafe { ComPtr::from_raw(get_factory()) }.ok_or_else(|| Vst3Error::NoFactory { path: path.to_path_buf() })
         }))
-        .map_err(|_| Vst3Error::Panicked {
-            stage: "initialising its module",
-        })??;
-        Ok(Self {
-            factory: opened,
-            _library: library,
-            path: path.to_path_buf(),
-        })
+        .map_err(|_| Vst3Error::Panicked { stage: "initialising its module" })??;
+        Ok(Self { factory: opened, _library: library, path: path.to_path_buf() })
     }
 
     pub(crate) fn factory(&self) -> &ComPtr<IPluginFactory> {
@@ -283,11 +252,7 @@ impl LibraryHandle {
         };
         use windows_sys::Win32::System::LibraryLoader::LoadLibraryW;
 
-        let wide: Vec<u16> = binary
-            .as_os_str()
-            .encode_wide()
-            .chain(std::iter::once(0))
-            .collect();
+        let wide: Vec<u16> = binary.as_os_str().encode_wide().chain(std::iter::once(0)).collect();
         // Windows otherwise shows loader failures (corrupt binary, missing
         // dependency) as a modal system dialog, which a scan worker cannot
         // answer. Suppress those for this thread only, then restore.
@@ -296,10 +261,7 @@ impl LibraryHandle {
         // APIs act on the current thread only.
         let (handle, error) = unsafe {
             let previous = GetThreadErrorMode();
-            let changed = SetThreadErrorMode(
-                previous | SEM_FAILCRITICALERRORS | SEM_NOOPENFILEERRORBOX,
-                std::ptr::null_mut(),
-            ) != 0;
+            let changed = SetThreadErrorMode(previous | SEM_FAILCRITICALERRORS | SEM_NOOPENFILEERRORBOX, std::ptr::null_mut()) != 0;
             let handle = LoadLibraryW(wide.as_ptr());
             // Restoring may replace the last error; keep the loader's first.
             let error = handle.is_null().then(std::io::Error::last_os_error);
@@ -309,14 +271,9 @@ impl LibraryHandle {
             (handle, error)
         };
         if let Some(error) = error {
-            return Err(Vst3Error::Load {
-                path: binary.to_path_buf(),
-                message: error.to_string(),
-            });
+            return Err(Vst3Error::Load { path: binary.to_path_buf(), message: error.to_string() });
         }
-        Ok(Self {
-            handle: handle.cast(),
-        })
+        Ok(Self { handle: handle.cast() })
     }
 
     /// `InitDll()`, when exported. Optional: older modules lack it.
@@ -333,10 +290,7 @@ impl LibraryHandle {
     unsafe fn symbol<F: Copy>(&self, name: &[u8]) -> Option<F> {
         use windows_sys::Win32::System::LibraryLoader::GetProcAddress;
         debug_assert_eq!(name.last(), Some(&0));
-        debug_assert_eq!(
-            std::mem::size_of::<F>(),
-            std::mem::size_of::<*const c_void>()
-        );
+        debug_assert_eq!(std::mem::size_of::<F>(), std::mem::size_of::<*const c_void>());
         let address = GetProcAddress(self.handle.cast(), name.as_ptr())?;
         Some(std::mem::transmute_copy::<_, F>(&address))
     }
@@ -351,11 +305,8 @@ struct LibraryHandle {
 impl LibraryHandle {
     fn load(binary: &Path) -> Result<Self, Vst3Error> {
         use std::os::unix::ffi::OsStrExt;
-        let path =
-            std::ffi::CString::new(binary.as_os_str().as_bytes()).map_err(|_| Vst3Error::Load {
-                path: binary.to_path_buf(),
-                message: "the path contains a NUL byte".to_owned(),
-            })?;
+        let path = std::ffi::CString::new(binary.as_os_str().as_bytes())
+            .map_err(|_| Vst3Error::Load { path: binary.to_path_buf(), message: "the path contains a NUL byte".to_owned() })?;
         // SAFETY: `path` is NUL-terminated and outlives the call. Loading runs
         // the module's static initialisers -- third-party code, unavoidably.
         let handle = unsafe { libc::dlopen(path.as_ptr(), libc::RTLD_LAZY | libc::RTLD_LOCAL) };
@@ -369,10 +320,7 @@ impl LibraryHandle {
                     std::ffi::CStr::from_ptr(raw).to_string_lossy().into_owned()
                 }
             };
-            return Err(Vst3Error::Load {
-                path: binary.to_path_buf(),
-                message,
-            });
+            return Err(Vst3Error::Load { path: binary.to_path_buf(), message });
         }
         Ok(Self { handle })
     }
@@ -390,10 +338,7 @@ impl LibraryHandle {
     /// `F` must be the exact signature of the export and `name` NUL-terminated.
     unsafe fn symbol<F: Copy>(&self, name: &[u8]) -> Option<F> {
         debug_assert_eq!(name.last(), Some(&0));
-        debug_assert_eq!(
-            std::mem::size_of::<F>(),
-            std::mem::size_of::<*const c_void>()
-        );
+        debug_assert_eq!(std::mem::size_of::<F>(), std::mem::size_of::<*const c_void>());
         let address = libc::dlsym(self.handle, name.as_ptr().cast());
         if address.is_null() {
             None
@@ -444,12 +389,9 @@ pub(crate) fn enter_com_apartment() {
                 // SAFETY: no memory is passed. S_OK / S_FALSE mean "in an STA";
                 // RPC_E_CHANGED_MODE means the thread chose another model, which
                 // is not ours to change. Deliberately never balanced.
-                let result =
-                    unsafe { CoInitializeEx(std::ptr::null(), COINIT_APARTMENTTHREADED as u32) };
+                let result = unsafe { CoInitializeEx(std::ptr::null(), COINIT_APARTMENTTHREADED as u32) };
                 if result != 0 && result != 1 {
-                    log::debug!(
-                        "this thread is already in a different COM apartment ({result:#x})"
-                    );
+                    log::debug!("this thread is already in a different COM apartment ({result:#x})");
                 }
             }
         });
@@ -463,11 +405,7 @@ pub(crate) fn enter_com_apartment() {
 /// A NUL-terminated `char8` array, lossily: a vendor string with invalid UTF-8
 /// degrades to mojibake rather than hiding the plugin.
 pub(crate) fn c_string_to_string(raw: &[char8]) -> String {
-    let bytes: Vec<u8> = raw
-        .iter()
-        .take_while(|byte| **byte != 0)
-        .map(|byte| *byte as u8)
-        .collect();
+    let bytes: Vec<u8> = raw.iter().take_while(|byte| **byte != 0).map(|byte| *byte as u8).collect();
     String::from_utf8_lossy(&bytes).trim().to_owned()
 }
 
@@ -496,8 +434,7 @@ pub(crate) fn scratch_dir(tag: &str) -> PathBuf {
     use std::sync::atomic::{AtomicU32, Ordering};
     static COUNTER: AtomicU32 = AtomicU32::new(0);
     let unique = COUNTER.fetch_add(1, Ordering::Relaxed);
-    let path =
-        std::env::temp_dir().join(format!("wave-vst3-{tag}-{}-{unique}", std::process::id()));
+    let path = std::env::temp_dir().join(format!("wave-vst3-{tag}-{}-{unique}", std::process::id()));
     let _ = std::fs::remove_dir_all(&path);
     std::fs::create_dir_all(&path).expect("scratch dir");
     path
@@ -509,10 +446,7 @@ mod tests {
 
     #[test]
     fn a_class_id_round_trips_through_hex_and_through_a_tuid() {
-        let id = ClassId([
-            0x01, 0x23, 0x45, 0x67, 0x89, 0xab, 0xcd, 0xef, 0xfe, 0xdc, 0xba, 0x98, 0x76, 0x54,
-            0x32, 0x10,
-        ]);
+        let id = ClassId([0x01, 0x23, 0x45, 0x67, 0x89, 0xab, 0xcd, 0xef, 0xfe, 0xdc, 0xba, 0x98, 0x76, 0x54, 0x32, 0x10]);
         let hex = id.to_hex();
         assert_eq!(hex, "0123456789ABCDEFFEDCBA9876543210");
         assert_eq!(ClassId::from_hex(&hex), Some(id));
@@ -520,27 +454,15 @@ mod tests {
         assert_eq!(ClassId::from_tuid(&id.to_tuid()), id);
         assert_eq!(id.to_string(), hex);
         let zero = ClassId([0; 16]);
-        assert_eq!(
-            zero.to_hex(),
-            "0".repeat(32),
-            "a blank id still renders all 32 digits"
-        );
+        assert_eq!(zero.to_hex(), "0".repeat(32), "a blank id still renders all 32 digits");
     }
 
     #[test]
     fn a_class_id_that_is_not_32_hex_digits_is_rejected_rather_than_padded() {
-        for bad in [
-            "",
-            "0123",
-            "zzzz567890123456789012345678901f",
-            &"0".repeat(33),
-        ] {
+        for bad in ["", "0123", "zzzz567890123456789012345678901f", &"0".repeat(33)] {
             assert!(ClassId::from_hex(bad).is_none(), "{bad} should be rejected");
         }
-        assert_eq!(
-            ClassId::from_hex("01234567-89AB-CDEF-FEDC-BA9876543210"),
-            ClassId::from_hex("0123456789ABCDEFFEDCBA9876543210")
-        );
+        assert_eq!(ClassId::from_hex("01234567-89AB-CDEF-FEDC-BA9876543210"), ClassId::from_hex("0123456789ABCDEFFEDCBA9876543210"));
     }
 
     #[test]
@@ -606,14 +528,8 @@ mod tests {
         let bogus = dir.join("garbage.vst3");
         std::fs::write(&bogus, b"this is not a shared library").unwrap();
         let err = Module::open(&bogus).expect_err("a text file is not a VST3 module");
-        assert!(
-            matches!(err, Vst3Error::Load { .. } | Vst3Error::UnsupportedPlatform),
-            "got {err:?}"
-        );
-        assert!(
-            Module::shared(&bogus).is_err(),
-            "failures are not cached as successes"
-        );
+        assert!(matches!(err, Vst3Error::Load { .. } | Vst3Error::UnsupportedPlatform), "got {err:?}");
+        assert!(Module::shared(&bogus).is_err(), "failures are not cached as successes");
     }
 
     #[test]

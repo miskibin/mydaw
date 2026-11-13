@@ -72,11 +72,7 @@ fn design_fir() -> [[f32; TAPS]; OS - 1] {
         for (j, v) in row.iter_mut().enumerate() {
             let m = (OS * j + p) as f64;
             let x = (m - centre) / OS as f64;
-            let sinc = if x == 0.0 {
-                1.0
-            } else {
-                (std::f64::consts::PI * x).sin() / (std::f64::consts::PI * x)
-            };
+            let sinc = if x == 0.0 { 1.0 } else { (std::f64::consts::PI * x).sin() / (std::f64::consts::PI * x) };
             let r = (m - centre) / (centre + 1.0);
             let w = bessel_i0(beta * (1.0 - r * r).max(0.0).sqrt()) / bessel_i0(beta);
             *v = sinc * w;
@@ -99,12 +95,7 @@ struct MinHold {
 }
 impl MinHold {
     fn new(cap: usize) -> Self {
-        Self {
-            val: vec![1.0; cap],
-            at: vec![0; cap],
-            head: 0,
-            len: 0,
-        }
+        Self { val: vec![1.0; cap], at: vec![0; cap], head: 0, len: 0 }
     }
     #[inline]
     fn push(&mut self, n: u64, x: f32, window: usize) -> f32 {
@@ -178,12 +169,7 @@ impl Default for LimiterV2 {
         v[idx::AUTO] = 1.0;
         v[idx::LOOK] = 3.0;
         v[idx::LINK] = 100.0;
-        let path = || Path {
-            hold: MinHold::new(4),
-            rel: 1.0,
-            hist: vec![1.0; 4],
-            sum: 4.0,
-        };
+        let path = || Path { hold: MinHold::new(4), rel: 1.0, hist: vec![1.0; 4], sum: 4.0 };
         Self {
             sr: 0.0,
             fir: design_fir(),
@@ -295,11 +281,7 @@ impl Processor for LimiterV2 {
         let inv_w = 1.0 / w as f64;
         let mut g_min = 1f32;
         // program-dependent release: deeper sustained reduction → up to 4× slower
-        let sustain = if self.auto {
-            (-self.gr_avg / 6.0).clamp(0.0, 1.0)
-        } else {
-            0.0
-        };
+        let sustain = if self.auto { (-self.gr_avg / 6.0).clamp(0.0, 1.0) } else { 0.0 };
         let rel = self.rel_ms * (1.0 + 3.0 * sustain);
         self.k_rel = 1.0 - (-1.0 / (self.sr * rel / 1000.0)).exp();
         for i in 0..l.len() {
@@ -316,18 +298,10 @@ impl Processor for LimiterV2 {
             let mut gains = [1f32; 2];
             for (c, p) in self.paths.iter_mut().enumerate() {
                 let pe = self.link * mx + (1.0 - self.link) * pk[c];
-                let req = if pe > self.ceil_det {
-                    self.ceil_det / pe
-                } else {
-                    1.0
-                };
+                let req = if pe > self.ceil_det { self.ceil_det / pe } else { 1.0 };
                 let held = p.hold.push(n, req, hold_w);
                 let held = held as f64;
-                p.rel = if held < p.rel {
-                    held
-                } else {
-                    held + (p.rel - held) * (1.0 - self.k_rel as f64)
-                };
+                p.rel = if held < p.rel { held } else { held + (p.rel - held) * (1.0 - self.k_rel as f64) };
                 if held - p.rel < 1e-7 {
                     // settled: land exactly, so a processed silence ends where `park` puts it
                     p.rel = held;
@@ -451,11 +425,7 @@ mod tests {
             for (j, v) in row.iter_mut().enumerate() {
                 let t = (j as f64 - 32.0) + k as f64 / 16.0;
                 let r = t / 33.0;
-                let sinc = if t == 0.0 {
-                    1.0
-                } else {
-                    (std::f64::consts::PI * t).sin() / (std::f64::consts::PI * t)
-                };
+                let sinc = if t == 0.0 { 1.0 } else { (std::f64::consts::PI * t).sin() / (std::f64::consts::PI * t) };
                 *v = (sinc * i0(12.0 * (1.0 - r * r).max(0.0).sqrt()) / i0(12.0)) as f32;
             }
         }
@@ -473,17 +443,9 @@ mod tests {
     fn band_limit(x: &[f32], sr: f32) -> Vec<f32> {
         let mut f = [super::super::Biquad::default(); 4];
         for (k, b) in f.iter_mut().enumerate() {
-            b.set(
-                super::super::FilterType::Lowpass,
-                sr,
-                0.42 * sr,
-                [0.51, 0.6, 0.9, 2.56][k],
-                0.0,
-            );
+            b.set(super::super::FilterType::Lowpass, sr, 0.42 * sr, [0.51, 0.6, 0.9, 2.56][k], 0.0);
         }
-        x.iter()
-            .map(|&v| f.iter_mut().fold(v, |a, b| b.tick(a)))
-            .collect()
+        x.iter().map(|&v| f.iter_mut().fold(v, |a, b| b.tick(a))).collect()
     }
 
     #[test]
@@ -494,33 +456,20 @@ mod tests {
             let nz = band_limit(&noise(n, 3), sr);
             let sigs: Vec<Vec<f32>> = vec![
                 // fs/4 at 45°: the samples read 3 dB under the true peak
-                (0..n)
-                    .map(|i| (std::f32::consts::FRAC_PI_2 * i as f32 + 0.785).sin() * 0.9)
-                    .collect(),
+                (0..n).map(|i| (std::f32::consts::FRAC_PI_2 * i as f32 + 0.785).sin() * 0.9).collect(),
                 // bursts of full-band noise with hard onsets
-                (0..n)
-                    .map(|i| if (i / 2000) % 2 == 0 { nz[i] } else { 0.0 })
-                    .collect(),
+                (0..n).map(|i| if (i / 2000) % 2 == 0 { nz[i] } else { 0.0 }).collect(),
                 // square wave (Gibbs overshoot) and a single spike
-                (0..n)
-                    .map(|i| if (i / 37) % 2 == 0 { 0.9 } else { -0.9 })
-                    .collect(),
+                (0..n).map(|i| if (i / 37) % 2 == 0 { 0.9 } else { -0.9 }).collect(),
                 (0..n).map(|i| if i == n / 2 { 1.0 } else { 0.0 }).collect(),
             ];
             for (k, x) in sigs.iter().enumerate() {
                 let mut p = make(12.0, sr);
                 let r: Vec<f32> = x.iter().map(|v| -v * 0.5).collect();
                 let (l, r) = run(&mut p, x, &r);
-                assert!(
-                    l.iter().chain(&r).all(|v| v.is_finite() && v.abs() <= ceil),
-                    "sample over"
-                );
+                assert!(l.iter().chain(&r).all(|v| v.is_finite() && v.abs() <= ceil), "sample over");
                 let pk = tp(&l).max(tp(&r));
-                assert!(
-                    pk <= ceil * db_to_gain(0.02),
-                    "sr {sr} signal {k}: true peak {:.3} dBTP",
-                    20.0 * pk.log10()
-                );
+                assert!(pk <= ceil * db_to_gain(0.02), "sr {sr} signal {k}: true peak {:.3} dBTP", 20.0 * pk.log10());
                 assert_eq!(p.clamped, 0, "the safety clamp had to act on signal {k}");
                 assert!(p.gain_reduction_db() <= 0.0);
             }
@@ -536,14 +485,8 @@ mod tests {
         let (l, _) = run(&mut p, &x, &x);
         let lat = latency_samples(3.0, sr);
         assert_eq!(l.iter().position(|v| v.abs() > 0.0), Some(100 + lat));
-        assert!(
-            (l[100 + lat] - 0.5).abs() < 1e-6,
-            "below the ceiling the limiter is transparent"
-        );
-        assert_eq!(
-            crate::catalog::latency(&new_fx(1, FxKind::Limit, 120.0), sr),
-            lat
-        );
+        assert!((l[100 + lat] - 0.5).abs() < 1e-6, "below the ceiling the limiter is transparent");
+        assert_eq!(crate::catalog::latency(&new_fx(1, FxKind::Limit, 120.0), sr), lat);
     }
 
     #[test]
@@ -551,9 +494,7 @@ mod tests {
         // 100 Hz at 6 dB over the ceiling: the release must not ride the waveform
         let sr = 48000.0;
         let n = (sr * 2.0) as usize;
-        let x: Vec<f32> = (0..n)
-            .map(|i| (2.0 * std::f32::consts::PI * 100.0 * i as f32 / sr).sin() * 1.8)
-            .collect();
+        let x: Vec<f32> = (0..n).map(|i| (2.0 * std::f32::consts::PI * 100.0 * i as f32 / sr).sin() * 1.8).collect();
         let mut p = make(0.0, sr);
         let (l, _) = run(&mut p, &x, &x);
         // compare the last 0.5 s to a pure sine of the same amplitude

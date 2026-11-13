@@ -87,4 +87,3 @@ fn adding_and_bypassing_each_effect_is_fast() {
         assert!(bypass < BUDGET, "bypassing {kind:?} takes {bypass:?}");
     }
 }
-

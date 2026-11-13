@@ -397,7 +397,17 @@ impl<'a> Osc<'a> {
             return Self { t00: t0, t01: t1, t10: t0, t11: t1, w, fm: 0.0, morph: false, pw: 0.5 - 0.45 * shape, pulse: true };
         }
         let morph = shape > 1e-4;
-        Self { t00: b.table(wave, 0, j0), t01: b.table(wave, 0, j1), t10: b.table(wave, 1, j0), t11: b.table(wave, 1, j1), w, fm: shape, morph, pw: 0.5, pulse: false }
+        Self {
+            t00: b.table(wave, 0, j0),
+            t01: b.table(wave, 0, j1),
+            t10: b.table(wave, 1, j0),
+            t11: b.table(wave, 1, j1),
+            w,
+            fm: shape,
+            morph,
+            pw: 0.5,
+            pulse: false,
+        }
     }
     #[inline(always)]
     fn lv(&self, a: &[f32], b: &[f32], ph: f32) -> f32 {
@@ -430,7 +440,18 @@ impl<'a> Osc<'a> {
 impl Voice {
     /// Starts a note in this (free) slot. `from`: pitch to glide from (`None` = start on the note).
     #[allow(clippy::too_many_arguments)]
-    pub fn start(&mut self, p: &Patch, note: u32, key: u8, vel: f32, live: bool, age: u64, seed: u32, from: Option<f32>, glide_samples: f32) {
+    pub fn start(
+        &mut self,
+        p: &Patch,
+        note: u32,
+        key: u8,
+        vel: f32,
+        live: bool,
+        age: u64,
+        seed: u32,
+        from: Option<f32>,
+        glide_samples: f32,
+    ) {
         let mut rng = seed | 1;
         let row = (p[ix::UNI_VOICES] as usize).min(3);
         let n_uni = [1, 3, 5, 7][row];

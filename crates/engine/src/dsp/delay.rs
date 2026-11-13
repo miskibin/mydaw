@@ -111,16 +111,8 @@ pub fn migrate_params(p: &mut std::collections::BTreeMap<String, f64>) -> bool {
     for d in crate::catalog::params(crate::model::FxKind::Delay) {
         p.insert(d.id.to_owned(), d.def);
     }
-    for (k, v) in [
-        ("sync", 1.0),
-        ("time", time),
-        ("fb", fb),
-        ("mix", mix),
-        ("ftype", 0.0),
-        ("knee", 0.0),
-        ("dry", 100.0),
-        ("smooth", 51.0),
-    ] {
+    for (k, v) in [("sync", 1.0), ("time", time), ("fb", fb), ("mix", mix), ("ftype", 0.0), ("knee", 0.0), ("dry", 100.0), ("smooth", 51.0)]
+    {
         p.insert(k.into(), v);
     }
     true
@@ -152,10 +144,7 @@ pub fn tone_filter(tone: f32) -> Option<(FilterType, f32)> {
     if t.abs() < 0.01 {
         None
     } else if t < 0.0 {
-        Some((
-            FilterType::Lowpass,
-            20_000.0 * (200.0f32 / 20_000.0).powf(-t),
-        ))
+        Some((FilterType::Lowpass, 20_000.0 * (200.0f32 / 20_000.0).powf(-t)))
     } else {
         Some((FilterType::Highpass, 20.0 * (5_000.0f32 / 20.0).powf(t)))
     }
@@ -173,11 +162,7 @@ pub fn shape(x: f32, dist: usize, th: f32, knee: f32, sym: f32) -> f32 {
     let w = 0.02 + 0.88 * knee;
     let u = x.abs() / t;
     let lin = 1.0 - w;
-    let y = if u <= lin {
-        u
-    } else {
-        lin + w * ((u - lin) / w).tanh()
-    };
+    let y = if u <= lin { u } else { lin + w * ((u - lin) / w).tanh() };
     y.copysign(x) * t
 }
 
@@ -358,11 +343,7 @@ impl Delay {
     fn loop_gain(&self) -> Option<f32> {
         let fb = self.p[idx::FB] / 100.0;
         let ft = self.p[idx::FTYPE].round() as usize;
-        let peak = if ft == 0 {
-            1.0
-        } else {
-            (1.0 / res_k(self.p[idx::RES])).max(1.0)
-        };
+        let peak = if ft == 0 { 1.0 } else { (1.0 / res_k(self.p[idx::RES])).max(1.0) };
         let g = fb * peak;
         if g >= 0.999 {
             None
@@ -474,11 +455,7 @@ impl Processor for Delay {
         self.have_params = true;
         let s = (self.p[idx::SMOOTH] / 100.0).clamp(0.0, 1.0);
         // 0 % = jump, 50 % ≈ 55 ms, 100 % = 1.5 s time constant
-        self.slew_k = if s <= 0.0 || self.sr <= 0.0 {
-            1.0
-        } else {
-            self.glide_k(2.0 * 750f32.powf(s))
-        };
+        self.slew_k = if s <= 0.0 || self.sr <= 0.0 { 1.0 } else { self.glide_k(2.0 * 750f32.powf(s)) };
         self.model_want = self.model_param();
         if first && self.sr > 0.0 {
             self.snap_smoothers();
@@ -506,11 +483,7 @@ impl Processor for Delay {
         let srate = p[idx::SRATE];
         let lofi_sr = srate < SRATE_OFF && srate < sr;
         let bits = p[idx::BITS];
-        let q = if bits < BITS_OFF {
-            2f32.powf(bits.round().max(1.0) - 1.0)
-        } else {
-            0.0
-        };
+        let q = if bits < BITS_OFF { 2f32.powf(bits.round().max(1.0) - 1.0) } else { 0.0 };
         let dist = if p[idx::DIST] >= 0.5 { 1 } else { 0 };
         let knee = (p[idx::KNEE] / 100.0).clamp(0.0, 1.0);
         let sym = (p[idx::SYM] / 100.0).clamp(0.0, 1.0);
@@ -603,11 +576,7 @@ impl Processor for Delay {
                         self.xf = 0.0;
                     }
                 }
-                (
-                    self.d_cur,
-                    self.d_next,
-                    if self.fading { self.xf } else { 0.0 },
-                )
+                (self.d_cur, self.d_next, if self.fading { self.xf } else { 0.0 })
             } else {
                 self.fading = false;
                 self.d_cur += (target - self.d_cur) * self.slew_k;
@@ -678,24 +647,12 @@ impl Processor for Delay {
                         let pa = pl * da;
                         let pbv = pr * da;
                         (
-                            if pa >= 1.0 {
-                                read(&self.pre[0], self.w, pa.min(lim))
-                            } else {
-                                a
-                            },
-                            if pbv >= 1.0 {
-                                read(&self.pre[1], self.w, pbv.min(lim))
-                            } else {
-                                b
-                            },
+                            if pa >= 1.0 { read(&self.pre[0], self.w, pa.min(lim)) } else { a },
+                            if pbv >= 1.0 { read(&self.pre[1], self.w, pbv.min(lim)) } else { b },
                         )
                     }
                 };
-                let (nl, nr) = if model == PINGPONG {
-                    (ir + fb * zr, il + fb * zl)
-                } else {
-                    (il + fb * zl, ir + fb * zr)
-                };
+                let (nl, nr) = if model == PINGPONG { (ir + fb * zr, il + fb * zl) } else { (il + fb * zl, ir + fb * zr) };
                 let guard = |v: f32| {
                     if v.is_finite() {
                         flush(v.clamp(-SAFETY, SAFETY))
@@ -776,11 +733,7 @@ impl Processor for Delay {
         }
         let g = self.loop_gain()?;
         let d = (self.d_cur.max(self.d_next) * 2.0 + MOD_S * sr).min(MAX_DELAY_S * sr * 2.0);
-        let reps = if g < 1e-4 {
-            1.0
-        } else {
-            (16.2 / -g.ln()).ceil().max(1.0)
-        };
+        let reps = if g < 1e-4 { 1.0 } else { (16.2 / -g.ln()).ceil().max(1.0) };
         Some(((reps + 1.0) * d) as usize + settle)
     }
 
@@ -793,11 +746,7 @@ impl Processor for Delay {
         out[0] = self.m_d[0];
         out[1] = self.m_d[1];
         out[2] = db(self.m_loop);
-        out[3] = if self.m_red > 1e-6 {
-            -db(1.0 + self.m_red)
-        } else {
-            0.0
-        };
+        out[3] = if self.m_red > 1e-6 { -db(1.0 + self.m_red) } else { 0.0 };
         out[4] = self.m_lfo;
         out[5] = self.model as f32;
         out[6] = db(self.m_wet);
@@ -821,21 +770,11 @@ mod tests {
         pb
     }
 
-    fn run(
-        pb: ParamBlock,
-        mut input: impl FnMut(usize) -> (f32, f32),
-        n: usize,
-        bpm: f64,
-    ) -> (Vec<f32>, Vec<f32>, Delay) {
+    fn run(pb: ParamBlock, mut input: impl FnMut(usize) -> (f32, f32), n: usize, bpm: f64) -> (Vec<f32>, Vec<f32>, Delay) {
         let mut d = Delay::default();
         d.prepare(48000.0, 256);
         d.set_params(&pb);
-        let ctx = ProcessCtx {
-            sample_rate: 48000.0,
-            bpm,
-            beat: 0.0,
-            playing: true,
-        };
+        let ctx = ProcessCtx { sample_rate: 48000.0, bpm, beat: 0.0, playing: true };
         let (mut ol, mut or) = (vec![], vec![]);
         let mut i = 0;
         while i < n {
@@ -850,23 +789,12 @@ mod tests {
     }
 
     fn peak_at(x: &[f32]) -> usize {
-        x.iter()
-            .enumerate()
-            .max_by(|a, b| a.1.abs().total_cmp(&b.1.abs()))
-            .map(|(i, _)| i)
-            .unwrap()
+        x.iter().enumerate().max_by(|a, b| a.1.abs().total_cmp(&b.1.abs())).map(|(i, _)| i).unwrap()
     }
 
     /// plain echo: no filter, clean, no dry
     fn clean(extra: &[(usize, f32)]) -> ParamBlock {
-        let mut v = vec![
-            (idx::FTYPE, 0.0),
-            (idx::DRY, 0.0),
-            (idx::MIX, 100.0),
-            (idx::FB, 0.0),
-            (idx::LEVEL, 0.0),
-            (idx::DIST, 0.0),
-        ];
+        let mut v = vec![(idx::FTYPE, 0.0), (idx::DRY, 0.0), (idx::MIX, 100.0), (idx::FB, 0.0), (idx::LEVEL, 0.0), (idx::DIST, 0.0)];
         v.extend_from_slice(extra);
         block(&v)
     }
@@ -875,88 +803,37 @@ mod tests {
     fn synced_echo_lands_on_the_beat_and_follows_tempo() {
         // 1/2 beat at 120 bpm = 250 ms = 12 000 samples
         let pb = clean(&[(idx::SYNC, 0.0), (idx::BEATS, 0.5)]);
-        let (l, _, _) = run(
-            pb,
-            |i| if i == 0 { (1.0, 1.0) } else { (0.0, 0.0) },
-            24000,
-            120.0,
-        );
+        let (l, _, _) = run(pb, |i| if i == 0 { (1.0, 1.0) } else { (0.0, 0.0) }, 24000, 120.0);
         assert_eq!(peak_at(&l), 12000);
-        let (l, _, _) = run(
-            pb,
-            |i| if i == 0 { (1.0, 1.0) } else { (0.0, 0.0) },
-            24000,
-            100.0,
-        );
+        let (l, _, _) = run(pb, |i| if i == 0 { (1.0, 1.0) } else { (0.0, 0.0) }, 24000, 100.0);
         assert_eq!(peak_at(&l), 14400, "half a beat at 100 bpm = 300 ms");
     }
 
     #[test]
     fn free_time_in_ms() {
         let pb = clean(&[(idx::SYNC, 1.0), (idx::TIME, 100.0)]);
-        let (l, _, _) = run(
-            pb,
-            |i| if i == 0 { (1.0, 1.0) } else { (0.0, 0.0) },
-            9600,
-            120.0,
-        );
+        let (l, _, _) = run(pb, |i| if i == 0 { (1.0, 1.0) } else { (0.0, 0.0) }, 9600, 120.0);
         assert_eq!(peak_at(&l), 4800);
         assert!((l[4800] - 1.0).abs() < 0.02, "unity echo, got {}", l[4800]);
     }
 
     #[test]
     fn ping_pong_alternates_sides() {
-        let pb = clean(&[
-            (idx::SYNC, 1.0),
-            (idx::TIME, 50.0),
-            (idx::MODEL, PINGPONG as f32),
-            (idx::FB, 80.0),
-            (idx::PAN, 0.0),
-        ]);
+        let pb = clean(&[(idx::SYNC, 1.0), (idx::TIME, 50.0), (idx::MODEL, PINGPONG as f32), (idx::FB, 80.0), (idx::PAN, 0.0)]);
         // input hard left
-        let (l, r, _) = run(
-            pb,
-            |i| if i == 0 { (1.0, 0.0) } else { (0.0, 0.0) },
-            9600,
-            120.0,
-        );
+        let (l, r, _) = run(pb, |i| if i == 0 { (1.0, 0.0) } else { (0.0, 0.0) }, 9600, 120.0);
         let d = 2400;
-        assert!(
-            r[d].abs() > 0.5 && l[d].abs() < 1e-3,
-            "first echo on the right: l {} r {}",
-            l[d],
-            r[d]
-        );
-        assert!(
-            l[2 * d].abs() > 0.3 && r[2 * d].abs() < 1e-3,
-            "second echo on the left"
-        );
-        assert!(
-            r[3 * d].abs() > 0.2 && l[3 * d].abs() < 1e-3,
-            "third on the right"
-        );
+        assert!(r[d].abs() > 0.5 && l[d].abs() < 1e-3, "first echo on the right: l {} r {}", l[d], r[d]);
+        assert!(l[2 * d].abs() > 0.3 && r[2 * d].abs() < 1e-3, "second echo on the left");
+        assert!(r[3 * d].abs() > 0.2 && l[3 * d].abs() < 1e-3, "third on the right");
     }
 
     #[test]
     fn stereo_offset_delays_one_side() {
-        let pb = clean(&[
-            (idx::SYNC, 1.0),
-            (idx::TIME, 100.0),
-            (idx::MODEL, STEREO as f32),
-            (idx::OFFSET, 50.0),
-        ]);
-        let (l, r, _) = run(
-            pb,
-            |i| if i == 0 { (1.0, 1.0) } else { (0.0, 0.0) },
-            19200,
-            120.0,
-        );
+        let pb = clean(&[(idx::SYNC, 1.0), (idx::TIME, 100.0), (idx::MODEL, STEREO as f32), (idx::OFFSET, 50.0)]);
+        let (l, r, _) = run(pb, |i| if i == 0 { (1.0, 1.0) } else { (0.0, 0.0) }, 19200, 120.0);
         assert_eq!(peak_at(&l), 4800);
-        assert_eq!(
-            peak_at(&r),
-            7200,
-            "right gets a pre-delay of 50 % of the time"
-        );
+        assert_eq!(peak_at(&r), 7200, "right gets a pre-delay of 50 % of the time");
     }
 
     #[test]
@@ -980,9 +857,7 @@ mod tests {
             let (l, r, _) = run(
                 pb,
                 move |i| {
-                    seed = seed
-                        .wrapping_mul(1664525)
-                        .wrapping_add(1013904223 ^ i as u32);
+                    seed = seed.wrapping_mul(1664525).wrapping_add(1013904223 ^ i as u32);
                     let x = (seed >> 9) as f32 / (1u32 << 23) as f32 * 2.0 - 1.0;
                     (x, -x)
                 },
@@ -990,10 +865,7 @@ mod tests {
                 120.0,
             );
             let peak = l.iter().chain(r.iter()).fold(0f32, |m, x| m.max(x.abs()));
-            assert!(
-                l.iter().chain(r.iter()).all(|x| x.is_finite()),
-                "NaN in the output"
-            );
+            assert!(l.iter().chain(r.iter()).all(|x| x.is_finite()), "NaN in the output");
             assert!(peak <= SAFETY + 1e-3, "loop escaped: {peak}");
         }
     }
@@ -1011,20 +883,10 @@ mod tests {
             (idx::MIX, 100.0),
             (idx::DRY, 0.0),
         ]);
-        let (l, _, d) = run(
-            pb,
-            |i| if i < 48 { (0.8, 0.8) } else { (0.0, 0.0) },
-            48000 * 10,
-            120.0,
-        );
-        let late = l[l.len() - 48000..]
-            .iter()
-            .fold(0f32, |m, x| m.max(x.abs()));
+        let (l, _, d) = run(pb, |i| if i < 48 { (0.8, 0.8) } else { (0.0, 0.0) }, 48000 * 10, 120.0);
+        let late = l[l.len() - 48000..].iter().fold(0f32, |m, x| m.max(x.abs()));
         assert!(late > 0.2, "self-oscillation died: {late}");
-        assert!(
-            d.tail_samples().is_none(),
-            "a sustaining loop is never parked"
-        );
+        assert!(d.tail_samples().is_none(), "a sustaining loop is never parked");
     }
 
     #[test]
@@ -1039,30 +901,14 @@ mod tests {
         for (keep, expect_bend) in [(1.0, false), (0.0, true)] {
             let mut d = Delay::default();
             d.prepare(48000.0, 256);
-            d.set_params(&clean(&[
-                (idx::SYNC, 1.0),
-                (idx::TIME, 200.0),
-                (idx::KEEP, keep),
-                (idx::SMOOTH, 60.0),
-            ]));
-            let ctx = ProcessCtx {
-                sample_rate: 48000.0,
-                bpm: 120.0,
-                beat: 0.0,
-                playing: true,
-            };
+            d.set_params(&clean(&[(idx::SYNC, 1.0), (idx::TIME, 200.0), (idx::KEEP, keep), (idx::SMOOTH, 60.0)]));
+            let ctx = ProcessCtx { sample_rate: 48000.0, bpm: 120.0, beat: 0.0, playing: true };
             let mut out = vec![];
             for b in 0..(48000 * 2 / 256) {
                 if b == 48000 / 256 {
-                    d.set_params(&clean(&[
-                        (idx::SYNC, 1.0),
-                        (idx::TIME, 300.0),
-                        (idx::KEEP, keep),
-                        (idx::SMOOTH, 60.0),
-                    ]));
+                    d.set_params(&clean(&[(idx::SYNC, 1.0), (idx::TIME, 300.0), (idx::KEEP, keep), (idx::SMOOTH, 60.0)]));
                 }
-                let (mut l, mut r): (Vec<f32>, Vec<f32>) =
-                    (b * 256..b * 256 + 256).map(sine).unzip();
+                let (mut l, mut r): (Vec<f32>, Vec<f32>) = (b * 256..b * 256 + 256).map(sine).unzip();
                 d.process(&mut l, &mut r, &ctx);
                 out.extend_from_slice(&l);
             }
@@ -1080,15 +926,9 @@ mod tests {
                 }
             }
             if expect_bend {
-                assert!(
-                    worst > 2.0,
-                    "repitch mode should bend the pitch (worst {worst})"
-                );
+                assert!(worst > 2.0, "repitch mode should bend the pitch (worst {worst})");
             } else {
-                assert!(
-                    worst < 0.6,
-                    "keep pitch bent the pitch: period off by {worst} samples"
-                );
+                assert!(worst < 0.6, "keep pitch bent the pitch: period off by {worst} samples");
             }
         }
     }
@@ -1097,12 +937,7 @@ mod tests {
     fn model_off_is_an_instant_processor() {
         // no ring: a click comes out at once, through the chain
         let pb = clean(&[(idx::MODEL, OFF as f32)]);
-        let (l, _, _) = run(
-            pb,
-            |i| if i == 100 { (0.5, 0.5) } else { (0.0, 0.0) },
-            4800,
-            120.0,
-        );
+        let (l, _, _) = run(pb, |i| if i == 100 { (0.5, 0.5) } else { (0.0, 0.0) }, 4800, 120.0);
         assert_eq!(peak_at(&l), 100);
     }
 
@@ -1110,17 +945,10 @@ mod tests {
     fn lofi_reduces_bits() {
         let pb = clean(&[(idx::MODEL, OFF as f32), (idx::BITS, 3.0)]);
         let (l, _, _) = run(pb, |i| ((i as f32 * 0.001).sin() * 0.9, 0.0), 4800, 120.0);
-        let mut levels: Vec<i32> = l[1000..]
-            .iter()
-            .map(|x| (x * 1000.0).round() as i32)
-            .collect();
+        let mut levels: Vec<i32> = l[1000..].iter().map(|x| (x * 1000.0).round() as i32).collect();
         levels.sort();
         levels.dedup();
-        assert!(
-            levels.len() <= 12,
-            "3 bits leave few levels, got {}",
-            levels.len()
-        );
+        assert!(levels.len() <= 12, "3 bits leave few levels, got {}", levels.len());
     }
 
     #[test]
@@ -1132,10 +960,7 @@ mod tests {
                 assert!(y.abs() <= 0.5 + 1e-6);
             }
         }
-        assert!(
-            (shape(0.2, 1, 1.0, 0.5, 0.0) - 0.2).abs() < 1e-6,
-            "below the knee the curve is the identity"
-        );
+        assert!((shape(0.2, 1, 1.0, 0.5, 0.0) - 0.2).abs() < 1e-6, "below the knee the curve is the identity");
         assert_eq!(shape(2.0, 0, 0.5, 0.0, 0.0), 0.5);
     }
 
@@ -1144,20 +969,14 @@ mod tests {
         let pb = clean(&[(idx::SYNC, 1.0), (idx::TIME, 250.0), (idx::FB, 50.0)]);
         let (_, _, d) = run(pb, |_| (0.0, 0.0), 2048, 120.0);
         let t = d.tail_samples().unwrap();
-        assert!(
-            t > 12000 * 20,
-            "50 % feedback needs ~24 repeats to fall 140 dB, got {t}"
-        );
+        assert!(t > 12000 * 20, "50 % feedback needs ~24 repeats to fall 140 dB, got {t}");
     }
 
     #[test]
     fn first_delay_migrates_to_the_same_echo() {
         // an old project: 300 ms, 50 % feedback, 40 % mix
         let mut p: std::collections::BTreeMap<String, f64> =
-            [("time", 300.0), ("fb", 50.0), ("mix", 40.0)]
-                .iter()
-                .map(|(k, v)| (k.to_string(), *v))
-                .collect();
+            [("time", 300.0), ("fb", 50.0), ("mix", 40.0)].iter().map(|(k, v)| (k.to_string(), *v)).collect();
         assert!(migrate_params(&mut p));
         assert!(!migrate_params(&mut p), "idempotent");
         let fx = crate::model::Fx {
@@ -1171,20 +990,11 @@ mod tests {
             plugin: None,
             maps: None,
         };
-        let (l, _, _) = run(
-            crate::catalog::param_block(&fx),
-            |i| if i == 0 { (1.0, 1.0) } else { (0.0, 0.0) },
-            48000,
-            140.0,
-        );
+        let (l, _, _) = run(crate::catalog::param_block(&fx), |i| if i == 0 { (1.0, 1.0) } else { (0.0, 0.0) }, 48000, 140.0);
         let d = 300 * 48;
         assert!((l[0] - 1.0).abs() < 1e-3, "dry passes at unity");
         assert!((l[d] - 0.4).abs() < 0.01, "first echo = mix: {}", l[d]);
-        assert!(
-            (l[2 * d] - 0.2).abs() < 0.01,
-            "second echo = mix × fb: {}",
-            l[2 * d]
-        );
+        assert!((l[2 * d] - 0.2).abs() < 0.01, "second echo = mix × fb: {}", l[2 * d]);
         // automation of the old time range lands on the same ms
         let v_old = (300f32 / 10.0).ln() / 150f32.ln();
         let v_new = migrate_auto_value("time", v_old);
@@ -1200,15 +1010,9 @@ mod tests {
         crate::catalog::load_preset(&mut fx, i, 120.0);
         fx.params.insert("dry".into(), 0.0);
         fx.params.insert("ftype".into(), 0.0);
-        let (l, r, _) = run(
-            crate::catalog::param_block(&fx),
-            |i| if i == 0 { (1.0, 1.0) } else { (0.0, 0.0) },
-            60000,
-            120.0,
-        );
+        let (l, r, _) = run(crate::catalog::param_block(&fx), |i| if i == 0 { (1.0, 1.0) } else { (0.0, 0.0) }, 60000, 120.0);
         let d = 12000; // 1/2 beat at 120 bpm
-        let side =
-            |x: &[f32], at: usize| x[at - 4..at + 4].iter().fold(0f32, |m, v| m.max(v.abs()));
+        let side = |x: &[f32], at: usize| x[at - 4..at + 4].iter().fold(0f32, |m, v| m.max(v.abs()));
         for k in 1..=4 {
             let (a, b) = (side(&l, k * d), side(&r, k * d));
             if k % 2 == 1 {

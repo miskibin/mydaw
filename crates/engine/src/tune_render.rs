@@ -78,7 +78,9 @@ fn hard_frames(a: &PitchAnalysis, tune: &ClipTune) -> Vec<bool> {
 /// is heard and pulled into tune; without speeds the correction is immediate (bit-identical
 /// to projects made before speeds existed).
 pub fn edited_curve(a: &PitchAnalysis, tune: &ClipTune, target: Option<&PitchTarget>) -> Vec<f32> {
-    let base: Vec<f32> = (0..a.curve.len()).map(|f| if a.curve[f].is_nan() { f32::NAN } else { target.and_then(|t| t.at(f)).unwrap_or(a.curve[f]) }).collect();
+    let base: Vec<f32> = (0..a.curve.len())
+        .map(|f| if a.curve[f].is_nan() { f32::NAN } else { target.and_then(|t| t.at(f)).unwrap_or(a.curve[f]) })
+        .collect();
     let centers: Vec<Option<f32>> = tune.notes.iter().map(|nt| note_center(&base, a.rate, nt.start, nt.end)).collect();
     let mut ni = 0usize;
     let mut want: Vec<f32> = (0..base.len())
@@ -200,7 +202,9 @@ mod tests {
     use crate::pitch::{analyze, Detector};
 
     fn voice(hz: f32, sr: f32, n: usize) -> Vec<f32> {
-        (0..n).map(|i| (1..8).map(|k| (std::f32::consts::TAU * hz * k as f32 * i as f32 / sr).sin() / k as f32).sum::<f32>() * 0.3).collect()
+        (0..n)
+            .map(|i| (1..8).map(|k| (std::f32::consts::TAU * hz * k as f32 * i as f32 / sr).sin() / k as f32).sum::<f32>() * 0.3)
+            .collect()
     }
 
     #[test]
@@ -213,7 +217,15 @@ mod tests {
         let audio = Audio::from_stereo(st, 48000, 1);
         let a = analyze(&mono, sr);
         assert_eq!(a.notes.len(), 2);
-        let mut tune = ClipTune { notes: a.notes.iter().map(|n| NoteEdit { start: n.start, end: n.end, shift: 0.0, drift: 0.0, formant: 0.0, gain: 0.0, speed: None }).collect(), pencil: vec![], reference: None };
+        let mut tune = ClipTune {
+            notes: a
+                .notes
+                .iter()
+                .map(|n| NoteEdit { start: n.start, end: n.end, shift: 0.0, drift: 0.0, formant: 0.0, gain: 0.0, speed: None })
+                .collect(),
+            pencil: vec![],
+            reference: None,
+        };
         tune.notes[0].shift = 200.0; // first note up a whole tone
         let out = render(&audio, &a, &tune, None);
         let pitch = |from: usize, to: usize| {
@@ -254,7 +266,11 @@ mod tests {
         let sr = 48000.0;
         let mono = voice(220.0, sr, 48000);
         let a = analyze(&mono, sr);
-        let note = |speed| ClipTune { notes: vec![NoteEdit { start: 0.0, end: 1.0, shift: 100.0, drift: 0.0, formant: 0.0, gain: 0.0, speed }], pencil: vec![], reference: None };
+        let note = |speed| ClipTune {
+            notes: vec![NoteEdit { start: 0.0, end: 1.0, shift: 100.0, drift: 0.0, formant: 0.0, gain: 0.0, speed }],
+            pencil: vec![],
+            reference: None,
+        };
         let first = a.curve.iter().position(|x| !x.is_nan()).unwrap();
         let at = |c: &[f32], ms: f32| c[first + (ms / 1000.0 * a.rate) as usize] - a.curve[first + (ms / 1000.0 * a.rate) as usize];
         // no speed: the whole correction at once (as before speeds existed)
@@ -275,8 +291,13 @@ mod tests {
         let a = analyze(&mono, sr);
         let edit = |start, end, shift, speed| NoteEdit { start, end, shift, drift: 0.0, formant: 0.0, gain: 0.0, speed };
         let largest_step = |speed| {
-            let tune = ClipTune { notes: vec![edit(0.0, 0.5, 150.0, speed), edit(0.5, 1.0, -150.0, speed)], pencil: vec![], reference: None };
-            pitch_change(&a, &tune, None).windows(2).filter(|w| !w[0].is_nan() && !w[1].is_nan()).map(|w| (w[1] - w[0]).abs()).fold(0.0, f32::max)
+            let tune =
+                ClipTune { notes: vec![edit(0.0, 0.5, 150.0, speed), edit(0.5, 1.0, -150.0, speed)], pencil: vec![], reference: None };
+            pitch_change(&a, &tune, None)
+                .windows(2)
+                .filter(|w| !w[0].is_nan() && !w[1].is_nan())
+                .map(|w| (w[1] - w[0]).abs())
+                .fold(0.0, f32::max)
         };
         // 3 semitones: spread over 7 frames normally, over 3 with hard tune
         let (soft, hard) = (largest_step(None), largest_step(Some(0.0)));

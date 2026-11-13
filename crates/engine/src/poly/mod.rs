@@ -30,8 +30,8 @@ use serde::Serialize;
 use crate::model::Id;
 use crate::rt::{ChanRt, InsertRt};
 use crate::synth::{pan_gains, Dest};
-pub use params::{Patch, COUNT, PARAMS};
 use params::{ix, SYNC_BEATS};
+pub use params::{Patch, COUNT, PARAMS};
 use voice::{EnvCoef, Voice};
 
 /// Voices that can sound at once.
@@ -201,7 +201,10 @@ impl SynthInst {
             last_st: None,
             chord_at: None,
             chord_from: None,
-            lfo: [Lfo { rng: 0x2545_F491 ^ chan as u32 | 1, ..Default::default() }, Lfo { rng: 0x9E37_79B9 ^ chan as u32 | 1, ..Default::default() }],
+            lfo: [
+                Lfo { rng: 0x2545_F491 ^ chan as u32 | 1, ..Default::default() },
+                Lfo { rng: 0x9E37_79B9 ^ chan as u32 | 1, ..Default::default() },
+            ],
             lfo_buf: [[0.0; CHUNK]; 2],
             wheel: 0.0,
             wheel_t: 0.0,
@@ -407,7 +410,15 @@ impl SynthInst {
                         self.voices[f].fade_step = 1.0 / (STEAL_S * self.sr);
                     }
                 }
-                let from = if glide >= 1.0 && mode == 1 { if sounding { Some(st) } else { self.last_st } } else { None };
+                let from = if glide >= 1.0 && mode == 1 {
+                    if sounding {
+                        Some(st)
+                    } else {
+                        self.last_st
+                    }
+                } else {
+                    None
+                };
                 self.voices[0].start(&p, id, key, vel, live, self.age, seed, from, glide);
                 if sounding && amp > 0.002 {
                     self.voices[0].take_over(amp, menv, STEAL_S * self.sr);
@@ -450,7 +461,11 @@ impl SynthInst {
         if let Some(i) = self.voices[..POLY].iter().position(|v| !v.on) {
             return i;
         }
-        let pick = (0..POLY).filter(|&i| self.voices[i].released()).min_by_key(|&i| self.voices[i].age).or_else(|| (0..POLY).min_by_key(|&i| self.voices[i].age)).unwrap_or(0);
+        let pick = (0..POLY)
+            .filter(|&i| self.voices[i].released())
+            .min_by_key(|&i| self.voices[i].age)
+            .or_else(|| (0..POLY).min_by_key(|&i| self.voices[i].age))
+            .unwrap_or(0);
         let f = self.fade_slot();
         self.voices[f] = self.voices[pick].clone();
         let step = 1.0 / (STEAL_S * self.sr);
@@ -463,7 +478,9 @@ impl SynthInst {
     }
 
     fn fade_slot(&self) -> usize {
-        (POLY..POLY + FADES).find(|&i| !self.voices[i].on).unwrap_or_else(|| (POLY..POLY + FADES).min_by(|&a, &b| self.voices[a].fade.total_cmp(&self.voices[b].fade)).unwrap_or(POLY))
+        (POLY..POLY + FADES)
+            .find(|&i| !self.voices[i].on)
+            .unwrap_or_else(|| (POLY..POLY + FADES).min_by(|&a, &b| self.voices[a].fade.total_cmp(&self.voices[b].fade)).unwrap_or(POLY))
     }
 
     fn apply_due(&mut self) {
@@ -726,7 +743,11 @@ pub fn catalog() -> SynthCatalog {
         categories: presets::CATEGORIES,
         presets: presets::all()
             .iter()
-            .map(|p| SynthPreset { name: p.name, category: p.category, params: PARAMS.iter().zip(p.patch.iter()).map(|(d, v)| (d.id, (*v as f64 * 1000.0).round() / 1000.0)).collect() })
+            .map(|p| SynthPreset {
+                name: p.name,
+                category: p.category,
+                params: PARAMS.iter().zip(p.patch.iter()).map(|(d, v)| (d.id, (*v as f64 * 1000.0).round() / 1000.0)).collect(),
+            })
             .collect(),
     }
 }
@@ -734,5 +755,8 @@ pub fn catalog() -> SynthCatalog {
 /// A synth state holding preset `name`'s full parameter set (`None` if there is no such preset).
 pub fn preset_state(name: &str) -> Option<crate::model::SynthState> {
     let p = presets::all().into_iter().find(|p| p.name == name)?;
-    Some(crate::model::SynthState { preset: Some(p.name.to_owned()), params: PARAMS.iter().zip(p.patch.iter()).map(|(d, v)| (d.id.to_owned(), (*v as f64 * 1000.0).round() / 1000.0)).collect() })
+    Some(crate::model::SynthState {
+        preset: Some(p.name.to_owned()),
+        params: PARAMS.iter().zip(p.patch.iter()).map(|(d, v)| (d.id.to_owned(), (*v as f64 * 1000.0).round() / 1000.0)).collect(),
+    })
 }

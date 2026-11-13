@@ -88,7 +88,15 @@ pub enum TransformVerb {
         scale_aware: bool,
     },
     /// Replace a channel's notes with `k` onsets over `n` slots, rotated.
-    EuclidFill { ch: Id, k: u32, n: u32, #[serde(default)] rotate: i32, #[serde(default = "drum_vel")] vel: f32 },
+    EuclidFill {
+        ch: Id,
+        k: u32,
+        n: u32,
+        #[serde(default)]
+        rotate: i32,
+        #[serde(default = "drum_vel")]
+        vel: f32,
+    },
     /// Spread same-start notes by pitch (chords become strums).
     Strum {
         #[serde(default = "eighth")]
@@ -97,9 +105,21 @@ pub enum TransformVerb {
         ramp: f32,
     },
     /// Generate one Euclidean drum voice per entry across `bars` bars.
-    EuclidDrums { voices: Vec<DrumVoice>, #[serde(default = "two_bars")] bars: u32 },
+    EuclidDrums {
+        voices: Vec<DrumVoice>,
+        #[serde(default = "two_bars")]
+        bars: u32,
+    },
     /// Generate a scale-constrained melody on one channel.
-    Melody { ch: Id, #[serde(default = "two_bars")] bars: u32, #[serde(default = "half")] density: f32, #[serde(default = "one_u")] repeat: u32 },
+    Melody {
+        ch: Id,
+        #[serde(default = "two_bars")]
+        bars: u32,
+        #[serde(default = "half")]
+        density: f32,
+        #[serde(default = "one_u")]
+        repeat: u32,
+    },
 }
 
 fn half() -> f32 {
@@ -137,13 +157,7 @@ pub fn humanize(notes: &mut [Note], timing: f32, velocity: f32, rng: &mut SplitM
 /// Snap note starts to `grid` steps (1 = 16th, 2 = 8th, 4 = quarter) by `amount` 0..1.
 /// With a key set (`Some((key, scale_id))`), pitches are snapped into the scale —
 /// `Note::p` becomes explicit so the result no longer depends on the channel's root.
-pub fn quantize(
-    notes: &mut [Note],
-    grid: f32,
-    amount: f32,
-    key_scale: Option<(u8, u32)>,
-    roots: &[(Id, u8)],
-) {
+pub fn quantize(notes: &mut [Note], grid: f32, amount: f32, key_scale: Option<(u8, u32)>, roots: &[(Id, u8)]) {
     let grid = if grid < 0.25 { 0.25 } else { grid };
     let amount = amount.clamp(0.0, 1.0);
     let ks = key_scale.map(|(k, s)| (k as u32, pitch::scale_mask(s)));
@@ -259,7 +273,6 @@ pub fn melody(notes: &mut Vec<Note>, ch: Id, key_scale: (u8, u32), bars: u32, de
     }
 }
 
-
 // ---------------------------------------------------------------------------
 // tests
 // ---------------------------------------------------------------------------
@@ -350,7 +363,11 @@ mod tests {
 
     #[test]
     fn strum_spreads_a_chord_by_pitch() {
-        let notes = &mut vec![note(1, 4.0, 0.8), Note { ch: 1, step: 4.0, len: 1.0, p: Some(64), v: 0.8 }, Note { ch: 1, step: 4.0, len: 1.0, p: Some(57), v: 0.8 }];
+        let notes = &mut vec![
+            note(1, 4.0, 0.8),
+            Note { ch: 1, step: 4.0, len: 1.0, p: Some(64), v: 0.8 },
+            Note { ch: 1, step: 4.0, len: 1.0, p: Some(57), v: 0.8 },
+        ];
         strum(notes, 0.25, 0.05);
         // array positions stay, offsets follow pitch rank: lowest starts first
         let by = |p: u8| notes.iter().find(|n| n.p == Some(p)).unwrap().step;
@@ -394,7 +411,11 @@ mod tests {
 
     #[test]
     fn strum_groups_nonadjacent_same_step_notes() {
-        let notes = &mut vec![note(1, 4.0, 0.8), Note { ch: 1, step: 8.0, len: 1.0, p: Some(64), v: 0.8 }, Note { ch: 1, step: 4.0, len: 1.0, p: Some(57), v: 0.8 }];
+        let notes = &mut vec![
+            note(1, 4.0, 0.8),
+            Note { ch: 1, step: 8.0, len: 1.0, p: Some(64), v: 0.8 },
+            Note { ch: 1, step: 4.0, len: 1.0, p: Some(57), v: 0.8 },
+        ];
         strum(notes, 0.25, 0.0);
         // the two step-4 notes form one chord (lowest first) even though they are
         // separated by the step-8 note; the lone step-8 note does not move
@@ -415,7 +436,11 @@ mod tests {
         let q = &mut vec![note(1, 4.3, 0.8)];
         quantize(q, 1.0, 1.0, None, &[]);
         assert_eq!(q[0].step, 4.0);
-        let s = &mut vec![note(1, 4.0, 0.8), Note { ch: 1, step: 4.0, len: 1.0, p: Some(64), v: 0.8 }, Note { ch: 1, step: 4.0, len: 1.0, p: Some(57), v: 0.8 }];
+        let s = &mut vec![
+            note(1, 4.0, 0.8),
+            Note { ch: 1, step: 4.0, len: 1.0, p: Some(64), v: 0.8 },
+            Note { ch: 1, step: 4.0, len: 1.0, p: Some(57), v: 0.8 },
+        ];
         strum(s, 0.25, 0.05);
         // array positions stay; the lowest pitch starts first, each next +width
         let by = |p: u8| s.iter().find(|n| n.p == Some(p)).unwrap();

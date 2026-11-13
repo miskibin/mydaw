@@ -20,16 +20,11 @@ fn read_mono(p: &Path) -> Vec<f32> {
     let spec = r.spec();
     let ch = spec.channels as usize;
     let v: Vec<f32> = match spec.sample_format {
-        hound::SampleFormat::Int => r
-            .samples::<i32>()
-            .map(|s| s.unwrap() as f32 / (1u32 << (spec.bits_per_sample - 1)) as f32)
-            .collect(),
+        hound::SampleFormat::Int => r.samples::<i32>().map(|s| s.unwrap() as f32 / (1u32 << (spec.bits_per_sample - 1)) as f32).collect(),
         hound::SampleFormat::Float => r.samples::<f32>().map(|s| s.unwrap()).collect(),
     };
     assert_eq!(spec.sample_rate, SR as u32, "demo expects 44.1 kHz");
-    v.chunks(ch)
-        .map(|c| c.iter().sum::<f32>() / ch as f32)
-        .collect()
+    v.chunks(ch).map(|c| c.iter().sum::<f32>() / ch as f32).collect()
 }
 
 fn rms(x: &[f32]) -> f32 {
@@ -37,19 +32,11 @@ fn rms(x: &[f32]) -> f32 {
 }
 
 fn write(path: &Path, segs: &[Vec<f32>]) {
-    let spec = hound::WavSpec {
-        channels: 1,
-        sample_rate: SR as u32,
-        bits_per_sample: 16,
-        sample_format: hound::SampleFormat::Int,
-    };
+    let spec = hound::WavSpec { channels: 1, sample_rate: SR as u32, bits_per_sample: 16, sample_format: hound::SampleFormat::Int };
     let mut w = hound::WavWriter::create(path, spec).unwrap();
     let r0 = rms(&segs[0]);
     // one common scale so the loudest segment peaks at -1 dBFS (no clipping, same RMS)
-    let peak = segs
-        .iter()
-        .map(|s| s.iter().fold(0f32, |m, v| m.max(v.abs())) * r0 / rms(s).max(1e-9))
-        .fold(0f32, f32::max);
+    let peak = segs.iter().map(|s| s.iter().fold(0f32, |m, v| m.max(v.abs())) * r0 / rms(s).max(1e-9)).fold(0f32, f32::max);
     let k = (0.891 / peak.max(1e-9)).min(1.0);
     for (i, s) in segs.iter().enumerate() {
         if i > 0 {
@@ -59,8 +46,7 @@ fn write(path: &Path, segs: &[Vec<f32>]) {
         }
         let g = k * r0 / rms(s).max(1e-9);
         for &v in s {
-            w.write_sample(((v * g).clamp(-1.0, 1.0) * 32767.0) as i16)
-                .unwrap();
+            w.write_sample(((v * g).clamp(-1.0, 1.0) * 32767.0) as i16).unwrap();
         }
     }
     w.finalize().unwrap();
@@ -90,10 +76,7 @@ fn run_fx(fx: &wave_engine::Fx, x: &[f32]) -> Vec<f32> {
     let mut l = x.to_vec();
     l.extend(std::iter::repeat_n(0.0, lat));
     let mut r = l.clone();
-    let ctx = ProcessCtx {
-        sample_rate: SR,
-        ..Default::default()
-    };
+    let ctx = ProcessCtx { sample_rate: SR, ..Default::default() };
     for (a, b) in l.chunks_mut(256).zip(r.chunks_mut(256)) {
         p.process(a, b, &ctx);
     }
@@ -191,41 +174,20 @@ fn main() {
 
     let mut segs = vec![vocal.clone()];
     for s in 0..STYLES.len() {
-        segs.push(sat(
-            &vocal,
-            Settings {
-                style: s,
-                drive: 0.55,
-                lowcut: 60.0,
-                ..Default::default()
-            },
-        ));
+        segs.push(sat(&vocal, Settings { style: s, drive: 0.55, lowcut: 60.0, ..Default::default() }));
     }
     write(&out.join("01_vocal_styles.wav"), &segs);
 
     let d = drums();
     let mut segs = vec![d.clone()];
     for s in 0..STYLES.len() {
-        segs.push(sat(
-            &d,
-            Settings {
-                style: s,
-                drive: 0.65,
-                ..Default::default()
-            },
-        ));
+        segs.push(sat(&d, Settings { style: s, drive: 0.65, ..Default::default() }));
     }
     write(&out.join("02_drums_styles.wav"), &segs);
 
     let names: Vec<&str> = presets(FxKind::Sat).iter().map(|p| p.name).collect();
     let mut segs = vec![vocal.clone()];
-    for want in [
-        "Wokal — ciepło",
-        "Wokal — lampa",
-        "Rap — ziarno",
-        "Lo-fi głośnik",
-        "Równoległe zgniecenie",
-    ] {
+    for want in ["Wokal — ciepło", "Wokal — lampa", "Rap — ziarno", "Lo-fi głośnik", "Równoległe zgniecenie"] {
         let i = names.iter().position(|n| *n == want).unwrap();
         let mut fx = new_fx(1, FxKind::Sat, 92.0);
         load_preset(&mut fx, i, 92.0);
@@ -246,14 +208,8 @@ fn main() {
     let clean = run_fx(&voice, &vocal);
     voice.params.insert("drive".into(), 12.0);
     let new = run_fx(&voice, &vocal);
-    write(
-        &out.join("05_voice_drive_old_vs_new.wav"),
-        &[clean.clone(), old_voice_drive(&clean, 12.0), new],
-    );
+    write(&out.join("05_voice_drive_old_vs_new.wav"), &[clean.clone(), old_voice_drive(&clean, 12.0), new]);
     voice.params.insert("drive".into(), 24.0);
     let new24 = run_fx(&voice, &vocal);
-    write(
-        &out.join("06_voice_drive24_old_vs_new.wav"),
-        &[clean.clone(), old_voice_drive(&clean, 24.0), new24],
-    );
+    write(&out.join("06_voice_drive24_old_vs_new.wav"), &[clean.clone(), old_voice_drive(&clean, 24.0), new24]);
 }

@@ -251,8 +251,22 @@ pub fn type_name(kind: FxKind) -> &'static str {
     }
 }
 
-pub const BUILTIN: [FxKind; 14] = [FxKind::Denoise, FxKind::Tune, FxKind::Voice, FxKind::Eq, FxKind::Rider, FxKind::Deess, FxKind::Comp, FxKind::Fet, FxKind::Sat, FxKind::Delay, FxKind::Half,
-    FxKind::Warp, FxKind::Reverb, FxKind::Limit];
+pub const BUILTIN: [FxKind; 14] = [
+    FxKind::Denoise,
+    FxKind::Tune,
+    FxKind::Voice,
+    FxKind::Eq,
+    FxKind::Rider,
+    FxKind::Deess,
+    FxKind::Comp,
+    FxKind::Fet,
+    FxKind::Sat,
+    FxKind::Delay,
+    FxKind::Half,
+    FxKind::Warp,
+    FxKind::Reverb,
+    FxKind::Limit,
+];
 
 pub fn default_bands() -> Vec<EqBand> {
     use BandType::*;
@@ -274,7 +288,8 @@ pub fn default_params(kind: FxKind) -> BTreeMap<String, f64> {
 
 /// A fresh built-in effect loaded with its first preset.
 pub fn new_fx(id: Id, kind: FxKind, bpm: f64) -> Fx {
-    let mut fx = Fx { id, kind, bypass: false, mix: 1.0, preset: None, params: default_params(kind), bands: None, plugin: None, maps: None };
+    let mut fx =
+        Fx { id, kind, bypass: false, mix: 1.0, preset: None, params: default_params(kind), bands: None, plugin: None, maps: None };
     if kind == FxKind::Eq {
         fx.bands = Some(default_bands());
     }
@@ -355,14 +370,50 @@ pub fn presets(kind: FxKind) -> Vec<Preset> {
     match kind {
         FxKind::Eq => vec![
             eqp("Flat", 0.0, &[]),
-            eqp("Wokal — obecność", 0.0, &[(0, t, Some(100.0), n, n), (2, f, Some(300.0), Some(-2.5), Some(1.2)), (4, f, Some(3500.0), Some(3.0), Some(0.9)), (5, f, Some(10000.0), Some(2.5), n)]),
-            eqp("Kick — punch", 0.0, &[(0, t, Some(30.0), n, n), (1, f, Some(60.0), Some(3.0), n), (2, f, Some(350.0), Some(-4.0), Some(1.4)), (4, f, Some(4000.0), Some(3.0), Some(1.2))]),
-            eqp("Bas — czysty dół", 0.0, &[(0, t, Some(35.0), n, n), (1, f, Some(80.0), Some(2.0), n), (2, f, Some(250.0), Some(-3.0), n), (6, t, Some(8000.0), n, n)]),
+            eqp(
+                "Wokal — obecność",
+                0.0,
+                &[
+                    (0, t, Some(100.0), n, n),
+                    (2, f, Some(300.0), Some(-2.5), Some(1.2)),
+                    (4, f, Some(3500.0), Some(3.0), Some(0.9)),
+                    (5, f, Some(10000.0), Some(2.5), n),
+                ],
+            ),
+            eqp(
+                "Kick — punch",
+                0.0,
+                &[
+                    (0, t, Some(30.0), n, n),
+                    (1, f, Some(60.0), Some(3.0), n),
+                    (2, f, Some(350.0), Some(-4.0), Some(1.4)),
+                    (4, f, Some(4000.0), Some(3.0), Some(1.2)),
+                ],
+            ),
+            eqp(
+                "Bas — czysty dół",
+                0.0,
+                &[
+                    (0, t, Some(35.0), n, n),
+                    (1, f, Some(80.0), Some(2.0), n),
+                    (2, f, Some(250.0), Some(-3.0), n),
+                    (6, t, Some(8000.0), n, n),
+                ],
+            ),
             eqo("Mud cut", 0.0, 12, &[(0, t, Some(60.0), n, n), (2, f, Some(300.0), Some(-4.0), Some(1.5))]),
             eqp("Air / połysk", 0.0, &[(4, f, Some(5000.0), Some(1.0), n), (5, f, Some(12000.0), Some(4.0), n)]),
             eqo("Pasmo — wytnij dół i górę", 0.0, 24, &[(0, t, Some(120.0), n, n), (6, t, Some(9000.0), n, n)]),
-            eqo("Telefon / lo-fi", 2.0, 24, &[(0, t, Some(400.0), n, n), (3, f, Some(1500.0), Some(4.0), Some(0.8)), (6, t, Some(3200.0), n, n)]),
-            eqp("Master — smile", 0.0, &[(1, f, Some(80.0), Some(1.5), n), (3, f, Some(1000.0), Some(-0.5), Some(0.6)), (5, f, Some(10000.0), Some(1.5), n)]),
+            eqo(
+                "Telefon / lo-fi",
+                2.0,
+                24,
+                &[(0, t, Some(400.0), n, n), (3, f, Some(1500.0), Some(4.0), Some(0.8)), (6, t, Some(3200.0), n, n)],
+            ),
+            eqp(
+                "Master — smile",
+                0.0,
+                &[(1, f, Some(80.0), Some(1.5), n), (3, f, Some(1000.0), Some(-0.5), Some(0.6)), (5, f, Some(10000.0), Some(1.5), n)],
+            ),
             eqo("Wytnij < 20 Hz i > 18 kHz", 0.0, 24, &[(0, t, Some(20.0), n, n), (6, t, Some(18000.0), n, n)]),
             eqo("Low cut 80 Hz", 0.0, 24, &[(0, t, Some(80.0), n, n)]),
             eqo("Low cut 150 Hz (wokal)", 0.0, 24, &[(0, t, Some(150.0), n, n)]),
@@ -384,7 +435,10 @@ pub fn presets(kind: FxKind) -> Vec<Preset> {
             pr("Rap — ziarno", &[("style", 1.0), ("drive", 58.0), ("lowcut", 100.0), ("tone", 25.0), ("highcut", 14000.0)]),
             pr("Bębny — smash", &[("style", 1.0), ("drive", 80.0), ("lowcut", 30.0), ("thump", 30.0), ("mix", 70.0)]),
             pr("Bas — waga", &[("style", 2.0), ("drive", 50.0), ("lowcut", 35.0), ("thump", 40.0), ("tone", -20.0)]),
-            pr("Lo-fi głośnik", &[("style", 4.0), ("drive", 60.0), ("lowcut", 300.0), ("thump", 35.0), ("tone", 20.0), ("highcut", 4500.0), ("steep", 1.0)]),
+            pr(
+                "Lo-fi głośnik",
+                &[("style", 4.0), ("drive", 60.0), ("lowcut", 300.0), ("thump", 35.0), ("tone", 20.0), ("highcut", 4500.0), ("steep", 1.0)],
+            ),
             pr("Równoległe zgniecenie", &[("style", 4.0), ("drive", 90.0), ("punish", 1.0), ("mix", 30.0)]),
             pr("Taśma — klej na bus", &[("style", 0.0), ("drive", 22.0), ("highcut", 18000.0)]),
         ],
@@ -399,16 +453,72 @@ pub fn presets(kind: FxKind) -> Vec<Preset> {
             dly("Triola 1/8T", 1.0 / 3.0, 35.0, 20.0, &[]),
             dly_ms("Slapback", 90.0, 0.0, 25.0, &[("ftype", 1.0), ("cutoff", 7000.0)]),
             dly("Wysyłka — 100 % wet", 0.75, 40.0, 100.0, &[("dry", 0.0), ("tone", 25.0)]),
-            dly("Taśma — dub", 1.5, 70.0, 30.0, &[("cutoff", 2400.0), ("res", 20.0), ("level", -10.0), ("knee", 70.0), ("sym", 30.0), ("mtime", 18.0), ("rate", 0.6), ("smooth", 65.0), ("diff", 15.0)]),
-            dly("Dub — samooscylacja", 0.75, 108.0, 28.0, &[("cutoff", 1200.0), ("res", 55.0), ("level", -9.0), ("knee", 80.0), ("smooth", 80.0)]),
+            dly(
+                "Taśma — dub",
+                1.5,
+                70.0,
+                30.0,
+                &[
+                    ("cutoff", 2400.0),
+                    ("res", 20.0),
+                    ("level", -10.0),
+                    ("knee", 70.0),
+                    ("sym", 30.0),
+                    ("mtime", 18.0),
+                    ("rate", 0.6),
+                    ("smooth", 65.0),
+                    ("diff", 15.0),
+                ],
+            ),
+            dly(
+                "Dub — samooscylacja",
+                0.75,
+                108.0,
+                28.0,
+                &[("cutoff", 1200.0), ("res", 55.0), ("level", -9.0), ("knee", 80.0), ("smooth", 80.0)],
+            ),
             dly("Lo-fi / bitcrush", 0.5, 45.0, 30.0, &[("ftype", 0.0), ("srate", 8000.0), ("bits", 8.0), ("level", -6.0)]),
-            dly("Rozmyte echo (ambient)", 1.0, 60.0, 30.0, &[("cutoff", 4500.0), ("diff", 70.0), ("dspread", 70.0), ("mtime", 10.0), ("rate", 0.3)]),
-            dly_ms("Chorus / dublowanie", 14.0, 15.0, 45.0, &[("ftype", 0.0), ("offset", 40.0), ("mtime", 55.0), ("rate", 0.7), ("keep", 1.0)]),
-            dly_ms("Multi-FX: filtr + drive (bez echa)", 100.0, 0.0, 100.0, &[("model", 3.0), ("dry", 0.0), ("cutoff", 1800.0), ("res", 55.0), ("level", -14.0), ("mcut", 45.0), ("rate", 0.25)]),
+            dly(
+                "Rozmyte echo (ambient)",
+                1.0,
+                60.0,
+                30.0,
+                &[("cutoff", 4500.0), ("diff", 70.0), ("dspread", 70.0), ("mtime", 10.0), ("rate", 0.3)],
+            ),
+            dly_ms(
+                "Chorus / dublowanie",
+                14.0,
+                15.0,
+                45.0,
+                &[("ftype", 0.0), ("offset", 40.0), ("mtime", 55.0), ("rate", 0.7), ("keep", 1.0)],
+            ),
+            dly_ms(
+                "Multi-FX: filtr + drive (bez echa)",
+                100.0,
+                0.0,
+                100.0,
+                &[("model", 3.0), ("dry", 0.0), ("cutoff", 1800.0), ("res", 55.0), ("level", -14.0), ("mcut", 45.0), ("rate", 0.25)],
+            ),
         ],
         FxKind::Reverb => {
             let rv = |name, size, pre, lo, hi, width, mix, tone, space, duck, bass| {
-                pr(name, &[("size", size), ("pre", pre), ("lo", lo), ("hi", hi), ("width", width), ("mix", mix), ("tone", tone), ("space", space), ("duck", duck), ("early", 50.0), ("bass", bass), ("mod", 50.0)])
+                pr(
+                    name,
+                    &[
+                        ("size", size),
+                        ("pre", pre),
+                        ("lo", lo),
+                        ("hi", hi),
+                        ("width", width),
+                        ("mix", mix),
+                        ("tone", tone),
+                        ("space", space),
+                        ("duck", duck),
+                        ("early", 50.0),
+                        ("bass", bass),
+                        ("mod", 50.0),
+                    ],
+                )
             };
             vec![
                 rv("Vocal Plate", 1.0, 25.0, 300.0, 7000.0, 100.0, 15.0, 0.0, 0.0, 3.0, 0.8),
@@ -428,11 +538,26 @@ pub fn presets(kind: FxKind) -> Vec<Preset> {
             pr("Przezroczysty", &[("gain", 3.0), ("ceil", -1.0), ("rel", 250.0), ("look", 5.0)]),
         ],
         FxKind::Fet => vec![
-            pr("Wokal — klasyk", &[("input", 8.0), ("output", -2.0), ("ratio", 0.0), ("attack", 400.0), ("release", 250.0), ("mix", 100.0)]),
-            pr("Wokal — z przodu", &[("input", 12.0), ("output", -4.0), ("ratio", 1.0), ("attack", 200.0), ("release", 150.0), ("mix", 100.0)]),
-            pr("Bas — kontrola", &[("input", 10.0), ("output", -3.0), ("ratio", 2.0), ("attack", 600.0), ("release", 400.0), ("mix", 100.0)]),
-            pr("Równoległa kompresja", &[("input", 18.0), ("output", -6.0), ("ratio", 4.0), ("attack", 100.0), ("release", 120.0), ("mix", 45.0)]),
-            pr("All buttons — smash", &[("input", 20.0), ("output", -10.0), ("ratio", 4.0), ("attack", 60.0), ("release", 100.0), ("mix", 100.0)]),
+            pr(
+                "Wokal — klasyk",
+                &[("input", 8.0), ("output", -2.0), ("ratio", 0.0), ("attack", 400.0), ("release", 250.0), ("mix", 100.0)],
+            ),
+            pr(
+                "Wokal — z przodu",
+                &[("input", 12.0), ("output", -4.0), ("ratio", 1.0), ("attack", 200.0), ("release", 150.0), ("mix", 100.0)],
+            ),
+            pr(
+                "Bas — kontrola",
+                &[("input", 10.0), ("output", -3.0), ("ratio", 2.0), ("attack", 600.0), ("release", 400.0), ("mix", 100.0)],
+            ),
+            pr(
+                "Równoległa kompresja",
+                &[("input", 18.0), ("output", -6.0), ("ratio", 4.0), ("attack", 100.0), ("release", 120.0), ("mix", 45.0)],
+            ),
+            pr(
+                "All buttons — smash",
+                &[("input", 20.0), ("output", -10.0), ("ratio", 4.0), ("attack", 60.0), ("release", 100.0), ("mix", 100.0)],
+            ),
         ],
         FxKind::Deess => vec![
             pr("Wokal — domyślny", &[("thr", -32.0), ("range", 8.0), ("freq", 6000.0), ("mode", 0.0), ("look", 5.0), ("listen", 0.0)]),
@@ -467,11 +592,20 @@ pub fn presets(kind: FxKind) -> Vec<Preset> {
             pr("Robot", &[("mode", 2.0), ("drive", 6.0), ("out", -2.0)]),
         ],
         FxKind::Rider => vec![
-            pr("Wokal — śpiew", &[("amount", 50.0), ("phrase", 20.0), ("up", 5.0), ("down", 6.0), ("speed", 0.0), ("auto", 1.0), ("look", 2.0)]),
+            pr(
+                "Wokal — śpiew",
+                &[("amount", 50.0), ("phrase", 20.0), ("up", 5.0), ("down", 6.0), ("speed", 0.0), ("auto", 1.0), ("look", 2.0)],
+            ),
             pr("Rap", &[("amount", 50.0), ("phrase", 20.0), ("up", 5.0), ("down", 6.0), ("speed", 1.0), ("auto", 1.0), ("look", 2.0)]),
-            pr("Delikatnie", &[("amount", 30.0), ("phrase", 10.0), ("up", 3.0), ("down", 4.0), ("speed", 0.0), ("auto", 1.0), ("look", 2.0)]),
+            pr(
+                "Delikatnie",
+                &[("amount", 30.0), ("phrase", 10.0), ("up", 3.0), ("down", 4.0), ("speed", 0.0), ("auto", 1.0), ("look", 2.0)],
+            ),
             pr("Mocno", &[("amount", 80.0), ("phrase", 30.0), ("up", 8.0), ("down", 9.0), ("speed", 0.0), ("auto", 1.0), ("look", 2.0)]),
-            pr("Wokal — śpiew (długi look-ahead, opóźnienie)", &[("amount", 50.0), ("phrase", 20.0), ("up", 5.0), ("down", 6.0), ("speed", 0.0), ("auto", 1.0), ("look", 1.0)]),
+            pr(
+                "Wokal — śpiew (długi look-ahead, opóźnienie)",
+                &[("amount", 50.0), ("phrase", 20.0), ("up", 5.0), ("down", 6.0), ("speed", 0.0), ("auto", 1.0), ("look", 1.0)],
+            ),
         ],
         FxKind::Half => {
             // (name, speed, loop, smooth, lo, hi, solo, mix)
@@ -512,7 +646,11 @@ pub fn latency(fx: &Fx, sample_rate: f32) -> usize {
         FxKind::Tune | FxKind::Voice => crate::vocal::tune_latency(sample_rate),
         FxKind::Sat => crate::dsp::saturator::latency_samples(fx.params.get("hq").copied().unwrap_or(0.0) >= 0.5),
         FxKind::Denoise => crate::denoise::latency(sample_rate),
-        FxKind::Rider => crate::rider::latency_samples(fx.params.get("speed").copied().unwrap_or(0.0) as f32, fx.params.get("look").copied().unwrap_or(0.0) as f32, sample_rate),
+        FxKind::Rider => crate::rider::latency_samples(
+            fx.params.get("speed").copied().unwrap_or(0.0) as f32,
+            fx.params.get("look").copied().unwrap_or(0.0) as f32,
+            sample_rate,
+        ),
         // look-ahead delays the audio so the gain is already down when the "s" arrives
         FxKind::Limit => crate::dsp::limiter_v2::latency_samples(fx.params.get("look").copied().unwrap_or(3.0) as f32, sample_rate),
         FxKind::Warp => crate::dsp::warp::LATENCY,

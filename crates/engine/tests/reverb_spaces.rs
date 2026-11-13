@@ -37,23 +37,13 @@ fn the_display_fixture_matches_the_dsp() {
         "scale": [reverb_v2::SCALE_LIMITS.0, reverb_v2::SCALE_LIMITS.1],
         "samples": samples,
     });
-    let path = concat!(
-        env!("CARGO_MANIFEST_DIR"),
-        "/../../ui/src/api/reverbSpaces.json"
-    );
+    let path = concat!(env!("CARGO_MANIFEST_DIR"), "/../../ui/src/api/reverbSpaces.json");
     if std::env::var_os("WAVE_UPDATE_FIXTURES").is_some() {
         std::fs::write(path, serde_json::to_string(&want).unwrap() + "\n").unwrap();
     }
-    let have: serde_json::Value =
-        serde_json::from_str(&std::fs::read_to_string(path).expect("ui/src/api/reverbSpaces.json"))
-            .unwrap();
-    let norm = |v: &serde_json::Value| {
-        serde_json::from_str::<serde_json::Value>(&serde_json::to_string(v).unwrap()).unwrap()
-    };
-    assert!(
-        norm(&have) == norm(&want),
-        "ui/src/api/reverbSpaces.json is out of date: see this test's comment"
-    );
+    let have: serde_json::Value = serde_json::from_str(&std::fs::read_to_string(path).expect("ui/src/api/reverbSpaces.json")).unwrap();
+    let norm = |v: &serde_json::Value| serde_json::from_str::<serde_json::Value>(&serde_json::to_string(v).unwrap()).unwrap();
+    assert!(norm(&have) == norm(&want), "ui/src/api/reverbSpaces.json is out of date: see this test's comment");
 }
 
 #[test]
@@ -65,11 +55,7 @@ fn rooms_grow_with_the_space_and_the_decay_within_the_scale_limits() {
     assert!(m(2, 1.0) < m(2, 2.0) && m(2, 2.0) < m(2, 4.0));
     assert_eq!(m(1, 6.0), m(1, 5.0), "Room is at its largest scale by 5 s");
     // plausible sizes (m) at each space's own reference decay
-    for (space, t, lo, hi) in [
-        (1, 0.6, 5.0, 12.0),
-        (2, 2.0, 18.0, 35.0),
-        (3, 0.5, 3.0, 9.0),
-    ] {
+    for (space, t, lo, hi) in [(1, 0.6, 5.0, 12.0), (2, 2.0, 18.0, 35.0), (3, 0.5, 3.0, 9.0)] {
         let r = m(space, t);
         assert!((lo..hi).contains(&r), "space {space} at {t} s: {r} m");
     }

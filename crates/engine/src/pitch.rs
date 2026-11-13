@@ -259,7 +259,20 @@ impl Psola {
         let mut lp2 = Biquad::default();
         lp1.set(FilterType::Lowpass, sr, 900.0, 0.6, 0.0);
         lp2.set(FilterType::Lowpass, sr, 900.0, 0.6, 0.0);
-        Self { inp: vec![0.0; len], lpb: vec![0.0; len], lp1, lp2, out: vec![0.0; len], n: 0, tmax, next_syn: 0.0, mark: 0.0, next_mark: 0.0, voiced_prev: false, hann }
+        Self {
+            inp: vec![0.0; len],
+            lpb: vec![0.0; len],
+            lp1,
+            lp2,
+            out: vec![0.0; len],
+            n: 0,
+            tmax,
+            next_syn: 0.0,
+            mark: 0.0,
+            next_mark: 0.0,
+            voiced_prev: false,
+            hann,
+        }
     }
 
     pub fn latency(&self) -> usize {
@@ -341,7 +354,7 @@ impl Psola {
         while self.next_syn <= now as f64 {
             let ts = self.next_syn;
             let c = ts - lat; // input time this grain represents
-            // (re)lock the analysis marks: at a voicing change or when they lost the grain
+                              // (re)lock the analysis marks: at a voicing change or when they lost the grain
             if voiced != self.voiced_prev || (self.mark - c).abs() > 2.0 * tf {
                 self.mark = if voiced { self.peak_near(c, tf * 0.5, limit) } else { c };
                 self.next_mark = self.mark + tf;
@@ -643,7 +656,10 @@ pub(crate) fn segment(curve: &[f32], levels: &[f32]) -> Vec<NoteBlob> {
         let mut k = f;
         while k < g {
             let hold = 8;
-            if (curve[k] - anchor).abs() > 0.75 && k + hold < g && (k..k + hold).all(|j| (curve[j] - anchor).abs() > 0.75 && (curve[j] - curve[k]).abs() < 0.6) {
+            if (curve[k] - anchor).abs() > 0.75
+                && k + hold < g
+                && (k..k + hold).all(|j| (curve[j] - anchor).abs() > 0.75 && (curve[j] - curve[k]).abs() < 0.6)
+            {
                 push_note(&mut notes, curve, levels, start, k, dt);
                 start = k;
                 anchor = curve[k];
@@ -679,7 +695,9 @@ mod tests {
 
     /// A voice-like tone: harmonics with falling amplitude.
     fn voice(hz: f32, sr: f32, n: usize) -> Vec<f32> {
-        (0..n).map(|i| (1..8).map(|k| (std::f32::consts::TAU * hz * k as f32 * i as f32 / sr).sin() / k as f32).sum::<f32>() * 0.3).collect()
+        (0..n)
+            .map(|i| (1..8).map(|k| (std::f32::consts::TAU * hz * k as f32 * i as f32 / sr).sin() / k as f32).sum::<f32>() * 0.3)
+            .collect()
     }
 
     #[test]
@@ -708,7 +726,13 @@ mod tests {
         for (amps, name) in [([0.05f32, 0.1, 1.0, 0.3, 0.25, 0.1], "loud 3rd"), ([0.05, 1.0, 0.2, 0.3, 0.1, 0.1], "loud 2nd")] {
             let sr = 48000.0;
             let x: Vec<f32> = (0..24000)
-                .map(|i| amps.iter().enumerate().map(|(k, a)| a * (std::f32::consts::TAU * 120.0 * (k + 1) as f32 * i as f32 / sr).sin()).sum::<f32>() * 0.2)
+                .map(|i| {
+                    amps.iter()
+                        .enumerate()
+                        .map(|(k, a)| a * (std::f32::consts::TAU * 120.0 * (k + 1) as f32 * i as f32 / sr).sin())
+                        .sum::<f32>()
+                        * 0.2
+                })
                 .collect();
             let mut d = Detector::new(sr);
             let mut wrong = 0;

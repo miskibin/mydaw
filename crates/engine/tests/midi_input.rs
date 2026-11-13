@@ -12,7 +12,8 @@ const BLOCK: usize = 256;
 fn engine(p: Project) -> Arc<Engine> {
     // one directory per engine: tests run in parallel and each saves a song
     static N: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
-    let dir = std::env::temp_dir().join(format!("wave-midi-{}-{}", std::process::id(), N.fetch_add(1, std::sync::atomic::Ordering::Relaxed)));
+    let dir =
+        std::env::temp_dir().join(format!("wave-midi-{}-{}", std::process::id(), N.fetch_add(1, std::sync::atomic::Ordering::Relaxed)));
     std::fs::create_dir_all(&dir).unwrap();
     let e = Engine::new(p, Arc::new(NoPlugins));
     e.save(&dir.join("song.wave")).unwrap();
@@ -211,8 +212,35 @@ fn live_keys_play_where_the_song_plays_the_channel_not_through_the_armed_track()
     let mut p = Project::routed();
     p.inserts[0].fx.clear();
     let id = held_bass(&mut p);
-    p.patterns = vec![Pattern { id: 1, name: "P".into(), color: "#4f8ef7".into(), len: 4.0, min_len: 4.0, notes: vec![Note::new(id, 0.0, 4.0, Some(45))], swing: 0.0 }];
-    p.clips = vec![Clip { id: 2, track: 0, start: 0.0, len: 4.0, offset: 0.0, kind: ClipKind::Pat, source: 1, muted: false, gain: 0.0, fade_in: 0.0, fade_out: 0.0, pan: 0.0, norm: false, rev: false, tune: None, stretch: 1.0, resample: false, pitch: 0.0 }];
+    p.patterns = vec![Pattern {
+        id: 1,
+        name: "P".into(),
+        color: "#4f8ef7".into(),
+        len: 4.0,
+        min_len: 4.0,
+        notes: vec![Note::new(id, 0.0, 4.0, Some(45))],
+        swing: 0.0,
+    }];
+    p.clips = vec![Clip {
+        id: 2,
+        track: 0,
+        start: 0.0,
+        len: 4.0,
+        offset: 0.0,
+        kind: ClipKind::Pat,
+        source: 1,
+        muted: false,
+        gain: 0.0,
+        fade_in: 0.0,
+        fade_out: 0.0,
+        pan: 0.0,
+        norm: false,
+        rev: false,
+        tune: None,
+        stretch: 1.0,
+        resample: false,
+        pitch: 0.0,
+    }];
     p.tracks[5].arm = true;
     let vocal = p.tracks[5].insert;
     p.inserts.iter_mut().find(|m| m.id == vocal).unwrap().muted = true;

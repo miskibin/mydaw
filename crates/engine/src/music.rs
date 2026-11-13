@@ -17,9 +17,7 @@ use std::sync::Arc;
 use realfft::RealFftPlanner;
 use serde::Serialize;
 
-pub const NOTE_NAMES: [&str; 12] = [
-    "C", "C#", "D", "D#", "E", "F", "F#", "G", "G#", "A", "A#", "B",
-];
+pub const NOTE_NAMES: [&str; 12] = ["C", "C#", "D", "D#", "E", "F", "F#", "G", "G#", "A", "A#", "B"];
 
 /// Lowest/highest tempo the detector considers.
 pub const MIN_BPM: f64 = 50.0;
@@ -112,12 +110,7 @@ pub fn analyze(mono: &[f32], sr: u32) -> SourceMusic {
     let (env, fps) = onset_envelope(mono, sr, &mut planner);
     let tempo = estimate_tempo(&env, fps, &mut planner);
     let (chroma, chroma_rate, tuning_cents) = chroma_frames(mono, sr, &mut planner);
-    SourceMusic {
-        tempo,
-        chroma,
-        chroma_rate,
-        tuning_cents,
-    }
+    SourceMusic { tempo, chroma, chroma_rate, tuning_cents }
 }
 
 // ---------------------------------------------------------------- tempo
@@ -141,9 +134,8 @@ pub fn onset_envelope(mono: &[f32], sr: u32, planner: &mut RealFftPlanner<f32>) 
     // log-spaced bands 30 Hz .. 11 kHz
     let bin_hz = sr_f / n_fft as f64;
     let (lo, hi) = (30.0f64, 11_000.0f64.min(sr_f * 0.45));
-    let edges: Vec<usize> = (0..=ONSET_BANDS)
-        .map(|i| ((lo * (hi / lo).powf(i as f64 / ONSET_BANDS as f64)) / bin_hz).round() as usize)
-        .collect();
+    let edges: Vec<usize> =
+        (0..=ONSET_BANDS).map(|i| ((lo * (hi / lo).powf(i as f64 / ONSET_BANDS as f64)) / bin_hz).round() as usize).collect();
     let frames = (mono.len() - n_fft) / hop + 1;
     let mut prev = [0f32; ONSET_BANDS];
     let mut env = Vec::with_capacity(frames);
@@ -152,21 +144,14 @@ pub fn onset_envelope(mono: &[f32], sr: u32, planner: &mut RealFftPlanner<f32>) 
         for i in 0..n_fft {
             buf[i] = s[i] * win[i];
         }
-        if fft
-            .process_with_scratch(&mut buf, &mut spec, &mut scratch)
-            .is_err()
-        {
+        if fft.process_with_scratch(&mut buf, &mut spec, &mut scratch).is_err() {
             env.push(0.0);
             continue;
         }
         let mut flux = 0f32;
         for b in 0..ONSET_BANDS {
-            let (a, z) = (
-                edges[b].max(1),
-                edges[b + 1].max(edges[b].max(1) + 1).min(spec.len()),
-            );
-            let e: f32 =
-                spec[a..z].iter().map(|c| c.norm_sqr()).sum::<f32>() / (z - a).max(1) as f32;
+            let (a, z) = (edges[b].max(1), edges[b + 1].max(edges[b].max(1) + 1).min(spec.len()));
+            let e: f32 = spec[a..z].iter().map(|c| c.norm_sqr()).sum::<f32>() / (z - a).max(1) as f32;
             let l = (1.0 + 1000.0 * e.sqrt() / n_fft as f32).ln();
             if t > 0 {
                 flux += (l - prev[b]).max(0.0);
@@ -201,9 +186,7 @@ fn moving_average(x: &[f32], w: usize) -> Vec<f32> {
 }
 
 fn hann(n: usize) -> Vec<f32> {
-    (0..n)
-        .map(|i| 0.5 - 0.5 * (std::f32::consts::TAU * i as f32 / n as f32).cos())
-        .collect()
+    (0..n).map(|i| 0.5 - 0.5 * (std::f32::consts::TAU * i as f32 / n as f32).cos()).collect()
 }
 
 /// Unbiased autocorrelation of `x` for lags 0..max_lag, normalised so lag 0 = 1.
@@ -225,9 +208,7 @@ fn autocorr(x: &[f32], max_lag: usize, planner: &mut RealFftPlanner<f32>) -> Vec
         return vec![0.0; max_lag + 1];
     }
     let z = out[0].max(1e-12);
-    (0..=max_lag.min(x.len().saturating_sub(1)))
-        .map(|l| out[l] / z * x.len() as f32 / (x.len() - l) as f32)
-        .collect()
+    (0..=max_lag.min(x.len().saturating_sub(1))).map(|l| out[l] / z * x.len() as f32 / (x.len() - l) as f32).collect()
 }
 
 fn interp(v: &[f32], x: f64) -> f32 {
@@ -294,11 +275,7 @@ fn best_phase(env: &[f32], period: f64) -> (f64, f32) {
     best
 }
 
-pub fn estimate_tempo(
-    env: &[f32],
-    fps: f64,
-    planner: &mut RealFftPlanner<f32>,
-) -> Option<TempoEstimate> {
+pub fn estimate_tempo(env: &[f32], fps: f64, planner: &mut RealFftPlanner<f32>) -> Option<TempoEstimate> {
     // need a few bars of material
     if env.len() < (fps * 4.0) as usize {
         return None;
@@ -319,16 +296,10 @@ pub fn estimate_tempo(
     let max_lag = (60.0 * fps / MIN_BPM * 4.5) as usize + 2;
     let ac = autocorr(&env, max_lag, planner);
     // coarse: fine grid over the whole range
-    let grid: Vec<f64> = (0..=((MAX_BPM - MIN_BPM) * 10.0) as usize)
-        .map(|i| MIN_BPM + i as f64 * 0.1)
-        .collect();
+    let grid: Vec<f64> = (0..=((MAX_BPM - MIN_BPM) * 10.0) as usize).map(|i| MIN_BPM + i as f64 * 0.1).collect();
     let raw: Vec<f32> = grid.iter().map(|&b| periodicity(&ac, fps, b)).collect();
-    let (bi, _) = grid
-        .iter()
-        .zip(&raw)
-        .enumerate()
-        .map(|(i, (&b, &r))| (i, r as f64 * tempo_prior(b)))
-        .max_by(|a, b| a.1.total_cmp(&b.1))?;
+    let (bi, _) =
+        grid.iter().zip(&raw).enumerate().map(|(i, (&b, &r))| (i, r as f64 * tempo_prior(b))).max_by(|a, b| a.1.total_cmp(&b.1))?;
     let coarse = grid[bi];
     let raw_max = raw.iter().copied().fold(f32::MIN, f32::max).max(1e-9);
     // confidence: how far the pick stands above the typical tempo hypothesis
@@ -358,29 +329,14 @@ pub fn estimate_tempo(
         bpm = (bpm * 100.0).round() / 100.0;
     }
     let score = |b: f64| (periodicity(&ac, fps, b) / raw_max).clamp(0.0, 1.0);
-    let mut candidates = vec![TempoCandidate {
-        bpm,
-        score: score(bpm),
-    }];
+    let mut candidates = vec![TempoCandidate { bpm, score: score(bpm) }];
     for alt in [bpm / 2.0, bpm * 2.0] {
         if (20.0..=999.0).contains(&alt) {
-            let s = if (MIN_BPM..=MAX_BPM).contains(&alt) {
-                score(alt)
-            } else {
-                0.0
-            };
-            candidates.push(TempoCandidate {
-                bpm: (alt * 100.0).round() / 100.0,
-                score: s,
-            });
+            let s = if (MIN_BPM..=MAX_BPM).contains(&alt) { score(alt) } else { 0.0 };
+            candidates.push(TempoCandidate { bpm: (alt * 100.0).round() / 100.0, score: s });
         }
     }
-    Some(TempoEstimate {
-        bpm,
-        confidence,
-        candidates,
-        first_beat: phase / fps,
-    })
+    Some(TempoEstimate { bpm, confidence, candidates, first_beat: phase / fps })
 }
 
 // ---------------------------------------------------------------- key
@@ -388,19 +344,11 @@ pub fn estimate_tempo(
 /// Key profiles (major, minor), tonic first. Albrecht & Shanahan (2013), derived
 /// from a corpus of tonal music; blended with the plain diatonic/triad shape so
 /// the pick is robust on harmonically dense audio where overtones blur the fifth.
-const MAJOR: [f32; 12] = [
-    0.238, 0.006, 0.111, 0.006, 0.137, 0.094, 0.016, 0.214, 0.009, 0.080, 0.008, 0.081,
-];
-const MINOR: [f32; 12] = [
-    0.220, 0.006, 0.104, 0.123, 0.019, 0.103, 0.012, 0.214, 0.062, 0.022, 0.061, 0.052,
-];
+const MAJOR: [f32; 12] = [0.238, 0.006, 0.111, 0.006, 0.137, 0.094, 0.016, 0.214, 0.009, 0.080, 0.008, 0.081];
+const MINOR: [f32; 12] = [0.220, 0.006, 0.104, 0.123, 0.019, 0.103, 0.012, 0.214, 0.062, 0.022, 0.061, 0.052];
 
 /// Spectral-peak chroma frames: (frames, frames per second, tuning offset in cents).
-pub fn chroma_frames(
-    mono: &[f32],
-    sr: u32,
-    planner: &mut RealFftPlanner<f32>,
-) -> (Vec<[f32; 12]>, f64, f32) {
+pub fn chroma_frames(mono: &[f32], sr: u32, planner: &mut RealFftPlanner<f32>) -> (Vec<[f32; 12]>, f64, f32) {
     let sr_f = sr.max(1) as f64;
     let n_fft = ((sr_f * 0.18) as usize).next_power_of_two().max(1024);
     let hop = n_fft / 2;
@@ -414,10 +362,7 @@ pub fn chroma_frames(
     let mut spec = fft.make_output_vec();
     let mut scratch = fft.make_scratch_vec();
     let bin_hz = sr_f / n_fft as f64;
-    let (k0, k1) = (
-        ((60.0 / bin_hz) as usize).max(2),
-        ((2100.0 / bin_hz) as usize).min(n_fft / 2 - 2),
-    );
+    let (k0, k1) = (((60.0 / bin_hz) as usize).max(2), ((2100.0 / bin_hz) as usize).min(n_fft / 2 - 2));
     let frames = (mono.len() - n_fft) / hop + 1;
     // first pass: spectral peaks (midi, weight) per frame and frame energy
     let mut peaks: Vec<Vec<(f32, f32)>> = Vec::with_capacity(frames);
@@ -429,10 +374,7 @@ pub fn chroma_frames(
             buf[i] = s[i] * win[i];
         }
         let mut ps = Vec::new();
-        if fft
-            .process_with_scratch(&mut buf, &mut spec, &mut scratch)
-            .is_err()
-        {
+        if fft.process_with_scratch(&mut buf, &mut spec, &mut scratch).is_err() {
             peaks.push(ps);
             energy.push(0.0);
             continue;
@@ -463,11 +405,7 @@ pub fn chroma_frames(
         sx += p.1 as f64 * th.cos();
         sy += p.1 as f64 * th.sin();
     }
-    let tuning = if sx.abs() + sy.abs() > 0.0 {
-        (sy.atan2(sx) / std::f64::consts::TAU) as f32
-    } else {
-        0.0
-    };
+    let tuning = if sx.abs() + sy.abs() > 0.0 { (sy.atan2(sx) / std::f64::consts::TAU) as f32 } else { 0.0 };
     // quiet frames (below −50 dB of the loudest) carry no harmonic information
     let emax = energy.iter().copied().fold(0f32, f32::max);
     let gate = emax * 1e-5;
@@ -525,53 +463,26 @@ pub fn estimate_key(chroma: &[f32; 12], tuning_cents: f32) -> Option<KeyEstimate
     let mut all: Vec<KeyCandidate> = (0..12u8)
         .flat_map(|r| {
             [
-                KeyCandidate {
-                    root: r,
-                    minor: false,
-                    score: pearson(&norm, &MAJOR, r as usize),
-                },
-                KeyCandidate {
-                    root: r,
-                    minor: true,
-                    score: pearson(&norm, &MINOR, r as usize),
-                },
+                KeyCandidate { root: r, minor: false, score: pearson(&norm, &MAJOR, r as usize) },
+                KeyCandidate { root: r, minor: true, score: pearson(&norm, &MINOR, r as usize) },
             ]
         })
         .collect();
     all.sort_by(|a, b| b.score.total_cmp(&a.score));
     let best = all[0];
     let second = all[1];
-    let confidence = (((best.score - second.score) * 10.0).clamp(0.0, 1.0) * 0.5
-        + best.score.clamp(0.0, 1.0) * 0.5)
-        .clamp(0.0, 1.0);
-    Some(KeyEstimate {
-        root: best.root,
-        minor: best.minor,
-        confidence,
-        candidates: all[..3].to_vec(),
-        chroma: norm,
-        tuning_cents,
-    })
+    let confidence = (((best.score - second.score) * 10.0).clamp(0.0, 1.0) * 0.5 + best.score.clamp(0.0, 1.0) * 0.5).clamp(0.0, 1.0);
+    Some(KeyEstimate { root: best.root, minor: best.minor, confidence, candidates: all[..3].to_vec(), chroma: norm, tuning_cents })
 }
 
 /// Human name like "A minor".
 pub fn key_name(root: u8, minor: bool) -> String {
-    format!(
-        "{} {}",
-        NOTE_NAMES[root as usize % 12],
-        if minor { "minor" } else { "major" }
-    )
+    format!("{} {}", NOTE_NAMES[root as usize % 12], if minor { "minor" } else { "major" })
 }
 
 /// Analysis of a whole source, ready to share.
 pub fn analyze_audio(audio: &crate::sources::Audio) -> Arc<SourceMusic> {
-    let mono: Vec<f32> = audio
-        .content()
-        .as_chunks::<2>()
-        .0
-        .iter()
-        .map(|f| (f[0] + f[1]) * 0.5)
-        .collect();
+    let mono: Vec<f32> = audio.content().as_chunks::<2>().0.iter().map(|f| (f[0] + f[1]) * 0.5).collect();
     Arc::new(analyze(&mono, audio.sr))
 }
 
@@ -609,11 +520,7 @@ mod tests {
             let len = if beat { 0.12 } else { 0.03 };
             for i in 0..((len * SR as f64) as usize).min(n - i0) {
                 let env = (-(i as f32) / (len as f32 * SR as f32 * 0.25)).exp();
-                let tone = if beat {
-                    (std::f32::consts::TAU * 60.0 * i as f32 / SR as f32).sin()
-                } else {
-                    0.0
-                };
+                let tone = if beat { (std::f32::consts::TAU * 60.0 * i as f32 / SR as f32).sin() } else { 0.0 };
                 x[i0 + i] += amp * env * (0.5 * rnd() + tone);
             }
             k += 1;
@@ -636,11 +543,7 @@ mod tests {
         }
         // fast tempo (174 BPM) is either picked directly or offered as the 2× candidate of 87
         let t = tempo_of(&drums(174.0, 30.0));
-        assert!(
-            t.candidates.iter().any(|c| (c.bpm - 174.0).abs() < 0.1),
-            "{:?}",
-            t.candidates
-        );
+        assert!(t.candidates.iter().any(|c| (c.bpm - 174.0).abs() < 0.1), "{:?}", t.candidates);
     }
 
     #[test]
@@ -705,42 +608,22 @@ mod tests {
     #[test]
     fn detects_major_and_minor_keys() {
         // C major: C F G C (I IV V I)
-        let k = key_of(&chords(
-            &[[60, 64, 67], [65, 69, 72], [67, 71, 74], [60, 64, 67]],
-            1.5,
-            0.0,
-        ));
+        let k = key_of(&chords(&[[60, 64, 67], [65, 69, 72], [67, 71, 74], [60, 64, 67]], 1.5, 0.0));
         assert_eq!((k.root, k.minor), (0, false), "{:?}", k.candidates);
         // A minor: Am Dm E Am (harmonic minor dominant)
-        let k = key_of(&chords(
-            &[[57, 60, 64], [62, 65, 69], [64, 68, 71], [57, 60, 64]],
-            1.5,
-            0.0,
-        ));
+        let k = key_of(&chords(&[[57, 60, 64], [62, 65, 69], [64, 68, 71], [57, 60, 64]], 1.5, 0.0));
         assert_eq!((k.root, k.minor), (9, true), "{:?}", k.candidates);
         // F# minor: i VI VII i (natural minor, the pop progression classical profiles miss)
-        let k = key_of(&chords(
-            &[[54, 57, 61], [50, 54, 57], [52, 56, 59], [54, 57, 61]],
-            1.5,
-            0.0,
-        ));
+        let k = key_of(&chords(&[[54, 57, 61], [50, 54, 57], [52, 56, 59], [54, 57, 61]], 1.5, 0.0));
         assert_eq!((k.root, k.minor), (6, true), "{:?}", k.candidates);
     }
 
     #[test]
     fn key_survives_detuned_recordings() {
         // a quarter tone flat would otherwise smear every note across two pitch classes
-        let x = chords(
-            &[[62, 66, 69], [67, 71, 74], [69, 73, 76], [62, 66, 69]],
-            1.5,
-            -40.0,
-        );
+        let x = chords(&[[62, 66, 69], [67, 71, 74], [69, 73, 76], [62, 66, 69]], 1.5, -40.0);
         let m = analyze(&x, SR);
-        assert!(
-            (m.tuning_cents + 40.0).abs() < 8.0,
-            "tuning {}",
-            m.tuning_cents
-        );
+        assert!((m.tuning_cents + 40.0).abs() < 8.0, "tuning {}", m.tuning_cents);
         let (s, _) = m.chroma_sum(0.0, 1e9);
         let k = estimate_key(&s, m.tuning_cents).unwrap();
         assert_eq!((k.root, k.minor), (2, false), "{:?}", k.candidates);

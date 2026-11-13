@@ -21,17 +21,11 @@ use crate::unsupported as backend;
 
 /// Smallest client area a plugin window may be given. A 1x1 window is a way to
 /// lose the close button, not a window.
-pub const MIN_WINDOW_SIZE: WindowSize = WindowSize {
-    width: 120,
-    height: 80,
-};
+pub const MIN_WINDOW_SIZE: WindowSize = WindowSize { width: 120, height: 80 };
 
 /// Largest client area. Bigger than any real editor, small enough that a
 /// plugin returning garbage cannot ask the compositor for a gigabyte surface.
-pub const MAX_WINDOW_SIZE: WindowSize = WindowSize {
-    width: 8192,
-    height: 8192,
-};
+pub const MAX_WINDOW_SIZE: WindowSize = WindowSize { width: 8192, height: 8192 };
 
 /// Period of the wake-up timer each plugin window carries, in milliseconds.
 ///
@@ -144,11 +138,7 @@ pub enum WindowError {
 
     /// A Win32 call on a live window failed.
     #[error("{api} failed on {id} (win32 error {code})")]
-    Win32 {
-        id: WindowId,
-        api: &'static str,
-        code: u32,
-    },
+    Win32 { id: WindowId, api: &'static str, code: u32 },
 }
 
 /// How a window should be created.
@@ -166,11 +156,7 @@ pub struct WindowOptions {
 
 impl WindowOptions {
     pub fn new(title: impl Into<String>, size: WindowSize) -> Self {
-        Self {
-            title: title.into(),
-            size,
-            resizable: false,
-        }
+        Self { title: title.into(), size, resizable: false }
     }
 
     #[must_use]
@@ -204,11 +190,7 @@ impl Service {
     /// A service owned by the calling thread, which must be the thread running
     /// the application's event loop.
     pub fn new() -> Self {
-        Self {
-            owner: std::thread::current().id(),
-            next_id: AtomicU64::new(1),
-            registry: Arc::new(Mutex::new(Vec::new())),
-        }
+        Self { owner: std::thread::current().id(), next_id: AtomicU64::new(1), registry: Arc::new(Mutex::new(Vec::new())) }
     }
 
     /// The thread this service (and every window it opens) belongs to.
@@ -242,12 +224,7 @@ impl Service {
 
         let id = WindowId(self.next_id.fetch_add(1, Ordering::Relaxed));
         self.registry.lock().push((id, hwnd));
-        log::debug!(
-            "opened plugin {id} '{}' ({}x{}) handle {hwnd:#x}",
-            options.title,
-            size.width,
-            size.height
-        );
+        log::debug!("opened plugin {id} '{}' ({}x{}) handle {hwnd:#x}", options.title, size.width, size.height);
         Ok(Window {
             id,
             hwnd,
@@ -279,10 +256,7 @@ impl Service {
     pub fn close_all(&self) -> usize {
         if !self.on_owner_thread() {
             if self.open_count() > 0 {
-                log::warn!(
-                    "plugin-windows close_all called off the UI thread; {} window(s) left open",
-                    self.open_count()
-                );
+                log::warn!("plugin-windows close_all called off the UI thread; {} window(s) left open", self.open_count());
             }
             return 0;
         }
@@ -304,10 +278,7 @@ impl Service {
 
 impl std::fmt::Debug for Service {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("Service")
-            .field("owner", &self.owner)
-            .field("open", &self.open_count())
-            .finish()
+        f.debug_struct("Service").field("owner", &self.owner).field("open", &self.open_count()).finish()
     }
 }
 
@@ -358,9 +329,7 @@ impl Window {
     /// Whether the window still exists ([`Service::close_all`] may have
     /// destroyed it behind its owner's back).
     pub fn is_open(&self) -> bool {
-        self.registry
-            .upgrade()
-            .is_some_and(|registry| registry.lock().iter().any(|(id, _)| *id == self.id))
+        self.registry.upgrade().is_some_and(|registry| registry.lock().iter().any(|(id, _)| *id == self.id))
     }
 
     fn live(&self) -> Result<isize, WindowError> {
@@ -437,9 +406,7 @@ impl Window {
         };
         let removed = {
             let mut open = registry.lock();
-            open.iter()
-                .position(|(id, _)| *id == self.id)
-                .map(|index| open.remove(index))
+            open.iter().position(|(id, _)| *id == self.id).map(|index| open.remove(index))
         };
         if removed.is_some() {
             backend::destroy_window(self.hwnd);
@@ -462,10 +429,7 @@ impl std::fmt::Debug for Window {
 impl Drop for Window {
     fn drop(&mut self) {
         if let Err(err) = self.close() {
-            log::error!(
-                "plugin {} dropped off the UI thread and leaked: {err}",
-                self.id
-            );
+            log::error!("plugin {} dropped off the UI thread and leaked: {err}", self.id);
         }
     }
 }
@@ -504,19 +468,10 @@ mod tests {
 
     #[test]
     fn sizes_are_clamped_into_the_supported_range() {
-        assert_eq!(
-            WindowSize::new(400, 250).clamped(),
-            WindowSize::new(400, 250)
-        );
+        assert_eq!(WindowSize::new(400, 250).clamped(), WindowSize::new(400, 250));
         assert_eq!(WindowSize::new(0, 0).clamped(), MIN_WINDOW_SIZE);
-        assert_eq!(
-            WindowSize::new(u32::MAX, u32::MAX).clamped(),
-            MAX_WINDOW_SIZE
-        );
-        assert_eq!(
-            WindowSize::new(1, 100_000).clamped(),
-            WindowSize::new(MIN_WINDOW_SIZE.width, MAX_WINDOW_SIZE.height)
-        );
+        assert_eq!(WindowSize::new(u32::MAX, u32::MAX).clamped(), MAX_WINDOW_SIZE);
+        assert_eq!(WindowSize::new(1, 100_000).clamped(), WindowSize::new(MIN_WINDOW_SIZE.width, MAX_WINDOW_SIZE.height));
         assert!(WindowSize::new(400, 250).is_within_limits());
         assert!(!WindowSize::new(400, 1).is_within_limits());
     }
@@ -542,10 +497,7 @@ mod tests {
         })
         .join()
         .expect("the probe thread must not panic");
-        assert!(
-            matches!(refused, Some(WindowError::WrongThread { .. })),
-            "got {refused:?}"
-        );
+        assert!(matches!(refused, Some(WindowError::WrongThread { .. })), "got {refused:?}");
         assert!(!on_owner);
         assert_eq!(service.close_all(), 0);
     }
@@ -554,9 +506,7 @@ mod tests {
     #[test]
     fn without_a_backend_opening_is_unsupported_and_says_so() {
         let service = Service::new();
-        let err = service
-            .open_window(&WindowOptions::new("Editor", WindowSize::new(400, 250)))
-            .unwrap_err();
+        let err = service.open_window(&WindowOptions::new("Editor", WindowSize::new(400, 250))).unwrap_err();
         assert!(matches!(err, WindowError::Unsupported), "got {err:?}");
         const { assert!(!crate::SUPPORTED) };
     }
@@ -600,10 +550,7 @@ mod tests {
         drop(first);
         assert_eq!(service.open_count(), 1);
         assert_eq!(service.close_all(), 1);
-        assert!(
-            !second.is_open(),
-            "close_all destroys what its owner left open"
-        );
+        assert!(!second.is_open(), "close_all destroys what its owner left open");
         drop(second);
         assert_eq!(service.open_count(), 0);
     }
@@ -635,13 +582,7 @@ mod tests {
         state.post(WindowEvent::Closed);
         state.post(WindowEvent::Resized(WindowSize::new(640, 480)));
         assert_eq!(fired.get(), 1);
-        assert_eq!(
-            receiver.try_iter().collect::<Vec<_>>(),
-            vec![
-                WindowEvent::Closed,
-                WindowEvent::Resized(WindowSize::new(640, 480))
-            ]
-        );
+        assert_eq!(receiver.try_iter().collect::<Vec<_>>(), vec![WindowEvent::Closed, WindowEvent::Resized(WindowSize::new(640, 480))]);
         drop(receiver);
         state.post(WindowEvent::Closed);
     }

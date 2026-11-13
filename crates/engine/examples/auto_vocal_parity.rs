@@ -62,7 +62,8 @@ fn song(dir: &Path, long: bool) -> Row {
     let (raw, sr) = read_wav(&dir.join("raw.wav"));
     let (eq, _) = read_wav(&dir.join("eq.wav"));
     let (pya, _) = read_wav(&dir.join("py_after.wav"));
-    let js: serde_json::Value = serde_json::from_str(&std::fs::read_to_string(dir.join("python.json")).unwrap().replace("NaN", "null")).unwrap();
+    let js: serde_json::Value =
+        serde_json::from_str(&std::fs::read_to_string(dir.join("python.json")).unwrap().replace("NaN", "null")).unwrap();
     let t0 = std::time::Instant::now();
     let d = autovocal::calibrate_dynamics(&eq, sr, Style::Natural, long);
     let secs = t0.elapsed().as_secs_f64();
@@ -163,7 +164,8 @@ fn main() {
     let root = PathBuf::from(args.get(1).map(String::as_str).unwrap_or("D:/wave-data/auto_vocal_parity"));
     let long = !args.iter().any(|a| a == "--short");
     let n: usize = args.iter().position(|a| a == "--n").and_then(|i| args.get(i + 1)).and_then(|s| s.parse().ok()).unwrap_or(50);
-    let mut dirs: Vec<PathBuf> = std::fs::read_dir(&root).unwrap().filter_map(|e| e.ok()).map(|e| e.path()).filter(|p| p.join("eq.wav").exists()).collect();
+    let mut dirs: Vec<PathBuf> =
+        std::fs::read_dir(&root).unwrap().filter_map(|e| e.ok()).map(|e| e.path()).filter(|p| p.join("eq.wav").exists()).collect();
     dirs.sort();
     dirs.truncate(n);
     let threads = std::thread::available_parallelism().map(|v| v.get()).unwrap_or(4).saturating_sub(2).clamp(1, 8);
@@ -183,6 +185,9 @@ fn main() {
         let d: Vec<f64> = rows.iter().map(|r| (r.rust[k] - r.py[k]).abs()).collect();
         println!("per song |rust - python|, {name}: median {:.2}, p90 {:.2} dB", med(&d), percentile(&d, 90.0));
     }
-    println!("rider gain vs research curve, RMS diff on confident frames (median): {:.2} dB", med(&rows.iter().map(|r| r.gain_rms_diff).collect::<Vec<_>>()));
+    println!(
+        "rider gain vs research curve, RMS diff on confident frames (median): {:.2} dB",
+        med(&rows.iter().map(|r| r.gain_rms_diff).collect::<Vec<_>>())
+    );
     println!("calibration time per song (median): {:.1} s", med(&rows.iter().map(|r| r.secs).collect::<Vec<_>>()));
 }

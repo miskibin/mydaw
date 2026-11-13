@@ -111,7 +111,10 @@ fn select_opens_and_forwards_decoded_messages() {
     r.fake.send(&[0x90, 60, 0]);
     r.fake.send(&[0xB0, 64, 127]);
     r.fake.send(&[0xF8]); // clock: ignored
-    assert_eq!(*r.msgs.lock(), vec![MidiMsg::NoteOn { ch: 0, key: 60, vel: 100 }, MidiMsg::NoteOff { ch: 0, key: 60 }, MidiMsg::Sustain { ch: 0, down: true }]);
+    assert_eq!(
+        *r.msgs.lock(),
+        vec![MidiMsg::NoteOn { ch: 0, key: 60, vel: 100 }, MidiMsg::NoteOff { ch: 0, key: 60 }, MidiMsg::Sustain { ch: 0, down: true }]
+    );
 }
 
 #[test]

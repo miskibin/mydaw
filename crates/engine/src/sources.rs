@@ -174,7 +174,14 @@ pub struct StretchJob {
 
 impl StretchJob {
     fn of(c: &crate::model::Clip, ident: u64, audio: Arc<Audio>) -> Self {
-        StretchJob { key: stretch_key(c, ident), audio, ratio: c.render_ratio(), semis: c.pitch, rate: c.rendered_rate(), fallback_rate: 1.0 / c.stretch }
+        StretchJob {
+            key: stretch_key(c, ident),
+            audio,
+            ratio: c.render_ratio(),
+            semis: c.pitch,
+            rate: c.rendered_rate(),
+            fallback_rate: 1.0 / c.stretch,
+        }
     }
 }
 
@@ -487,7 +494,12 @@ impl SourceStore {
 
     /// What [`Self::clip_audio`] returns if it is ready, else the stretch to render (outside
     /// any lock) and hand back through [`Self::put_stretch`].
-    pub fn stretch_request(&mut self, c: &crate::model::Clip, allow_stale: bool, bpm: f64) -> Option<Result<(Arc<Audio>, f64), StretchJob>> {
+    pub fn stretch_request(
+        &mut self,
+        c: &crate::model::Clip,
+        allow_stale: bool,
+        bpm: f64,
+    ) -> Option<Result<(Arc<Audio>, f64), StretchJob>> {
         let (pre, ident) = self.pre_stretch(c, allow_stale, bpm)?;
         if !c.needs_stretch() {
             return Some(Ok((pre, if c.kind == crate::model::ClipKind::Audio { 1.0 / c.stretch } else { 1.0 })));

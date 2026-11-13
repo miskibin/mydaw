@@ -189,7 +189,15 @@ fn clicks() {
         *v *= (1.0 - i as f32 / 192.0).max(0.0);
     }
     let f = |x: &[f32]| lab::click_flags(x, SR, 3.0).len();
-    println!("detector check: clean sine {}, hard cut {}, +0.05 step {}, 4 ms fade-out {}, clean saw {}, saw cut mid-ramp {}", f(&sine), f(&cut), f(&step), f(&faded), f(&saw), f(&saw_cut));
+    println!(
+        "detector check: clean sine {}, hard cut {}, +0.05 step {}, 4 ms fade-out {}, clean saw {}, saw cut mid-ramp {}",
+        f(&sine),
+        f(&cut),
+        f(&step),
+        f(&faded),
+        f(&saw),
+        f(&saw_cut)
+    );
     println!("| preset | on/off | retrigger | steal (20 notes) | legato+glide | mono+glide | preset change |");
     println!("|---|---|---|---|---|---|---|");
     let all = presets::all();
@@ -297,10 +305,37 @@ fn render_song(preset: &str, song: &Song) -> Vec<f32> {
             notes.push(Note::new(kick, o, 1.0, None));
         }
     }
-    p.patterns = vec![Pattern { id: p.alloc_id(), name: "Demo".into(), color: "#4f8ef7".into(), len: song.beats, min_len: song.beats, notes, swing: 0.0 }];
+    p.patterns = vec![Pattern {
+        id: p.alloc_id(),
+        name: "Demo".into(),
+        color: "#4f8ef7".into(),
+        len: song.beats,
+        min_len: song.beats,
+        notes,
+        swing: 0.0,
+    }];
     let pid = p.patterns[0].id;
     let cid = p.alloc_id();
-    p.clips = vec![Clip { id: cid, track: 0, start: 0.0, len: song.beats, offset: 0.0, kind: ClipKind::Pat, source: pid, muted: false, gain: 0.0, fade_in: 0.0, fade_out: 0.0, pan: 0.0, norm: false, rev: false, tune: None, stretch: 1.0, resample: false, pitch: 0.0 }];
+    p.clips = vec![Clip {
+        id: cid,
+        track: 0,
+        start: 0.0,
+        len: song.beats,
+        offset: 0.0,
+        kind: ClipKind::Pat,
+        source: pid,
+        muted: false,
+        gain: 0.0,
+        fade_in: 0.0,
+        fade_out: 0.0,
+        pan: 0.0,
+        norm: false,
+        rev: false,
+        tune: None,
+        stretch: 1.0,
+        resample: false,
+        pitch: 0.0,
+    }];
     Engine::new(p, Arc::new(NoPlugins)).render(0.0, song.beats, 2.5, SR as u32).unwrap()
 }
 
@@ -314,7 +349,18 @@ fn song_for(cat: &str) -> Song {
     match cat {
         "808" => {
             // 4 bars at 140: long 808s, slides where notes overlap
-            let line: [(f32, f32, u8); 10] = [(0.0, 6.0, 36), (6.0, 4.0, 36), (10.0, 6.0, 43), (16.0, 8.0, 34), (23.0, 3.0, 46), (26.0, 6.0, 34), (32.0, 6.0, 36), (38.0, 6.0, 41), (43.0, 5.0, 39), (48.0, 16.0, 31)];
+            let line: [(f32, f32, u8); 10] = [
+                (0.0, 6.0, 36),
+                (6.0, 4.0, 36),
+                (10.0, 6.0, 43),
+                (16.0, 8.0, 34),
+                (23.0, 3.0, 46),
+                (26.0, 6.0, 34),
+                (32.0, 6.0, 36),
+                (38.0, 6.0, 41),
+                (43.0, 5.0, 39),
+                (48.0, 16.0, 31),
+            ];
             for (s, l, k) in line {
                 v.push(n(s, l, k));
             }
@@ -344,7 +390,20 @@ fn song_for(cat: &str) -> Song {
             }
         }
         "Lead" => {
-            let mel: [(f32, f32, u8); 12] = [(0.0, 3.0, 72), (3.0, 3.0, 75), (6.0, 2.0, 77), (8.0, 6.0, 79), (16.0, 2.0, 79), (18.0, 2.0, 77), (20.0, 4.0, 75), (24.0, 8.0, 72), (32.0, 3.0, 70), (35.0, 5.0, 72), (40.0, 8.0, 75), (48.0, 14.0, 74)];
+            let mel: [(f32, f32, u8); 12] = [
+                (0.0, 3.0, 72),
+                (3.0, 3.0, 75),
+                (6.0, 2.0, 77),
+                (8.0, 6.0, 79),
+                (16.0, 2.0, 79),
+                (18.0, 2.0, 77),
+                (20.0, 4.0, 75),
+                (24.0, 8.0, 72),
+                (32.0, 3.0, 70),
+                (35.0, 5.0, 72),
+                (40.0, 8.0, 75),
+                (48.0, 14.0, 74),
+            ];
             for (s, l, k) in mel {
                 v.push(n(s, l + 0.3, k));
             }
@@ -378,7 +437,14 @@ fn write_mp3(dir: &Path, name: &str, x: &[f32]) {
     let wav = dir.join(format!("{name}.wav"));
     wave_engine::sources::write_wav(&wav, x, SR as u32).unwrap();
     let mp3 = dir.join(format!("{name}.mp3"));
-    let ok = std::process::Command::new("ffmpeg").args(["-y", "-loglevel", "error", "-i"]).arg(&wav).args(["-codec:a", "libmp3lame", "-b:a", "192k"]).arg(&mp3).status().map(|s| s.success()).unwrap_or(false);
+    let ok = std::process::Command::new("ffmpeg")
+        .args(["-y", "-loglevel", "error", "-i"])
+        .arg(&wav)
+        .args(["-codec:a", "libmp3lame", "-b:a", "192k"])
+        .arg(&mp3)
+        .status()
+        .map(|s| s.success())
+        .unwrap_or(false);
     if ok {
         let _ = std::fs::remove_file(&wav);
         println!("{}", mp3.display());

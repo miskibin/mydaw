@@ -70,19 +70,11 @@ pub enum Vst3Error {
 
     /// `setupProcessing`, `setActive` or `setProcessing` refused.
     #[error("VST3 plugin '{name}' refused while {stage} (result {result:#x})")]
-    Activate {
-        name: String,
-        stage: &'static str,
-        result: i32,
-    },
+    Activate { name: String, stage: &'static str, result: i32 },
 
     /// `getState` / `setState` refused.
     #[error("VST3 plugin '{name}' refused to {direction} its state (result {result:#x})")]
-    State {
-        name: String,
-        direction: &'static str,
-        result: i32,
-    },
+    State { name: String, direction: &'static str, result: i32 },
 
     /// A state blob that is malformed or past [`MAX_STATE_BYTES`](crate::MAX_STATE_BYTES).
     #[error("invalid plugin state: {0}")]

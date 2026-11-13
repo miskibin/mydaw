@@ -21,11 +21,7 @@ fn fixture() -> Option<PathBuf> {
         return None;
     };
     let path = PathBuf::from(path);
-    assert!(
-        path.exists(),
-        "WAVE_VST3_TEST_BUNDLE points at nothing: {}",
-        path.display()
-    );
+    assert!(path.exists(), "WAVE_VST3_TEST_BUNDLE points at nothing: {}", path.display());
     Some(path)
 }
 
@@ -40,18 +36,9 @@ fn scratch(tag: &str) -> PathBuf {
 fn scanned(bundle: &Path) -> wave_vst3::PluginInfo {
     let root = bundle.parent().unwrap().to_path_buf();
     let (effects, children, blocked) = scan_roots(&[root], Some(Path::new(WORKER)));
-    assert!(
-        blocked.is_empty(),
-        "the fixture must not crash its worker: {blocked:?}"
-    );
-    assert!(
-        children >= 1,
-        "the module must have been opened in a child process"
-    );
-    effects
-        .into_iter()
-        .find(|effect| Path::new(&effect.path) == bundle)
-        .expect("the fixture's effect is listed")
+    assert!(blocked.is_empty(), "the fixture must not crash its worker: {blocked:?}");
+    assert!(children >= 1, "the module must have been opened in a child process");
+    effects.into_iter().find(|effect| Path::new(&effect.path) == bundle).expect("the fixture's effect is listed")
 }
 
 fn sine(frames: usize) -> (Vec<f32>, Vec<f32>) {
@@ -61,12 +48,7 @@ fn sine(frames: usize) -> (Vec<f32>, Vec<f32>) {
 }
 
 fn ctx() -> ProcessCtx {
-    ProcessCtx {
-        sample_rate: 48_000.0,
-        bpm: 120.0,
-        beat: 0.0,
-        playing: true,
-    }
+    ProcessCtx { sample_rate: 48_000.0, bpm: 120.0, beat: 0.0, playing: true }
 }
 
 fn assert_scaled(out: &[f32], input: &[f32], gain: f32) {
@@ -79,14 +61,10 @@ fn assert_scaled(out: &[f32], input: &[f32], gain: f32) {
 fn a_garbage_module_is_refused_by_its_worker_without_being_block_listed() {
     let root = scratch("garbage");
     std::fs::write(root.join("garbage.vst3"), b"not a shared library").unwrap();
-    let (effects, children, blocked) =
-        scan_roots(std::slice::from_ref(&root), Some(Path::new(WORKER)));
+    let (effects, children, blocked) = scan_roots(std::slice::from_ref(&root), Some(Path::new(WORKER)));
     assert!(effects.is_empty());
     assert_eq!(children, 1, "one child for the one unknown module");
-    assert!(
-        blocked.is_empty(),
-        "a refusal is cached, not block-listed: only crashes/hangs are"
-    );
+    assert!(blocked.is_empty(), "a refusal is cached, not block-listed: only crashes/hangs are");
     let _ = std::fs::remove_dir_all(root);
 }
 
@@ -115,8 +93,7 @@ fn out_of_process_and_in_process_scans_agree() {
 fn an_effect_processes_audio_and_follows_its_parameters() {
     let Some(bundle) = fixture() else { return };
     let info = scanned(&bundle);
-    let (mut effect, handle) =
-        instantiate_effect(&info.path, &info.cid, None, 48_000.0, 64).unwrap();
+    let (mut effect, handle) = instantiate_effect(&info.path, &info.cid, None, 48_000.0, 64).unwrap();
     assert_eq!(handle.info().cid, info.cid);
 
     let params = handle.params();
@@ -143,11 +120,7 @@ fn an_effect_processes_audio_and_follows_its_parameters() {
     assert_scaled(&l, &input_l, 0.5);
     assert_scaled(&r, &input_r, 0.5);
     assert_eq!(handle.params()[0].value, 0.5);
-    assert!(
-        handle.params()[0].display.starts_with("0.5"),
-        "{:?}",
-        handle.params()[0]
-    );
+    assert!(handle.params()[0].display.starts_with("0.5"), "{:?}", handle.params()[0]);
 
     // Blocks longer than the activated maximum are processed in chunks.
     let (input_l, input_r) = sine(200);
@@ -162,22 +135,12 @@ fn an_effect_processes_audio_and_follows_its_parameters() {
     assert_scaled(&l, &input_l, 0.5);
     assert_scaled(&r, &input_r, 0.5);
 
-    assert!(matches!(
-        handle.set_param(gain.id, 1.5),
-        Err(Vst3Error::InvalidParamValue(_))
-    ));
-    assert!(matches!(
-        handle.set_param(gain.id, f64::NAN),
-        Err(Vst3Error::InvalidParamValue(_))
-    ));
+    assert!(matches!(handle.set_param(gain.id, 1.5), Err(Vst3Error::InvalidParamValue(_))));
+    assert!(matches!(handle.set_param(gain.id, f64::NAN), Err(Vst3Error::InvalidParamValue(_))));
 
     // Teardown in either order is clean.
     drop(effect);
-    assert_eq!(
-        handle.params()[0].value,
-        0.5,
-        "the instance lives while a handle does"
-    );
+    assert_eq!(handle.params()[0].value, 0.5, "the instance lives while a handle does");
     drop(handle);
 }
 
@@ -187,35 +150,18 @@ fn state_round_trips_through_a_new_instance() {
     let info = scanned(&bundle);
     let (_effect, handle) = instantiate_effect(&info.path, &info.cid, None, 48_000.0, 128).unwrap();
     let state = handle.get_state().unwrap();
-    assert!(
-        state.starts_with(b"WAVE-VST3-STATE1"),
-        "the versioned envelope"
-    );
+    assert!(state.starts_with(b"WAVE-VST3-STATE1"), "the versioned envelope");
 
-    let (mut restored, restored_handle) =
-        instantiate_effect(&info.path, &info.cid, Some(&state), 48_000.0, 128).unwrap();
-    assert_eq!(
-        restored_handle.get_state().unwrap(),
-        state,
-        "byte-identical after save -> load -> save"
-    );
-    assert!(
-        !restored_handle.take_state_changed(),
-        "restoring is not an edit"
-    );
+    let (mut restored, restored_handle) = instantiate_effect(&info.path, &info.cid, Some(&state), 48_000.0, 128).unwrap();
+    assert_eq!(restored_handle.get_state().unwrap(), state, "byte-identical after save -> load -> save");
+    assert!(!restored_handle.take_state_changed(), "restoring is not an edit");
     let (input_l, input_r) = sine(128);
     let (mut l, mut r) = (input_l.clone(), input_r.clone());
     restored.process(&mut l, &mut r, &ctx());
     assert_scaled(&l, &input_l, 1.0);
 
-    let err = instantiate_effect(
-        &info.path,
-        &info.cid,
-        Some(b"WAVE-VST3-STATE1\x01"),
-        48_000.0,
-        128,
-    )
-    .expect_err("a truncated envelope is refused");
+    let err = instantiate_effect(&info.path, &info.cid, Some(b"WAVE-VST3-STATE1\x01"), 48_000.0, 128)
+        .expect_err("a truncated envelope is refused");
     assert!(matches!(err, Vst3Error::InvalidState(_)), "got {err:?}");
 }
 
@@ -223,17 +169,10 @@ fn state_round_trips_through_a_new_instance() {
 fn hosting_errors_are_typed() {
     let Some(bundle) = fixture() else { return };
     let info = scanned(&bundle);
-    let err = instantiate_effect(&info.path, &"00".repeat(16), None, 48_000.0, 64)
-        .expect_err("no such class");
-    assert!(
-        matches!(err, Vst3Error::ClassNotFound { .. }),
-        "got {err:?}"
-    );
+    let err = instantiate_effect(&info.path, &"00".repeat(16), None, 48_000.0, 64).expect_err("no such class");
+    assert!(matches!(err, Vst3Error::ClassNotFound { .. }), "got {err:?}");
     let err = instantiate_effect(&info.path, &info.cid, None, 0.0, 64).expect_err("no such rate");
-    assert!(
-        matches!(err, Vst3Error::InvalidAudioConfig(_)),
-        "got {err:?}"
-    );
+    assert!(matches!(err, Vst3Error::InvalidAudioConfig(_)), "got {err:?}");
 
     // The fixture has no editor; on platforms without a window backend the
     // window service says so first.
@@ -241,13 +180,7 @@ fn hosting_errors_are_typed() {
     assert!(handle.has_editor(), "it has a controller");
     let windows = wave_plugin_windows::Service::new();
     let err = handle.open_editor(&windows).unwrap_err();
-    assert!(
-        matches!(
-            err,
-            Vst3Error::NoEditor | Vst3Error::UnsupportedEditorApi { .. } | Vst3Error::Window(_)
-        ),
-        "got {err:?}"
-    );
+    assert!(matches!(err, Vst3Error::NoEditor | Vst3Error::UnsupportedEditorApi { .. } | Vst3Error::Window(_)), "got {err:?}");
     assert!(!handle.is_editor_open());
     handle.close_editor().unwrap();
 }

@@ -221,7 +221,18 @@ pub struct Eq {
 
 impl Default for Eq {
     fn default() -> Self {
-        Self { sr: 0.0, bands: [BandState::default(); EQ_BANDS], p: [Default::default(); EQ_BANDS], n_on: 0, out: 1.0, gain: Smooth::default(), last: None, att: 0.0, rel: 0.0, tick: 0 }
+        Self {
+            sr: 0.0,
+            bands: [BandState::default(); EQ_BANDS],
+            p: [Default::default(); EQ_BANDS],
+            n_on: 0,
+            out: 1.0,
+            gain: Smooth::default(),
+            last: None,
+            att: 0.0,
+            rel: 0.0,
+            tick: 0,
+        }
     }
 }
 
@@ -417,7 +428,20 @@ pub struct Comp {
 }
 impl Default for Comp {
     fn default() -> Self {
-        Self { sr: 48000.0, thr: -18.0, ratio: 4.0, att: 0.0, rel: 0.0, makeup: 1.0, env_db: 0.0, gr: 0.0, knee: 6.0, rms: false, ms: 0.0, k_ms: 0.0 }
+        Self {
+            sr: 48000.0,
+            thr: -18.0,
+            ratio: 4.0,
+            att: 0.0,
+            rel: 0.0,
+            makeup: 1.0,
+            env_db: 0.0,
+            gr: 0.0,
+            knee: 6.0,
+            rms: false,
+            ms: 0.0,
+            k_ms: 0.0,
+        }
     }
 }
 impl Comp {
@@ -823,7 +847,16 @@ mod tests {
     #[test]
     fn dynamic_band_only_acts_when_loud() {
         use crate::model::{BandType, DynBand, EqBand, Placement};
-        let band = EqBand { on: true, kind: BandType::Peak, f: 1000.0, g: 0.0, q: 1.0, slope: 12, place: Placement::Stereo, dynamic: Some(DynBand { range: -12.0, thr: -30.0 }) };
+        let band = EqBand {
+            on: true,
+            kind: BandType::Peak,
+            f: 1000.0,
+            g: 0.0,
+            q: 1.0,
+            slope: 12,
+            place: Placement::Stereo,
+            dynamic: Some(DynBand { range: -12.0, thr: -30.0 }),
+        };
         let sine = |a: f32| move |i: usize| (i as f32 * 1000.0 * std::f32::consts::TAU / 48000.0).sin() * a;
         let mut p = eq_with(vec![band]);
         let (loud, _) = rms_after(&mut p, sine(0.5), sine(0.5));

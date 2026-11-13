@@ -180,7 +180,9 @@ pub fn run_cli(raw: Vec<String>) -> ExitCode {
 fn session(a: &Args) -> Result<ws::Endpoint, Fail> {
     let all = ws::sessions();
     match a.get("session") {
-        Some(id) => all.into_iter().find(|e| e.session_id.starts_with(id)).ok_or_else(|| Fail::Conn(format!("no running WAVE session {id}"))),
+        Some(id) => {
+            all.into_iter().find(|e| e.session_id.starts_with(id)).ok_or_else(|| Fail::Conn(format!("no running WAVE session {id}")))
+        }
         None => match all.len() {
             0 => Err(Fail::Conn("WAVE is not running (start the app, then try again)".into())),
             1 => Ok(all.into_iter().next().unwrap()),
@@ -192,7 +194,8 @@ fn session(a: &Args) -> Result<ws::Endpoint, Fail> {
 fn send(a: &Args, command: &str, args: Value) -> Result<Value, Fail> {
     let ep = session(a)?;
     let rev = a.num("if-revision").map_err(Fail::Usage)?.map(|v| v as u64);
-    let rep = ws::call(&ep, command, args, rev, a.get("label").map(str::to_owned)).map_err(|e| Fail::Conn(format!("could not reach WAVE: {e}")))?;
+    let rep = ws::call(&ep, command, args, rev, a.get("label").map(str::to_owned))
+        .map_err(|e| Fail::Conn(format!("could not reach WAVE: {e}")))?;
     if rep.ok {
         let mut d = rep.data;
         if let Value::Object(m) = &mut d {
@@ -213,10 +216,17 @@ fn id_or_name(s: &str) -> Value {
 fn run(cmd: &str, a: &Args) -> Result<Value, Fail> {
     let u = Fail::Usage;
     match cmd {
-        "sessions" => Ok(json!(ws::sessions().into_iter().map(|e| json!({"sessionId": e.session_id, "pid": e.pid, "project": e.project})).collect::<Vec<_>>())),
+        "sessions" => Ok(json!(ws::sessions()
+            .into_iter()
+            .map(|e| json!({"sessionId": e.session_id, "pid": e.pid, "project": e.project}))
+            .collect::<Vec<_>>())),
         "status" | "catalog" | "schema" | "undo" | "redo" | "stop" => send(a, cmd, json!({})),
         "context" => send(a, "context", json!({"full": a.has("full")})),
-        "analyze" => send(a, "music_analyze", json!({"clipId": a.num("clip").map_err(u)?.map(|v| v as u64), "excludeFx": a.num("exclude-fx").map_err(u)?.map(|v| v as u64)})),
+        "analyze" => send(
+            a,
+            "music_analyze",
+            json!({"clipId": a.num("clip").map_err(u)?.map(|v| v as u64), "excludeFx": a.num("exclude-fx").map_err(u)?.map(|v| v as u64)}),
+        ),
         "apply" => {
             let text = match (a.get("file"), a.get("json")) {
                 (Some(f), _) => std::fs::read_to_string(f).map_err(|e| u(format!("{f}: {e}")))?,
@@ -236,11 +246,26 @@ fn run(cmd: &str, a: &Args) -> Result<Value, Fail> {
             let v: f64 = a.pos.get(1).and_then(|s| s.parse().ok()).ok_or_else(|| u("bpm <value>".into()))?;
             send(a, "apply", json!({"ops": [{"op": "setBpm", "bpm": v}]}))
         }
-        "add-fx" => send(a, "add_fx", json!({"insertId": a.num("insert").map_err(u)?.ok_or_else(|| u("missing --insert".into()))? as u64, "type": a.need("type").map_err(u)?, "preset": a.num("preset").map_err(u)?})),
-        "set-param" => send(a, "set_param", json!({"fxId": a.num("fx").map_err(u)?.ok_or_else(|| u("missing --fx".into()))? as u64, "param": a.need("param").map_err(u)?, "value": a.num("value").map_err(u)?.ok_or_else(|| u("missing --value".into()))?})),
-        "preset" => send(a, "load_preset", json!({"fxId": a.num("fx").map_err(u)?.ok_or_else(|| u("missing --fx".into()))? as u64, "index": a.num("index").map_err(u)?.ok_or_else(|| u("missing --index".into()))? as u64})),
+        "add-fx" => send(
+            a,
+            "add_fx",
+            json!({"insertId": a.num("insert").map_err(u)?.ok_or_else(|| u("missing --insert".into()))? as u64, "type": a.need("type").map_err(u)?, "preset": a.num("preset").map_err(u)?}),
+        ),
+        "set-param" => send(
+            a,
+            "set_param",
+            json!({"fxId": a.num("fx").map_err(u)?.ok_or_else(|| u("missing --fx".into()))? as u64, "param": a.need("param").map_err(u)?, "value": a.num("value").map_err(u)?.ok_or_else(|| u("missing --value".into()))?}),
+        ),
+        "preset" => send(
+            a,
+            "load_preset",
+            json!({"fxId": a.num("fx").map_err(u)?.ok_or_else(|| u("missing --fx".into()))? as u64, "index": a.num("index").map_err(u)?.ok_or_else(|| u("missing --index".into()))? as u64}),
+        ),
         "import" => {
-            let files: Vec<String> = a.pos[1..].iter().map(|p| std::fs::canonicalize(p).map(|x| x.display().to_string()).unwrap_or_else(|_| p.clone())).collect();
+            let files: Vec<String> = a.pos[1..]
+                .iter()
+                .map(|p| std::fs::canonicalize(p).map(|x| x.display().to_string()).unwrap_or_else(|_| p.clone()))
+                .collect();
             if files.is_empty() {
                 return Err(u("import <file>...".into()));
             }
@@ -278,7 +303,8 @@ fn run(cmd: &str, a: &Args) -> Result<Value, Fail> {
         }
         "pattern" => {
             if a.has("play") || a.has("stop") {
-                let id = if a.has("stop") { None } else { Some(a.num("id").map_err(u)?.ok_or_else(|| u("--play needs --id".into()))? as u64) };
+                let id =
+                    if a.has("stop") { None } else { Some(a.num("id").map_err(u)?.ok_or_else(|| u("--play needs --id".into()))? as u64) };
                 return send(a, "pattern_play", json!({ "id": id }));
             }
             let mut args = json!({ "new": a.has("new"), "clear": a.has("clear") });
@@ -308,19 +334,14 @@ fn run(cmd: &str, a: &Args) -> Result<Value, Fail> {
                 .need("clip")
                 .map_err(u)?
                 .split(',')
-                .map(|x| {
-                    x.trim().parse::<u64>().map_err(|_| {
-                        u(format!(
-                            "--clip takes clip ids separated by commas, got {x}"
-                        ))
-                    })
-                })
+                .map(|x| x.trim().parse::<u64>().map_err(|_| u(format!("--clip takes clip ids separated by commas, got {x}"))))
                 .collect::<Result<Vec<_>, _>>()?;
             send(a, "make_unique", json!({ "clipIds": ids }))
         }
         "takes" => send(a, "takes", json!({"track": a.num("track").map_err(u)?.ok_or_else(|| u("missing --track".into()))? as u64})),
         "comp" => {
-            let mut args = json!({"track": a.num("track").map_err(u)?.map(|v| v as u64), "clip": a.num("clip").map_err(u)?.map(|v| v as u64)});
+            let mut args =
+                json!({"track": a.num("track").map_err(u)?.map(|v| v as u64), "clip": a.num("clip").map_err(u)?.map(|v| v as u64)});
             if args["track"].is_null() && args["clip"].is_null() {
                 return Err(u("comp needs --track N (or --clip ID)".into()));
             }
@@ -329,7 +350,11 @@ fn run(cmd: &str, a: &Args) -> Result<Value, Fail> {
             }
             if a.has("audition") {
                 let v = a.need("audition").map_err(u)?;
-                args["take"] = if v == "off" { Value::Null } else { json!(v.parse::<u64>().map_err(|_| u(format!("--audition takes a take id or `off`, got {v}")))?) };
+                args["take"] = if v == "off" {
+                    Value::Null
+                } else {
+                    json!(v.parse::<u64>().map_err(|_| u(format!("--audition takes a take id or `off`, got {v}")))?)
+                };
                 return send(a, "comp_audition", args);
             }
             if let Some(s) = a.get("set") {
@@ -350,17 +375,37 @@ fn run(cmd: &str, a: &Args) -> Result<Value, Fail> {
         "render" => {
             let out = a.need("out").map_err(u)?;
             let out = std::path::absolute(out).map(|p| p.display().to_string()).unwrap_or_else(|_| out.to_string());
-            send(a, "render", json!({"out": out, "from": a.num("from").map_err(u)?, "to": a.num("to").map_err(u)?, "tail": a.num("tail").map_err(u)?, "rate": a.num("rate").map_err(u)?, "format": a.get("format"), "mp3Kbps": a.num("kbps").map_err(u)?, "stems": a.has("stems"), "master": !a.has("no-master")}))
+            send(
+                a,
+                "render",
+                json!({"out": out, "from": a.num("from").map_err(u)?, "to": a.num("to").map_err(u)?, "tail": a.num("tail").map_err(u)?, "rate": a.num("rate").map_err(u)?, "format": a.get("format"), "mp3Kbps": a.num("kbps").map_err(u)?, "stems": a.has("stems"), "master": !a.has("no-master")}),
+            )
         }
-        "save" => send(a, "save", json!({"path": a.get("path").map(|p| std::path::absolute(p).map(|x| x.display().to_string()).unwrap_or_else(|_| p.to_string()))})),
+        "save" => send(
+            a,
+            "save",
+            json!({"path": a.get("path").map(|p| std::path::absolute(p).map(|x| x.display().to_string()).unwrap_or_else(|_| p.to_string()))}),
+        ),
         "open" => {
             let p = a.pos.get(1).ok_or_else(|| u("open <file>".into()))?;
             send(a, "open", json!({"path": std::path::absolute(p).map(|x| x.display().to_string()).unwrap_or_else(|_| p.clone())}))
         }
         "vst3" => send(a, "vst3_scan", json!({"rescan": a.has("rescan")})),
-        "vst3-add" => send(a, "vst3_add", json!({"insertId": a.num("insert").map_err(u)?.ok_or_else(|| u("missing --insert".into()))? as u64, "path": a.need("path").map_err(u)?, "cid": a.need("cid").map_err(u)?})),
-        "vst3-params" => send(a, "vst3_params", json!({"fxId": a.num("fx").map_err(u)?.ok_or_else(|| u("missing --fx".into()))? as u64, "query": a.get("query")})),
-        "vst3-set" => send(a, "vst3_set_param", json!({"fxId": a.num("fx").map_err(u)?.ok_or_else(|| u("missing --fx".into()))? as u64, "id": a.num("id").map_err(u)?.ok_or_else(|| u("missing --id".into()))? as u64, "value": a.num("value").map_err(u)?.ok_or_else(|| u("missing --value".into()))?})),
+        "vst3-add" => send(
+            a,
+            "vst3_add",
+            json!({"insertId": a.num("insert").map_err(u)?.ok_or_else(|| u("missing --insert".into()))? as u64, "path": a.need("path").map_err(u)?, "cid": a.need("cid").map_err(u)?}),
+        ),
+        "vst3-params" => send(
+            a,
+            "vst3_params",
+            json!({"fxId": a.num("fx").map_err(u)?.ok_or_else(|| u("missing --fx".into()))? as u64, "query": a.get("query")}),
+        ),
+        "vst3-set" => send(
+            a,
+            "vst3_set_param",
+            json!({"fxId": a.num("fx").map_err(u)?.ok_or_else(|| u("missing --fx".into()))? as u64, "id": a.num("id").map_err(u)?.ok_or_else(|| u("missing --id".into()))? as u64, "value": a.num("value").map_err(u)?.ok_or_else(|| u("missing --value".into()))?}),
+        ),
         "auto-add" => {
             // an automation envelope on a hosted VST3 parameter, plus the playlist clip that plays it
             let fx = a.num("fx").map_err(u)?.ok_or_else(|| u("missing --fx".into()))? as u64;
@@ -389,20 +434,36 @@ fn run(cmd: &str, a: &Args) -> Result<Value, Fail> {
             let track = a.num("track").map_err(u)?.unwrap_or(0.0) as u64;
             let name = a.get("name").unwrap_or("Automation").to_string();
             let len = points.iter().filter_map(|p| p["t"].as_f64()).fold(1.0, f64::max) + 1.0;
-            send(a, "apply", json!({"ops": [
-                {"op": "putAutomation", "automation": {"id": auto_id, "name": name, "color": "#e0a44a", "target": {"kind": "plugin", "fxId": fx, "paramId": param}, "points": points}},
-                {"op": "putClips", "clips": [{"id": clip_id, "track": track, "start": 0.0, "len": len, "offset": 0.0, "kind": "auto", "ref": auto_id, "muted": false, "gain": 0.0, "fadeIn": 0.0, "fadeOut": 0.0, "pan": 0.0, "norm": false, "rev": false}]}
-            ]}))
+            send(
+                a,
+                "apply",
+                json!({"ops": [
+                    {"op": "putAutomation", "automation": {"id": auto_id, "name": name, "color": "#e0a44a", "target": {"kind": "plugin", "fxId": fx, "paramId": param}, "points": points}},
+                    {"op": "putClips", "clips": [{"id": clip_id, "track": track, "start": 0.0, "len": len, "offset": 0.0, "kind": "auto", "ref": auto_id, "muted": false, "gain": 0.0, "fadeIn": 0.0, "fadeOut": 0.0, "pan": 0.0, "norm": false, "rev": false}]}
+                ]}),
+            )
         }
         "notes" => {
             let verb = a.pos.get(1).ok_or_else(|| u("notes <humanize|quantize|euclid|strum|drums|melody> …".into()))?.clone();
             let pattern = a.num("pattern").map_err(u)?.ok_or_else(|| u("missing --pattern".into()))? as u64;
             let f = |k: &str| a.num(k);
             let (verb_json, needs_ch) = match verb.as_str() {
-                "humanize" => (json!({"kind": "humanize", "timing": f("timing").map_err(u)?.unwrap_or(0.5), "velocity": f("velocity").map_err(u)?.unwrap_or(0.4)}), false),
-                "quantize" => (json!({"kind": "quantize", "grid": f("grid").map_err(u)?.unwrap_or(1.0), "amount": f("amount").map_err(u)?.unwrap_or(1.0), "scaleAware": a.has("scale")}), false),
-                "euclid" => (json!({"kind": "euclidFill", "ch": f("ch").map_err(u)?.ok_or_else(|| u("missing --ch".into()))? as u64, "k": f("k").map_err(u)?.ok_or_else(|| u("missing --k".into()))? as u32, "n": f("n").map_err(u)?.ok_or_else(|| u("missing --n".into()))? as u32, "rotate": f("rotate").map_err(u)?.unwrap_or(0.0) as i32, "vel": f("vel").map_err(u)?.unwrap_or(0.7)}), true),
-                "strum" => (json!({"kind": "strum", "width": f("width").map_err(u)?.unwrap_or(0.5), "ramp": f("ramp").map_err(u)?.unwrap_or(0.05)}), false),
+                "humanize" => (
+                    json!({"kind": "humanize", "timing": f("timing").map_err(u)?.unwrap_or(0.5), "velocity": f("velocity").map_err(u)?.unwrap_or(0.4)}),
+                    false,
+                ),
+                "quantize" => (
+                    json!({"kind": "quantize", "grid": f("grid").map_err(u)?.unwrap_or(1.0), "amount": f("amount").map_err(u)?.unwrap_or(1.0), "scaleAware": a.has("scale")}),
+                    false,
+                ),
+                "euclid" => (
+                    json!({"kind": "euclidFill", "ch": f("ch").map_err(u)?.ok_or_else(|| u("missing --ch".into()))? as u64, "k": f("k").map_err(u)?.ok_or_else(|| u("missing --k".into()))? as u32, "n": f("n").map_err(u)?.ok_or_else(|| u("missing --n".into()))? as u32, "rotate": f("rotate").map_err(u)?.unwrap_or(0.0) as i32, "vel": f("vel").map_err(u)?.unwrap_or(0.7)}),
+                    true,
+                ),
+                "strum" => (
+                    json!({"kind": "strum", "width": f("width").map_err(u)?.unwrap_or(0.5), "ramp": f("ramp").map_err(u)?.unwrap_or(0.05)}),
+                    false,
+                ),
                 "drums" => {
                     let mut voices = vec![];
                     for (i, v) in a.get_all("voice").iter().enumerate() {
@@ -412,7 +473,9 @@ fn run(cmd: &str, a: &Args) -> Result<Value, Fail> {
                         }
                         let num = |i: usize, name: &str| match parts.get(i) {
                             // absent → the caller's default; present-but-malformed → an error
-                            Some(x) => x.trim().parse::<f64>().map(Some).map_err(|_| u(format!("--voice {i}: bad number `{x}` for {name}"))),
+                            Some(x) => {
+                                x.trim().parse::<f64>().map(Some).map_err(|_| u(format!("--voice {i}: bad number `{x}` for {name}")))
+                            }
                             None => Ok(None),
                         };
                         voices.push(json!({"ch": num(0, "CH")?.ok_or_else(|| u(format!("--voice {i}: missing CH")))? as u64,
@@ -425,7 +488,10 @@ fn run(cmd: &str, a: &Args) -> Result<Value, Fail> {
                     }
                     (json!({"kind": "euclidDrums", "voices": voices, "bars": f("bars").map_err(u)?.unwrap_or(2.0) as u32}), false)
                 }
-                "melody" => (json!({"kind": "melody", "ch": f("ch").map_err(u)?.ok_or_else(|| u("missing --ch".into()))? as u64, "bars": f("bars").map_err(u)?.unwrap_or(2.0) as u32, "density": f("density").map_err(u)?.unwrap_or(0.5), "repeat": f("repeat").map_err(u)?.unwrap_or(1.0) as u32}), true),
+                "melody" => (
+                    json!({"kind": "melody", "ch": f("ch").map_err(u)?.ok_or_else(|| u("missing --ch".into()))? as u64, "bars": f("bars").map_err(u)?.unwrap_or(2.0) as u32, "density": f("density").map_err(u)?.unwrap_or(0.5), "repeat": f("repeat").map_err(u)?.unwrap_or(1.0) as u32}),
+                    true,
+                ),
                 other => return Err(u(format!("unknown notes verb `{other}` (humanize|quantize|euclid|strum|drums|melody)"))),
             };
             if needs_ch {
@@ -448,7 +514,8 @@ fn run(cmd: &str, a: &Args) -> Result<Value, Fail> {
                 op["select"] = node;
             } else if let Some(ix) = a.get("indices") {
                 let list: Result<Vec<u64>, _> = ix.split(',').map(|x| x.trim().parse::<u64>()).collect();
-                op["select"] = json!({"kind": "indices", "indices": list.map_err(|_| u("--indices is a comma list of note indices".into()))?});
+                op["select"] =
+                    json!({"kind": "indices", "indices": list.map_err(|_| u("--indices is a comma list of note indices".into()))?});
             }
             send(a, "apply", json!({"ops": [op]}))
         }
@@ -459,13 +526,20 @@ fn run(cmd: &str, a: &Args) -> Result<Value, Fail> {
             let note_names = ["C", "C#", "D", "D#", "E", "F", "F#", "G", "G#", "A", "A#", "B"];
             let scales = ["chromatic", "major", "minor", "major pentatonic", "minor pentatonic"];
             let note = a.pos.get(1).ok_or_else(|| u("key <NOTE> [SCALE] | key --off  (e.g. key C minor)".into()))?;
-            let key_id = note_names.iter().position(|n| n.eq_ignore_ascii_case(note))
-                .ok_or_else(|| u(format!("unknown note `{note}` (C…B)")))? as u64;
-            let scale = a.pos.get(2).map(|sc| {
-                scales.iter().position(|n| n.eq_ignore_ascii_case(sc))
-                    .map(|i| i as u64)
-                    .ok_or_else(|| u(format!("unknown scale `{sc}` ({} )", scales.join(", "))))
-            }).transpose()?;
+            let key_id =
+                note_names.iter().position(|n| n.eq_ignore_ascii_case(note)).ok_or_else(|| u(format!("unknown note `{note}` (C…B)")))?
+                    as u64;
+            let scale = a
+                .pos
+                .get(2)
+                .map(|sc| {
+                    scales
+                        .iter()
+                        .position(|n| n.eq_ignore_ascii_case(sc))
+                        .map(|i| i as u64)
+                        .ok_or_else(|| u(format!("unknown scale `{sc}` ({} )", scales.join(", "))))
+                })
+                .transpose()?;
             send(a, "apply", json!({"ops": [{"op": "setKey", "key": key_id, "scale": scale.unwrap_or(1)}]}))
         }
         "call" => {
@@ -476,9 +550,14 @@ fn run(cmd: &str, a: &Args) -> Result<Value, Fail> {
             };
             send(a, c, args)
         }
-        "pitch-target" => send(a, "pitch_target", json!({"clipId": a.num("clip").map_err(u)?.ok_or_else(|| u("missing --clip".into()))? as u64, "full": a.has("full")})),
+        "pitch-target" => send(
+            a,
+            "pitch_target",
+            json!({"clipId": a.num("clip").map_err(u)?.ok_or_else(|| u("missing --clip".into()))? as u64, "full": a.has("full")}),
+        ),
         "tune-ref" => {
-            let mut args = json!({"clipId": a.num("clip").map_err(u)?.ok_or_else(|| u("missing --clip".into()))? as u64, "off": a.has("off")});
+            let mut args =
+                json!({"clipId": a.num("clip").map_err(u)?.ok_or_else(|| u("missing --clip".into()))? as u64, "off": a.has("off")});
             for k in ["reference", "correction", "vibrato", "influence", "key", "scale", "speed"] {
                 if let Some(v) = a.num(k).map_err(u)? {
                     args[k] = json!(v);
@@ -494,7 +573,9 @@ fn run(cmd: &str, a: &Args) -> Result<Value, Fail> {
             }
             send(a, "tune_ref", args)
         }
-        "melody-channels" => send(a, "melody_channels", json!({"clipId": a.num("clip").map_err(u)?.ok_or_else(|| u("missing --clip".into()))? as u64})),
+        "melody-channels" => {
+            send(a, "melody_channels", json!({"clipId": a.num("clip").map_err(u)?.ok_or_else(|| u("missing --clip".into()))? as u64}))
+        }
         "f0-model" => send(a, "f0_model", json!({})),
         "tune-file" => tune_file(a),
         other => Err(u(format!("unknown command `{other}`"))),
@@ -517,7 +598,12 @@ fn tune_file(a: &Args) -> Result<Value, Fail> {
     };
     let octave = match a.get("octave") {
         None | Some("auto") => None,
-        Some(o) => Some(o.parse::<i32>().ok().filter(|o| o % 12 == 0 && o.abs() <= 36).ok_or_else(|| u("--octave is auto or a multiple of 12 within ±36".into()))?),
+        Some(o) => Some(
+            o.parse::<i32>()
+                .ok()
+                .filter(|o| o % 12 == 0 && o.abs() <= 36)
+                .ok_or_else(|| u("--octave is auto or a multiple of 12 within ±36".into()))?,
+        ),
     };
     let params = wave_engine::RefTune {
         source: 0,
@@ -548,5 +634,7 @@ fn tune_file(a: &Args) -> Result<Value, Fail> {
         let text = serde_json::to_string(&target).map_err(|e| Fail::App(e.to_string()))?;
         std::fs::write(j, text).map_err(|e| Fail::App(format!("{j}: {e}")))?;
     }
-    Ok(json!({ "out": out_p, "backend": analysis.backend, "corrected": target.reason.is_none(), "reason": target.reason, "score": target.score, "octave": target.octave, "notes": target.notes.len(), "seconds": out.seconds() }))
+    Ok(
+        json!({ "out": out_p, "backend": analysis.backend, "corrected": target.reason.is_none(), "reason": target.reason, "score": target.score, "octave": target.octave, "notes": target.notes.len(), "seconds": out.seconds() }),
+    )
 }

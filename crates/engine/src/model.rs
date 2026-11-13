@@ -193,11 +193,7 @@ impl WarpSlot {
         }
         let (a, b) = (p[i - 1], p[i]);
         let f = (x - a.t) / (b.t - a.t).max(1e-9);
-        let t = if b.shape == CurveShape::Curve {
-            (b.tension + tension_add).clamp(-1.0, 1.0)
-        } else {
-            b.tension
-        };
+        let t = if b.shape == CurveShape::Curve { (b.tension + tension_add).clamp(-1.0, 1.0) } else { b.tension };
         let g = curve_at(b.shape, t, f);
         (a.v as f64 + (b.v as f64 - a.v as f64) * g) as f32
     }
@@ -292,7 +288,8 @@ pub struct PluginRef {
 pub const SAMPLE_ROOT: u8 = 60;
 
 /// Standard-library files of a new project's channels, and the channel names.
-pub const STARTER_KIT: [(&str, &str); 4] = [("kick-808-short.flac", "Kick"), ("clap-808.flac", "Clap"), ("hat-808-closed.flac", "Hat"), ("snare-808.flac", "Snare")];
+pub const STARTER_KIT: [(&str, &str); 4] =
+    [("kick-808-short.flac", "Kick"), ("clap-808.flac", "Clap"), ("hat-808-closed.flac", "Hat"), ("snare-808.flac", "Snare")];
 
 /// What a channel plays.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -305,9 +302,15 @@ pub enum ChannelSrc {
         sampler: SamplerState,
     },
     /// The built-in polyphonic synthesizer (see `crate::poly`).
-    Synth { #[serde(default)] synth: SynthState },
+    Synth {
+        #[serde(default)]
+        synth: SynthState,
+    },
     /// WAVE Keys: the sampled grand piano (see `crate::keys`).
-    Keys { #[serde(default)] keys: KeysState },
+    Keys {
+        #[serde(default)]
+        keys: KeysState,
+    },
 }
 
 /// How a sampler channel plays its sample (FL Studio's Sampler, Ableton's Simpler).
@@ -373,7 +376,11 @@ impl SamplerState {
         if !(Self::SEMI.0..=Self::SEMI.1).contains(&self.semi) || !within(self.fine, Self::FINE) {
             return Err("sampler pitch is -24..24 semitones and -100..100 cents".into());
         }
-        if !within(self.attack, Self::ATTACK_MS) || !within(self.decay, Self::DECAY_MS) || !within(self.sustain, (0.0, 1.0)) || !within(self.release, Self::RELEASE_MS) {
+        if !within(self.attack, Self::ATTACK_MS)
+            || !within(self.decay, Self::DECAY_MS)
+            || !within(self.sustain, (0.0, 1.0))
+            || !within(self.release, Self::RELEASE_MS)
+        {
             return Err("sampler envelope: attack 0..2000 ms, decay 0..5000 ms, sustain 0..1, release 1..5000 ms".into());
         }
         if self.cut > Self::CUT_GROUPS {
@@ -385,7 +392,20 @@ impl SamplerState {
 
 impl Default for SamplerState {
     fn default() -> Self {
-        Self { start: 0.0, end: 1.0, reverse: false, norm: false, semi: 0, fine: 0.0, gate: false, attack: 0.0, decay: 0.0, sustain: 1.0, release: Self::RELEASE_DEFAULT, cut: 0 }
+        Self {
+            start: 0.0,
+            end: 1.0,
+            reverse: false,
+            norm: false,
+            semi: 0,
+            fine: 0.0,
+            gate: false,
+            attack: 0.0,
+            decay: 0.0,
+            sustain: 1.0,
+            release: Self::RELEASE_DEFAULT,
+            cut: 0,
+        }
     }
 }
 
@@ -464,7 +484,18 @@ fn sample_root() -> u8 {
 impl Channel {
     /// A channel at unity, centred, following its clip's track, rooted at C5.
     pub fn new(id: Id, name: &str, color: &str, src: ChannelSrc) -> Self {
-        Self { id, name: name.into(), color: color.into(), src, vol: VOL_UNITY, pan: 0.0, mute: false, solo: false, insert: None, root: SAMPLE_ROOT }
+        Self {
+            id,
+            name: name.into(),
+            color: color.into(),
+            src,
+            vol: VOL_UNITY,
+            pan: 0.0,
+            mute: false,
+            solo: false,
+            insert: None,
+            root: SAMPLE_ROOT,
+        }
     }
     /// A sampler channel playing `source` with the default settings.
     pub fn sampler(id: Id, name: &str, color: &str, source: Id) -> Self {
@@ -604,26 +635,54 @@ pub enum ClipKind {
 #[serde(tag = "kind", rename_all = "camelCase", rename_all_fields = "camelCase")]
 pub enum AutoTarget {
     /// A built-in effect parameter (catalog id), or `band:<i>:f|g|q` of an EQ.
-    Fx { fx_id: Id, param: String },
+    Fx {
+        fx_id: Id,
+        param: String,
+    },
     /// An effect's dry/wet.
-    Mix { fx_id: Id },
-    InsertVol { id: Id },
-    InsertPan { id: Id },
-    TrackVol { id: Id },
+    Mix {
+        fx_id: Id,
+    },
+    InsertVol {
+        id: Id,
+    },
+    InsertPan {
+        id: Id,
+    },
+    TrackVol {
+        id: Id,
+    },
     /// A Channel Rack channel's volume (fader position 0..1, like `vol`) and pan.
-    ChanVol { id: Id },
-    ChanPan { id: Id },
+    ChanVol {
+        id: Id,
+    },
+    ChanPan {
+        id: Id,
+    },
     /// A synth channel's patch parameter (catalog id, `poly::params`).
-    Synth { chan_id: Id, param: String },
+    Synth {
+        chan_id: Id,
+        param: String,
+    },
     /// A WAVE Keys channel's `release` (ms, logarithmic) or `dynamics` (%).
-    Keys { chan_id: Id, param: String },
+    Keys {
+        chan_id: Id,
+        param: String,
+    },
     /// A hosted VST3 parameter (`param_id` is the plugin's own id, as
     /// `vst3_params` reports it). The envelope value is the plugin's
     /// normalized 0..1.
-    Plugin { fx_id: Id, param_id: u32 },
+    Plugin {
+        fx_id: Id,
+        param_id: u32,
+    },
     /// An audio clip's own gain (−24..+12 dB) and pan.
-    ClipGain { id: Id },
-    ClipPan { id: Id },
+    ClipGain {
+        id: Id,
+    },
+    ClipPan {
+        id: Id,
+    },
 }
 
 /// How an automation segment travels from the previous point to this one (FL's curve types).
@@ -710,7 +769,7 @@ pub fn curve_at(shape: CurveShape, tension: f32, f: f64) -> f64 {
         CurveShape::Pulse => {
             if f >= 1.0 {
                 return 1.0;
-    }
+            }
             let n = cycles_of(tension) as f64;
             if (f * n).fract() < 0.5 {
                 1.0
@@ -1207,7 +1266,8 @@ impl Project {
     /// were channels); those now play the closest standard-library sample.
     pub fn from_json(mut v: serde_json::Value) -> Result<Self, serde_json::Error> {
         use serde_json::{json, Value};
-        const LEGACY: [(&str, &str); 4] = [("kick", "kick-808-short.flac"), ("clap", "clap-808.flac"), ("hat", "hat-808-closed.flac"), ("bass", "bass-808-short.flac")];
+        const LEGACY: [(&str, &str); 4] =
+            [("kick", "kick-808-short.flac"), ("clap", "clap-808.flac"), ("hat", "hat-808-closed.flac"), ("bass", "bass-808-short.flac")];
         let file_of = |inst: &Value| LEGACY.iter().find(|(k, _)| inst.as_str() == Some(k)).map(|(_, f)| *f);
         // (channel index or None for "notes of this instrument", file)
         let mut chans: Vec<(usize, &str)> = vec![];
@@ -1294,9 +1354,7 @@ impl Project {
     }
 
     pub fn find_fx(&self, fx_id: Id) -> Option<(&Insert, &Fx)> {
-        self.inserts
-            .iter()
-            .find_map(|m| m.fx.iter().find(|f| f.id == fx_id).map(|f| (m, f)))
+        self.inserts.iter().find_map(|m| m.fx.iter().find(|f| f.id == fx_id).map(|f| (m, f)))
     }
 
     /// End of the last clip, rounded up to a bar; at least one bar.

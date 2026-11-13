@@ -146,7 +146,14 @@ async fn transport_stop(app: St<'_>) -> R<()> {
 }
 
 #[tauri::command]
-async fn transport_set(app: St<'_>, metro: Option<bool>, count_in: Option<bool>, rec: Option<bool>, monitor: Option<bool>, start_beat: Option<f64>) -> R<wave_engine::TransportDto> {
+async fn transport_set(
+    app: St<'_>,
+    metro: Option<bool>,
+    count_in: Option<bool>,
+    rec: Option<bool>,
+    monitor: Option<bool>,
+    start_beat: Option<f64>,
+) -> R<wave_engine::TransportDto> {
     let e = app.engine.clone();
     let t = tauri::async_runtime::spawn_blocking(move || {
         if let Some(b) = start_beat {
@@ -224,7 +231,11 @@ async fn melody_reference(app: St<'_>, clip_id: u64, channel: u64, span: Option<
 }
 
 #[tauri::command]
-async fn pitch_target(app: St<'_>, clip_id: u64, reference: Option<wave_engine::RefTune>) -> R<std::sync::Arc<wave_engine::reference::PitchTarget>> {
+async fn pitch_target(
+    app: St<'_>,
+    clip_id: u64,
+    reference: Option<wave_engine::RefTune>,
+) -> R<std::sync::Arc<wave_engine::reference::PitchTarget>> {
     let e = app.engine.clone();
     tauri::async_runtime::spawn_blocking(move || e.pitch_target(clip_id, reference)).await.map_err(es)?.map_err(es)
 }
@@ -264,9 +275,20 @@ async fn music_analyze(app: St<'_>, clip_id: Option<u64>, exclude_fx: Option<u64
 /// `bake_rider: true`: the rider is left out of `chain` and returned as `riderBake`, for
 /// `bake_rider` (then the chain goes on the insert with no live look-ahead delay).
 #[tauri::command]
-async fn auto_vocal_plan(app: St<'_>, clip_id: u64, beat_clip_id: Option<u64>, style: Option<wave_engine::autovocal::Style>, bake_rider: Option<bool>) -> R<wave_engine::autovocal::AutoVocalPlan> {
+async fn auto_vocal_plan(
+    app: St<'_>,
+    clip_id: u64,
+    beat_clip_id: Option<u64>,
+    style: Option<wave_engine::autovocal::Style>,
+    bake_rider: Option<bool>,
+) -> R<wave_engine::autovocal::AutoVocalPlan> {
     let e = app.engine.clone();
-    tauri::async_runtime::spawn_blocking(move || e.auto_vocal_plan(clip_id, beat_clip_id, style.unwrap_or_default(), bake_rider.unwrap_or(false))).await.map_err(es)?.map_err(es)
+    tauri::async_runtime::spawn_blocking(move || {
+        e.auto_vocal_plan(clip_id, beat_clip_id, style.unwrap_or_default(), bake_rider.unwrap_or(false))
+    })
+    .await
+    .map_err(es)?
+    .map_err(es)
 }
 
 /// Renders the Vocal Rider (`params`, e.g. a plan's `riderBake.params`) into an audio clip's
@@ -299,10 +321,7 @@ async fn trim_clip(app: St<'_>, clip_id: u64) -> R<Value> {
 #[tauri::command]
 async fn make_unique(app: St<'_>, clip_ids: Vec<u64>) -> R<Value> {
     let e = app.engine.clone();
-    let r = tauri::async_runtime::spawn_blocking(move || e.make_unique_audio(&clip_ids))
-        .await
-        .map_err(es)?
-        .map_err(es)?;
+    let r = tauri::async_runtime::spawn_blocking(move || e.make_unique_audio(&clip_ids)).await.map_err(es)?.map_err(es)?;
     Ok(json!(r))
 }
 
@@ -551,10 +570,7 @@ async fn project_open(app: St<'_>, handle: AppHandle, path: Option<String>, if_r
     let Some(path) = path else { return Ok(json!({ "cancelled": true })) };
     let e = app.engine.clone();
     let p2 = path.clone();
-    let warnings = tauri::async_runtime::spawn_blocking(move || e.open_at_revision(&p2, Some(revision)))
-        .await
-        .map_err(es)?
-        .map_err(es)?;
+    let warnings = tauri::async_runtime::spawn_blocking(move || e.open_at_revision(&p2, Some(revision))).await.map_err(es)?.map_err(es)?;
     app.recovery.clear();
     let mut s = app.settings.lock();
     s.last_project = Some(path.display().to_string());
@@ -567,7 +583,13 @@ async fn project_save(app: St<'_>, handle: AppHandle, save_as: Option<bool>) -> 
     let cur = app.engine.state().path.map(PathBuf::from);
     let path = match (cur, save_as.unwrap_or(false)) {
         (Some(p), false) => Some(p),
-        _ => handle.dialog().file().add_filter("WAVE project", &["wave"]).set_file_name("Song.wave").blocking_save_file().and_then(|p| p.into_path().ok()),
+        _ => handle
+            .dialog()
+            .file()
+            .add_filter("WAVE project", &["wave"])
+            .set_file_name("Song.wave")
+            .blocking_save_file()
+            .and_then(|p| p.into_path().ok()),
     };
     let Some(mut path) = path else { return Ok(json!({ "cancelled": true })) };
     if path.extension().is_none() {
@@ -617,7 +639,15 @@ async fn recovery_discard(app: St<'_>, id: String) -> R<()> {
 /// Opens a native save dialog first. The render runs off the UI thread so playback
 /// keeps going; call `export_cancel` to abort before a file is written.
 #[tauri::command]
-async fn export_audio(app: St<'_>, handle: AppHandle, use_loop: bool, tail: f64, sample_rate: u32, format: Option<String>, mp3_kbps: Option<u32>) -> R<Value> {
+async fn export_audio(
+    app: St<'_>,
+    handle: AppHandle,
+    use_loop: bool,
+    tail: f64,
+    sample_rate: u32,
+    format: Option<String>,
+    mp3_kbps: Option<u32>,
+) -> R<Value> {
     let fmt = actions::ExportFormat::parse(format.as_deref(), mp3_kbps)?;
     let ext = fmt.extension();
     if !(sample_rate == 44_100 || sample_rate == 48_000) {
@@ -649,11 +679,10 @@ async fn export_audio(app: St<'_>, handle: AppHandle, use_loop: bool, tail: f64,
     app.export_cancel.store(false, Ordering::Relaxed);
     let a = app.inner().clone();
     let out = path.clone();
-    let result = tauri::async_runtime::spawn_blocking(move || {
-        actions::render_to_file(&a, &out, from, to, tail, sample_rate, &a.export_cancel, fmt)
-    })
-    .await
-    .map_err(es)?;
+    let result =
+        tauri::async_runtime::spawn_blocking(move || actions::render_to_file(&a, &out, from, to, tail, sample_rate, &a.export_cancel, fmt))
+            .await
+            .map_err(es)?;
     match result {
         Ok(v) => Ok(v),
         Err(e) if e == "cancelled" => Ok(json!({ "cancelled": true })),
@@ -668,14 +697,7 @@ async fn export_audio(app: St<'_>, handle: AppHandle, use_loop: bool, tail: f64,
 /// Progress goes out as `export-progress` events `{ done, total, name }`; call `export_cancel` to
 /// abort (no file is left behind, see `actions::render_stems_to_dir`).
 #[tauri::command]
-async fn export_stems(
-    app: St<'_>,
-    handle: AppHandle,
-    use_loop: bool,
-    tail: f64,
-    sample_rate: u32,
-    include_master: bool,
-) -> R<Value> {
+async fn export_stems(app: St<'_>, handle: AppHandle, use_loop: bool, tail: f64, sample_rate: u32, include_master: bool) -> R<Value> {
     if !(sample_rate == 44_100 || sample_rate == 48_000) {
         return Err("sample rate must be 44100 or 48000".into());
     }
@@ -683,12 +705,7 @@ async fn export_stems(
         return Err("tail must be 0, 2 or 8 seconds".into());
     }
     let (from, to) = Engine::export_range(&app.engine.state().project, use_loop);
-    let Some(dir) = handle
-        .dialog()
-        .file()
-        .blocking_pick_folder()
-        .and_then(|p| p.into_path().ok())
-    else {
+    let Some(dir) = handle.dialog().file().blocking_pick_folder().and_then(|p| p.into_path().ok()) else {
         return Ok(json!({ "cancelled": true }));
     };
     app.export_cancel.store(false, Ordering::Relaxed);
@@ -696,24 +713,11 @@ async fn export_stems(
     let h = handle.clone();
     let result = tauri::async_runtime::spawn_blocking(move || {
         let progress = |done: usize, total: usize, name: &str| {
-            let _ = h.emit(
-                "export-progress",
-                json!({ "done": done, "total": total, "name": name }),
-            );
+            let _ = h.emit("export-progress", json!({ "done": done, "total": total, "name": name }));
         };
         // a stem export must not start while the piano is still loading (its stems would be silent)
         keys::wait(&a);
-        actions::render_stems_to_dir(
-            &a.engine,
-            &dir,
-            from,
-            to,
-            tail,
-            sample_rate,
-            &a.export_cancel,
-            include_master,
-            &progress,
-        )
+        actions::render_stems_to_dir(&a.engine, &dir, from, to, tail, sample_rate, &a.export_cancel, include_master, &progress)
     })
     .await
     .map_err(es)?;
@@ -762,7 +766,12 @@ async fn vst3_set_param(app: St<'_>, fx_id: u64, id: u32, value: f64) -> R<()> {
 #[tauri::command]
 async fn app_info(app: St<'_>, handle: AppHandle) -> R<updater::AppInfo> {
     let s = app.settings.lock();
-    Ok(updater::AppInfo { version: handle.package_info().version.to_string(), seen_version: s.seen_version.clone(), auto_update: !s.no_auto_update, plugin_editors: cfg!(windows) })
+    Ok(updater::AppInfo {
+        version: handle.package_info().version.to_string(),
+        seen_version: s.seen_version.clone(),
+        auto_update: !s.no_auto_update,
+        plugin_editors: cfg!(windows),
+    })
 }
 
 #[tauri::command]
@@ -866,8 +875,7 @@ pub fn run(project_arg: Option<&str>) {
     boot.mark("run() entered");
     let setup_boot = boot.clone();
     let cwd = std::env::current_dir().ok();
-    let launch_project =
-        project_arg.and_then(|arg| project_launch::project_path(arg, cwd.as_deref()));
+    let launch_project = project_arg.and_then(|arg| project_launch::project_path(arg, cwd.as_deref()));
     let reopen_last = launch_project.is_none();
     let requests = ProjectOpenRequests(Mutex::new(launch_project.into_iter().collect()));
 
@@ -893,15 +901,79 @@ pub fn run(project_arg: Option<&str>) {
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
-            get_state, apply_ops, begin_gesture, end_gesture, undo, redo, fx_catalog,
-            transport_play, transport_stop, transport_set, telemetry_subscribe, watch_fx,
-            import_audio, source_peaks, clip_peaks, pitch_analyze, pitch_target, melody_channels, melody_reference, f0_model_status, f0_model_install, music_analyze, auto_vocal_plan, bake_rider, trim_clip, make_unique, flatten_comp, comp_audition, preview_clip, preview_file, preview_stop, note_audition, typing_note, pattern_play,
-            audio_hosts, audio_devices, audio_get_config, audio_set_config, audio_measure_latency,
-            midi_list_devices, midi_select_device, midi_status, midi_set_target,
-            library_list, library_install, keys_status, library_files, library_add_folder, library_remove_folder,
-            project_new, project_open, take_project_open_requests, project_save, recovery_write, recovery_list, recovery_restore, recovery_discard, export_audio, export_stems, export_cancel,
-            vst3_scan, vst3_add, vst3_editor, vst3_params, vst3_set_param, cli_status,
-            app_info, update_set_auto, update_mark_seen, update_check, update_download, update_install, open_release_page
+            get_state,
+            apply_ops,
+            begin_gesture,
+            end_gesture,
+            undo,
+            redo,
+            fx_catalog,
+            transport_play,
+            transport_stop,
+            transport_set,
+            telemetry_subscribe,
+            watch_fx,
+            import_audio,
+            source_peaks,
+            clip_peaks,
+            pitch_analyze,
+            pitch_target,
+            melody_channels,
+            melody_reference,
+            f0_model_status,
+            f0_model_install,
+            music_analyze,
+            auto_vocal_plan,
+            bake_rider,
+            trim_clip,
+            make_unique,
+            flatten_comp,
+            comp_audition,
+            preview_clip,
+            preview_file,
+            preview_stop,
+            note_audition,
+            typing_note,
+            pattern_play,
+            audio_hosts,
+            audio_devices,
+            audio_get_config,
+            audio_set_config,
+            audio_measure_latency,
+            midi_list_devices,
+            midi_select_device,
+            midi_status,
+            midi_set_target,
+            library_list,
+            library_install,
+            keys_status,
+            library_files,
+            library_add_folder,
+            library_remove_folder,
+            project_new,
+            project_open,
+            take_project_open_requests,
+            project_save,
+            recovery_write,
+            recovery_list,
+            recovery_restore,
+            recovery_discard,
+            export_audio,
+            export_stems,
+            export_cancel,
+            vst3_scan,
+            vst3_add,
+            vst3_editor,
+            vst3_params,
+            vst3_set_param,
+            cli_status,
+            app_info,
+            update_set_auto,
+            update_mark_seen,
+            update_check,
+            update_download,
+            update_install,
+            open_release_page
         ])
         .build(tauri::generate_context!())
         .expect("error while building WAVE");
@@ -922,11 +994,7 @@ fn start_app(tapp: &mut tauri::App, boot: Arc<boot::Boot>, reopen_last: bool) {
     let plugins = plugins::Plugins::new();
     let settings = settings::Settings::load();
     // reopened on a thread of its own once the window exists (decoding its audio is slow)
-    let last_project = settings
-        .last_project
-        .as_ref()
-        .filter(|p| reopen_last && std::path::Path::new(p).is_file())
-        .cloned();
+    let last_project = settings.last_project.as_ref().filter(|p| reopen_last && std::path::Path::new(p).is_file()).cloned();
     let engine = Engine::new(Project::empty(), plugins.factory());
     let startup_revision = engine.revision();
     let loading = boot.loading();
@@ -1044,7 +1112,12 @@ fn start_app(tapp: &mut tauri::App, boot: Arc<boot::Boot>, reopen_last: bool) {
                 let res = actions::control(&app, &req.command, &req.args, req.if_revision);
                 let rev = app.engine.revision();
                 res.map(|d| (d, rev)).map_err(|m| {
-                    let code = m.split(':').next().filter(|c| c.chars().all(|ch| ch.is_ascii_uppercase() || ch == '_') && c.len() > 2).unwrap_or("REFUSED").to_string();
+                    let code = m
+                        .split(':')
+                        .next()
+                        .filter(|c| c.chars().all(|ch| ch.is_ascii_uppercase() || ch == '_') && c.len() > 2)
+                        .unwrap_or("REFUSED")
+                        .to_string();
                     wave_session::ErrorBody::new(&code, m)
                 })
             });
@@ -1106,20 +1179,12 @@ mod locale_tests {
             // marker set (keep the --exact name in sync with the fn name)
             let exe = std::env::current_exe().expect("test executable path");
             let out = std::process::Command::new(exe)
-                .args([
-                    "--exact",
-                    "locale_tests::numeric_parsing_survives_the_user_locale",
-                    "--nocapture",
-                ])
+                .args(["--exact", "locale_tests::numeric_parsing_survives_the_user_locale", "--nocapture"])
                 .env(CHILD_ENV, "1")
                 .output()
                 .expect("spawn the locale test child process");
             let stdout = String::from_utf8_lossy(&out.stdout);
-            assert!(
-                out.status.success() && stdout.contains("1 passed"),
-                "locale child process failed: {}\n{stdout}",
-                out.status
-            );
+            assert!(out.status.success() && stdout.contains("1 passed"), "locale child process failed: {}\n{stdout}", out.status);
             return;
         }
 
@@ -1152,10 +1217,6 @@ mod locale_tests {
         };
 
         ensure_c_numeric_locale();
-        assert_eq!(
-            parse("0.4"),
-            0.4,
-            "after ensure_c_numeric_locale, {loc} must not break decimal parsing"
-        );
+        assert_eq!(parse("0.4"), 0.4, "after ensure_c_numeric_locale, {loc} must not break decimal parsing");
     }
 }

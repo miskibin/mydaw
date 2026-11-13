@@ -15,7 +15,12 @@ pub enum TransformSelect {
     /// Note indices into the pattern's current notes (the piano roll's selection).
     Indices { indices: Vec<usize> },
     /// Notes starting in `from`..`to` steps, optionally one channel only.
-    Range { from: f32, to: f32, #[serde(default)] ch: Option<Id> },
+    Range {
+        from: f32,
+        to: f32,
+        #[serde(default)]
+        ch: Option<Id>,
+    },
 }
 
 fn major_scale_id() -> u32 {
@@ -26,29 +31,55 @@ fn major_scale_id() -> u32 {
 #[serde(tag = "op", rename_all = "camelCase", rename_all_fields = "camelCase")]
 pub enum Op {
     /// Insert or replace clips by id.
-    PutClips { clips: Vec<Clip> },
-    RemoveClips { ids: Vec<Id> },
+    PutClips {
+        clips: Vec<Clip>,
+    },
+    RemoveClips {
+        ids: Vec<Id>,
+    },
     /// Insert (new id) or replace a track. New tracks are appended.
-    PutTrack { track: Track },
+    PutTrack {
+        track: Track,
+    },
     /// Remove a track (lane) with its clips; lanes below move up one.
-    RemoveTrack { id: Id },
+    RemoveTrack {
+        id: Id,
+    },
     /// Insert or replace a mixer insert *without* touching its effect chain
     /// (`fx` in the payload is ignored for an existing insert).
-    PutInsert { insert: Insert },
-    RemoveInsert { id: Id },
+    PutInsert {
+        insert: Insert,
+    },
+    RemoveInsert {
+        id: Id,
+    },
     /// Insert or replace an effect. `index` places a new effect (default: end of chain).
-    PutFx { insert_id: Id, fx: Fx, #[serde(default)] index: Option<usize> },
-    RemoveFx { fx_id: Id },
-    MoveFx { fx_id: Id, to: usize },
+    PutFx {
+        insert_id: Id,
+        fx: Fx,
+        #[serde(default)]
+        index: Option<usize>,
+    },
+    RemoveFx {
+        fx_id: Id,
+    },
+    MoveFx {
+        fx_id: Id,
+        to: usize,
+    },
     /// Insert or replace a pattern. Notes may still say `inst` instead of `ch` (old
     /// scripts): they get that instrument's built-in channel (created if missing). `len` is
     /// derived (the notes' end rounded up to a bar, at least `minLen`); whatever is sent is
     /// replaced. When an existing pattern's length changes, its clips that show exactly one
     /// whole pass of it (`offset` 0, `len` = old length) take the new length; other clips
     /// keep theirs.
-    PutPattern { pattern: Pattern },
+    PutPattern {
+        pattern: Pattern,
+    },
     /// Remove a pattern and every clip that plays it.
-    RemovePattern { id: Id },
+    RemovePattern {
+        id: Id,
+    },
     /// Apply a deterministic note transformation to a pattern. Same verb, params, seed
     /// and notes always produce identical notes (seeded splitmix64; default seed 0).
     /// `select` limits which notes the verb touches: the UI's selected note indices, or
@@ -71,24 +102,49 @@ pub enum Op {
     },
     /// Insert or replace a Channel Rack channel. `index` places a new channel (default:
     /// last) or moves an existing one.
-    PutChannel { channel: Channel, #[serde(default)] index: Option<usize> },
+    PutChannel {
+        channel: Channel,
+        #[serde(default)]
+        index: Option<usize>,
+    },
     /// Remove a channel and its notes in every pattern.
-    RemoveChannel { id: Id },
+    RemoveChannel {
+        id: Id,
+    },
     /// Rename / recolour a source. Audio itself is changed with dedicated commands.
-    PutSource { source: Source },
-    RemoveSource { id: Id },
+    PutSource {
+        source: Source,
+    },
+    RemoveSource {
+        id: Id,
+    },
     /// Insert or replace an automation envelope.
-    PutAutomation { automation: Automation },
+    PutAutomation {
+        automation: Automation,
+    },
     /// Remove an automation and every clip that plays it.
-    RemoveAutomation { id: Id },
+    RemoveAutomation {
+        id: Id,
+    },
     /// Insert or replace a take group with its comp (takes, regions, crossfade).
-    PutComp { comp: Comp },
+    PutComp {
+        comp: Comp,
+    },
     /// Remove a take group and every clip that plays it.
-    RemoveComp { id: Id },
+    RemoveComp {
+        id: Id,
+    },
     /// Replace the lyrics notebook (all pages, in tab order). Never touches the audio graph.
-    PutNotebook { notebook: Notebook },
-    SetBpm { bpm: f64 },
-    SetLoop { #[serde(rename = "loop")] range: Option<LoopRange> },
+    PutNotebook {
+        notebook: Notebook,
+    },
+    SetBpm {
+        bpm: f64,
+    },
+    SetLoop {
+        #[serde(rename = "loop")]
+        range: Option<LoopRange>,
+    },
 }
 
 #[derive(Debug, thiserror::Error, PartialEq)]
@@ -163,7 +219,12 @@ pub fn apply(p: &mut Project, op: &Op) -> Result<Dirty, OpError> {
                     return Err(OpError::Invalid(format!("clip {} is on track {} which does not exist", c.id, c.track)));
                 }
                 if !(c.stretch.is_finite() && (crate::model::STRETCH_MIN - 1e-9..=crate::model::STRETCH_MAX + 1e-9).contains(&c.stretch)) {
-                    return Err(OpError::Invalid(format!("clip {}: stretch must be {}..{}", c.id, crate::model::STRETCH_MIN, crate::model::STRETCH_MAX)));
+                    return Err(OpError::Invalid(format!(
+                        "clip {}: stretch must be {}..{}",
+                        c.id,
+                        crate::model::STRETCH_MIN,
+                        crate::model::STRETCH_MAX
+                    )));
                 }
                 if c.kind != ClipKind::Audio && (c.stretch != 1.0 || c.resample) {
                     return Err(OpError::Invalid(format!("clip {}: only audio clips can be stretched", c.id)));
@@ -199,7 +260,10 @@ pub fn apply(p: &mut Project, op: &Op) -> Result<Dirty, OpError> {
                         return Err(OpError::Invalid(format!("clip {}: reference correction, vibrato and influence must be 0..1", c.id)));
                     }
                     if r.octave.is_some_and(|o| o % 12 != 0 || o.abs() > 36) || r.key > 11 || r.scale > 4 {
-                        return Err(OpError::Invalid(format!("clip {}: reference octave must be a multiple of 12 within ±36, key 0..11, scale 0..4", c.id)));
+                        return Err(OpError::Invalid(format!(
+                            "clip {}: reference octave must be a multiple of 12 within ±36, key 0..11, scale 0..4",
+                            c.id
+                        )));
                     }
                 }
             }
@@ -296,18 +360,15 @@ pub fn apply(p: &mut Project, op: &Op) -> Result<Dirty, OpError> {
                     return Err(OpError::Invalid("a VST3 slot cannot swap its plugin; remove and add it".into()));
                 }
                 // a parameter that changes the effect's latency (look-ahead) re-plans the PDC
-                let bypass_changed = old.bypass != fx.bypass || crate::catalog::latency(old, 48000.0) != crate::catalog::latency(fx, 48000.0);
+                let bypass_changed =
+                    old.bypass != fx.bypass || crate::catalog::latency(old, 48000.0) != crate::catalog::latency(fx, 48000.0);
                 let m = p.inserts.iter_mut().find(|m| m.id == *insert_id).unwrap();
                 let slot = m.fx.iter_mut().find(|f| f.id == fx.id).unwrap();
                 *slot = fx.clone();
                 d.params = true;
                 d.mixer |= bypass_changed;
             } else {
-                let m = p
-                    .inserts
-                    .iter_mut()
-                    .find(|m| m.id == *insert_id)
-                    .ok_or(OpError::Missing { what: "insert", id: *insert_id })?;
+                let m = p.inserts.iter_mut().find(|m| m.id == *insert_id).ok_or(OpError::Missing { what: "insert", id: *insert_id })?;
                 let at = index.unwrap_or(m.fx.len()).min(m.fx.len());
                 m.fx.insert(at, fx.clone());
                 bump(p, fx.id);
@@ -439,11 +500,7 @@ pub fn apply(p: &mut Project, op: &Op) -> Result<Dirty, OpError> {
             d.timeline = true;
         }
         Op::PutSource { source } => {
-            let s = p
-                .sources
-                .iter_mut()
-                .find(|x| x.id == source.id)
-                .ok_or(OpError::Missing { what: "source", id: source.id })?;
+            let s = p.sources.iter_mut().find(|x| x.id == source.id).ok_or(OpError::Missing { what: "source", id: source.id })?;
             s.name = source.name.clone();
             s.color = source.color.clone();
         }
@@ -588,7 +645,15 @@ pub fn apply(p: &mut Project, op: &Op) -> Result<Dirty, OpError> {
                     }
                 }
                 crate::transform::TransformVerb::Melody { ch, bars, density, repeat } => {
-                    crate::transform::melody(&mut target, *ch, (ks.map(|(k, _)| k).unwrap_or(0), p.scale), *bars, *density, *repeat, seed.unwrap_or(0));
+                    crate::transform::melody(
+                        &mut target,
+                        *ch,
+                        (ks.map(|(k, _)| k).unwrap_or(0), p.scale),
+                        *bars,
+                        *density,
+                        *repeat,
+                        seed.unwrap_or(0),
+                    );
                 }
             }
             // positional verbs (humanize/quantize/strum) map every selected note 1:1;
@@ -604,12 +669,8 @@ pub fn apply(p: &mut Project, op: &Op) -> Result<Dirty, OpError> {
                 target
             } else if generative {
                 let selected: std::collections::HashSet<usize> = idx.iter().copied().collect();
-                let mut merged: Vec<Note> = notes
-                    .iter()
-                    .enumerate()
-                    .filter(|(i, _)| !selected.contains(i))
-                    .map(|(_, n)| n.clone())
-                    .collect();
+                let mut merged: Vec<Note> =
+                    notes.iter().enumerate().filter(|(i, _)| !selected.contains(i)).map(|(_, n)| n.clone()).collect();
                 merged.extend(target);
                 merged
             } else {
@@ -802,11 +863,7 @@ fn validate_fx(fx: &Fx) -> Result<(), OpError> {
         return Err(OpError::Invalid("a VST3 slot needs `plugin`".into()));
     }
     match (&fx.maps, fx.kind == FxKind::Warp) {
-        (None, true) => {
-            return Err(OpError::Invalid(
-                "a Warp needs `maps` (see fx_catalog().warp for the factory slots)".into(),
-            ))
-        }
+        (None, true) => return Err(OpError::Invalid("a Warp needs `maps` (see fx_catalog().warp for the factory slots)".into())),
         (Some(_), false) => return Err(OpError::Invalid("only a Warp has `maps`".into())),
         (Some(m), true) => validate_maps(m)?,
         (None, false) => {}
@@ -823,26 +880,17 @@ fn validate_maps(m: &crate::model::WarpMaps) -> Result<(), OpError> {
     use crate::model::{WARP_BAR, WARP_POINTS, WARP_SLOTS};
     for (bank, slots) in [("time", &m.time), ("vol", &m.vol)] {
         if slots.len() > WARP_SLOTS {
-            return Err(OpError::Invalid(format!(
-                "Warp {bank} maps: at most {WARP_SLOTS} slots"
-            )));
+            return Err(OpError::Invalid(format!("Warp {bank} maps: at most {WARP_SLOTS} slots")));
         }
         for (i, s) in slots.iter().enumerate() {
-            let bad = |why: &str| {
-                Err(OpError::Invalid(format!(
-                    "Warp {bank} slot {}: {why}",
-                    i + 1
-                )))
-            };
+            let bad = |why: &str| Err(OpError::Invalid(format!("Warp {bank} slot {}: {why}", i + 1)));
             if s.points.len() > WARP_POINTS {
                 return bad(&format!("at most {WARP_POINTS} points"));
             }
-            if s.points.iter().any(|p| {
-                !(0.0..=WARP_BAR).contains(&p.t)
-                    || !(0.0..=1.0).contains(&p.v)
-                    || !p.tension.is_finite()
-                    || p.tension.abs() > 1.0
-            }) {
+            if s.points
+                .iter()
+                .any(|p| !(0.0..=WARP_BAR).contains(&p.t) || !(0.0..=1.0).contains(&p.v) || !p.tension.is_finite() || p.tension.abs() > 1.0)
+            {
                 return bad("points need t 0..4 beats, v 0..1, tension -1..1");
             }
             if s.points.windows(2).any(|w| w[1].t < w[0].t) {

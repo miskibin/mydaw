@@ -135,7 +135,14 @@ pub fn alignment(take: &PitchAnalysis, region: (f64, f64), spans: &[(f64, f64)],
     let e = ((region.1 * rate).round() as usize).clamp(s, take.curve.len());
     let n = e - s;
     let u = |t: f64| take.curve.get((t * rate) as usize).copied().unwrap_or(f32::NAN);
-    let sung_median = |a: f64, b: f64| median(((a * rate).ceil() as usize..((b * rate).ceil() as usize).min(take.curve.len())).map(|f| take.curve[f]).filter(|x| !x.is_nan()).collect());
+    let sung_median = |a: f64, b: f64| {
+        median(
+            ((a * rate).ceil() as usize..((b * rate).ceil() as usize).min(take.curve.len()))
+                .map(|f| take.curve[f])
+                .filter(|x| !x.is_nan())
+                .collect(),
+        )
+    };
     let sounding = |a: f64, b: f64| -> Vec<&MelodyNote> { notes.iter().filter(|m| m.start < b && m.end > a).collect() };
     let spans: Vec<(f64, f64)> = spans.iter().map(|&(a, b)| (a.max(region.0), b.min(region.1))).filter(|(a, b)| b > a).collect();
 
@@ -151,7 +158,9 @@ pub fn alignment(take: &PitchAnalysis, region: (f64, f64), spans: &[(f64, f64)],
     let octave = (-4..=4)
         .map(|k| k * 12)
         .min_by(|&x, &y| {
-            let cost = |o: i32| votes.iter().map(|(c, w, ks)| w * ks.iter().map(|k| (c - (k + o as f32)).abs()).fold(f32::INFINITY, f32::min)).sum::<f32>();
+            let cost = |o: i32| {
+                votes.iter().map(|(c, w, ks)| w * ks.iter().map(|k| (c - (k + o as f32)).abs()).fold(f32::INFINITY, f32::min)).sum::<f32>()
+            };
             cost(x).total_cmp(&cost(y)).then(x.abs().cmp(&y.abs()))
         })
         .unwrap_or(0);
@@ -174,24 +183,30 @@ pub fn alignment(take: &PitchAnalysis, region: (f64, f64), spans: &[(f64, f64)],
         for w in edges.windows(2) {
             let (sa, sb) = (w[0], w[1]);
             let c = sung_median(sa, sb).or(whole);
-            let key = sounding(sa, sb)
-                .iter()
-                .map(|m| m.key as f32)
-                .min_by(|x, y| match c {
-                    Some(c) => (c - (x + octave as f32)).abs().total_cmp(&(c - (y + octave as f32)).abs()),
-                    None => y.total_cmp(x), // nothing sung to compare: the top note
-                });
+            let key = sounding(sa, sb).iter().map(|m| m.key as f32).min_by(|x, y| match c {
+                Some(c) => (c - (x + octave as f32)).abs().total_cmp(&(c - (y + octave as f32)).abs()),
+                None => y.total_cmp(x), // nothing sung to compare: the top note
+            });
             match segs.last_mut() {
                 Some(l) if l.key == key => l.b = sb,
                 _ => segs.push(Seg { a: sa, b: sb, key }),
             }
         }
         // timing slack: a sliver shorter than the tolerance takes its longer neighbour's key
-        while let Some(i) = (0..segs.len()).filter(|&i| segs.len() > 1 && segs[i].b - segs[i].a < TOLERANCE).min_by(|&i, &j| (segs[i].b - segs[i].a).total_cmp(&(segs[j].b - segs[j].a))) {
+        while let Some(i) = (0..segs.len())
+            .filter(|&i| segs.len() > 1 && segs[i].b - segs[i].a < TOLERANCE)
+            .min_by(|&i, &j| (segs[i].b - segs[i].a).total_cmp(&(segs[j].b - segs[j].a)))
+        {
             let left = i.checked_sub(1).map(|j| (j, segs[j].b - segs[j].a));
             let right = segs.get(i + 1).map(|x| (i + 1, x.b - x.a));
             let into = match (left, right) {
-                (Some(l), Some(r)) => if l.1 >= r.1 { l.0 } else { r.0 },
+                (Some(l), Some(r)) => {
+                    if l.1 >= r.1 {
+                        l.0
+                    } else {
+                        r.0
+                    }
+                }
                 (Some(l), None) => l.0,
                 (None, Some(r)) => r.0,
                 (None, None) => break,
@@ -236,7 +251,8 @@ pub fn alignment(take: &PitchAnalysis, region: (f64, f64), spans: &[(f64, f64)],
         }
         for sg in segs {
             let Some(key) = sg.key else { continue };
-            let (fa, fb) = (((sg.a * rate).round() as usize).saturating_sub(s).min(n), ((sg.b * rate).round() as usize).saturating_sub(s).min(n));
+            let (fa, fb) =
+                (((sg.a * rate).round() as usize).saturating_sub(s).min(n), ((sg.b * rate).round() as usize).saturating_sub(s).min(n));
             reference_f0[fa..fb].fill(key);
         }
     }
@@ -252,15 +268,7 @@ pub fn alignment(take: &PitchAnalysis, region: (f64, f64), spans: &[(f64, f64)],
     } else {
         None
     };
-    Alignment {
-        start: s,
-        ref_time: (s..e).map(|f| f as f32 / take.rate).collect(),
-        reference_f0,
-        confidence,
-        octave,
-        score,
-        reason,
-    }
+    Alignment { start: s, ref_time: (s..e).map(|f| f as f32 / take.rate).collect(), reference_f0, confidence, octave, score, reason }
 }
 
 #[cfg(test)]
@@ -348,10 +356,13 @@ mod tests {
     fn collect_places_pattern_notes_on_the_takes_source_time() {
         let mut p = Project::empty();
         p.bpm = 120.0; // 0.5 s per beat
-        let ch: crate::model::Channel = serde_json::from_value(serde_json::json!({"id": 7001, "name": "Piano", "color": "#fff", "kind": "synth", "root": 60})).unwrap();
+        let ch: crate::model::Channel =
+            serde_json::from_value(serde_json::json!({"id": 7001, "name": "Piano", "color": "#fff", "kind": "synth", "root": 60})).unwrap();
         p.channels.push(ch);
-        let pat: crate::model::Pattern = serde_json::from_value(serde_json::json!({"id": 7100, "name": "Melody", "color": "#fff", "len": 4.0,
-            "notes": [{"ch": 7001, "step": 0, "len": 4, "p": 69}, {"ch": 7001, "step": 8, "len": 8}]})).unwrap();
+        let pat: crate::model::Pattern =
+            serde_json::from_value(serde_json::json!({"id": 7100, "name": "Melody", "color": "#fff", "len": 4.0,
+            "notes": [{"ch": 7001, "step": 0, "len": 4, "p": 69}, {"ch": 7001, "step": 8, "len": 8}]}))
+            .unwrap();
         p.patterns.push(pat);
         let pc: Clip = serde_json::from_value(serde_json::json!({"id": 7200, "track": 0, "start": 4.0, "len": 8.0, "offset": 0, "kind": "pat", "ref": 7100, "muted": false, "gain": 0})).unwrap();
         p.clips.push(pc);
@@ -368,7 +379,11 @@ mod tests {
         assert_eq!(collect(&p, &vocal, 7001, Some([src(8.0) + 0.01, src(9.0)])).len(), 1);
         assert!(collect(&p, &vocal, 9999, None).is_empty());
         // stored on the clip, a melody reference survives a JSON round trip
-        let tune = ClipTune { notes: vec![], pencil: vec![], reference: Some(RefTune { melody: Some(Melody { channel: 7001, span: None, notes }), speed: Some(40.0), ..params() }) };
+        let tune = ClipTune {
+            notes: vec![],
+            pencil: vec![],
+            reference: Some(RefTune { melody: Some(Melody { channel: 7001, span: None, notes }), speed: Some(40.0), ..params() }),
+        };
         let back: ClipTune = serde_json::from_str(&serde_json::to_string(&tune).unwrap()).unwrap();
         assert_eq!(back, tune);
     }

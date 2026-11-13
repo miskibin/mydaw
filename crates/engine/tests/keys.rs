@@ -25,7 +25,10 @@ fn tone(hz: f64, amp: f32) -> Arc<Audio> {
 
 /// C4 and D#4, each soft (quiet) and loud.
 fn bank() -> Arc<KeysBank> {
-    Arc::new(KeysBank::from_layers(vec![(60, vec![tone(261.63, 0.1), tone(261.63, 0.5)]), (63, vec![tone(311.13, 0.1), tone(311.13, 0.5)])]).unwrap())
+    Arc::new(
+        KeysBank::from_layers(vec![(60, vec![tone(261.63, 0.1), tone(261.63, 0.5)]), (63, vec![tone(311.13, 0.1), tone(311.13, 0.5)])])
+            .unwrap(),
+    )
 }
 
 const CH: Id = 2000;
@@ -33,9 +36,33 @@ const CH: Id = 2000;
 fn project(notes: Vec<Note>, keys: KeysState) -> Project {
     let mut p = Project::empty();
     p.inserts[0].fx.clear();
-    p.channels.push(Channel { name: "WAVE Keys".into(), src: ChannelSrc::Keys { keys }, root: 60, ..Channel::new(CH, "", "#4f8ef7", ChannelSrc::Keys { keys: Default::default() }) });
+    p.channels.push(Channel {
+        name: "WAVE Keys".into(),
+        src: ChannelSrc::Keys { keys },
+        root: 60,
+        ..Channel::new(CH, "", "#4f8ef7", ChannelSrc::Keys { keys: Default::default() })
+    });
     p.patterns = vec![Pattern { id: 1, name: "P".into(), color: "#4f8ef7".into(), len: 4.0, min_len: 4.0, notes, swing: 0.0 }];
-    p.clips = vec![Clip { id: 1, track: 0, start: 0.0, len: 4.0, offset: 0.0, kind: ClipKind::Pat, source: 1, muted: false, gain: 0.0, fade_in: 0.0, fade_out: 0.0, pan: 0.0, norm: false, rev: false, tune: None, stretch: 1.0, resample: false, pitch: 0.0 }];
+    p.clips = vec![Clip {
+        id: 1,
+        track: 0,
+        start: 0.0,
+        len: 4.0,
+        offset: 0.0,
+        kind: ClipKind::Pat,
+        source: 1,
+        muted: false,
+        gain: 0.0,
+        fade_in: 0.0,
+        fade_out: 0.0,
+        pan: 0.0,
+        norm: false,
+        rev: false,
+        tune: None,
+        stretch: 1.0,
+        resample: false,
+        pitch: 0.0,
+    }];
     p
 }
 
@@ -77,7 +104,9 @@ fn plays_the_nearest_recording_at_the_note_pitch() {
 
 #[test]
 fn velocity_picks_the_layer_and_dynamics_scales_inside_it() {
-    let level = |v: f32, dynamics: f32| rms(&render(project(vec![note(0.0, 8.0, 60, v)], KeysState { dynamics, ..Default::default() }), true)[2000..40000]);
+    let level = |v: f32, dynamics: f32| {
+        rms(&render(project(vec![note(0.0, 8.0, 60, v)], KeysState { dynamics, ..Default::default() }), true)[2000..40000])
+    };
     // the loud recording is five times the soft one
     assert!(level(0.9, 0.0) / level(0.2, 0.0) > 4.5);
     // with dynamics off every note of a layer is as loud as the recording

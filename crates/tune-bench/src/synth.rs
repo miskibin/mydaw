@@ -16,53 +16,18 @@ pub const LEVELS: [f32; 5] = [25.0, 50.0, 100.0, 200.0, 400.0];
 const SR: f32 = 44100.0;
 
 fn take_voice(s: u32) -> Voice {
-    Voice {
-        seed: s + 1,
-        vib_rate: 4.8 + 0.3 * (s % 4) as f32,
-        vib_depth: 0.3,
-        ..Voice::default()
-    }
+    Voice { seed: s + 1, vib_rate: 4.8 + 0.3 * (s % 4) as f32, vib_depth: 0.3, ..Voice::default() }
 }
 
 fn reference_voice(s: u32) -> Voice {
     match s % 3 {
-        0 => Voice {
-            formant: 1.17,
-            tempo: 0.88,
-            jitter: 0.12,
-            transpose: 12.0,
-            vib_rate: 6.2,
-            vib_depth: 0.25,
-            seed: 100 + s,
-        },
-        1 => Voice {
-            formant: 0.9,
-            tempo: 1.12,
-            jitter: 0.1,
-            transpose: 0.0,
-            vib_rate: 5.0,
-            vib_depth: 0.2,
-            seed: 100 + s,
-        },
-        _ => Voice {
-            formant: 1.05,
-            tempo: 0.95,
-            jitter: 0.15,
-            transpose: -12.0,
-            vib_rate: 5.8,
-            vib_depth: 0.3,
-            seed: 100 + s,
-        },
+        0 => Voice { formant: 1.17, tempo: 0.88, jitter: 0.12, transpose: 12.0, vib_rate: 6.2, vib_depth: 0.25, seed: 100 + s },
+        1 => Voice { formant: 0.9, tempo: 1.12, jitter: 0.1, transpose: 0.0, vib_rate: 5.0, vib_depth: 0.2, seed: 100 + s },
+        _ => Voice { formant: 1.05, tempo: 0.95, jitter: 0.15, transpose: -12.0, vib_rate: 5.8, vib_depth: 0.3, seed: 100 + s },
     }
 }
 
-pub fn run(
-    songs: u32,
-    only: Option<&str>,
-    p: &RefTune,
-    est: Option<&dyn F0Estimator>,
-    write: Option<&Path>,
-) -> Vec<Outcome> {
+pub fn run(songs: u32, only: Option<&str>, p: &RefTune, est: Option<&dyn F0Estimator>, write: Option<&Path>) -> Vec<Outcome> {
     let mut out = vec![];
     for s in 0..songs {
         let melody = song(100 + s, 24);
@@ -71,21 +36,9 @@ pub fn run(
         let mut rng = Rng(7919 * (s + 1));
         let mut cases: Vec<(String, Vec<f32>, f32)> = LEVELS
             .iter()
-            .map(|&l| {
-                (
-                    format!("±{l:.0} ct"),
-                    (0..melody.len())
-                        .map(|_| if rng.unit() < 0.5 { -l } else { l })
-                        .collect(),
-                    0.0,
-                )
-            })
+            .map(|&l| (format!("±{l:.0} ct"), (0..melody.len()).map(|_| if rng.unit() < 0.5 { -l } else { l }).collect(), 0.0))
             .collect();
-        cases.push((
-            "drift 40 ct/s".into(),
-            (0..melody.len()).map(|_| rng.sym() * 50.0).collect(),
-            40.0,
-        ));
+        cases.push(("drift 40 ct/s".into(), (0..melody.len()).map(|_| rng.sym() * 50.0).collect(), 40.0));
         for (group, detune, drift) in cases {
             if only.is_some_and(|o| !format!("song{s} {group}").contains(o)) {
                 continue;
@@ -101,32 +54,15 @@ pub fn run(
                 edge: take.edge.clone(),
                 sung: take.sung.clone(),
                 notes: take.notes.clone(),
-                onsets: take
-                    .onsets
-                    .iter()
-                    .copied()
-                    .zip(reference.onsets.iter().copied())
-                    .collect(),
+                onsets: take.onsets.iter().copied().zip(reference.onsets.iter().copied()).collect(),
                 expect_rejection: false,
             };
             let (o, rendered) = eval::run(&c, p, est);
             if let Some(dir) = write.filter(|_| group == "±100 ct") {
                 let _ = std::fs::create_dir_all(dir);
-                let _ = write_wav(
-                    &dir.join(format!("song{s}_take.wav")),
-                    take_audio.content(),
-                    SR as u32,
-                );
-                let _ = write_wav(
-                    &dir.join(format!("song{s}_reference.wav")),
-                    ref_audio.content(),
-                    SR as u32,
-                );
-                let _ = write_wav(
-                    &dir.join(format!("song{s}_tuned.wav")),
-                    rendered.content(),
-                    SR as u32,
-                );
+                let _ = write_wav(&dir.join(format!("song{s}_take.wav")), take_audio.content(), SR as u32);
+                let _ = write_wav(&dir.join(format!("song{s}_reference.wav")), ref_audio.content(), SR as u32);
+                let _ = write_wav(&dir.join(format!("song{s}_tuned.wav")), rendered.content(), SR as u32);
             }
             eprintln!(
                 "  {:<24} score {:.2} frame median {:5.1} ct (was {:5.1})",
@@ -158,16 +94,7 @@ pub fn run(
             expect_rejection: true,
         };
         let (o, _) = eval::run(&c, p, est);
-        eprintln!(
-            "  {:<24} score {:.2} {}",
-            o.name,
-            o.score,
-            if o.corrected {
-                "CORRECTED (wrong)"
-            } else {
-                "held back"
-            }
-        );
+        eprintln!("  {:<24} score {:.2} {}", o.name, o.score, if o.corrected { "CORRECTED (wrong)" } else { "held back" });
         out.push(o);
     }
     out

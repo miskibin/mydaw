@@ -7,13 +7,8 @@
 use crate::pitch::{midi_to_hz, ANALYSIS_RATE};
 
 /// F1, F2, F3 (Hz) of a, e, i, o, u for an adult male; scaled per voice.
-const VOWELS: [[f32; 3]; 5] = [
-    [730.0, 1090.0, 2440.0],
-    [530.0, 1840.0, 2480.0],
-    [270.0, 2290.0, 3010.0],
-    [570.0, 840.0, 2410.0],
-    [300.0, 870.0, 2240.0],
-];
+const VOWELS: [[f32; 3]; 5] =
+    [[730.0, 1090.0, 2440.0], [530.0, 1840.0, 2480.0], [270.0, 2290.0, 3010.0], [570.0, 840.0, 2410.0], [300.0, 870.0, 2240.0]];
 
 #[derive(Clone, Copy, Debug)]
 pub struct Syllable {
@@ -44,15 +39,7 @@ pub struct Voice {
 
 impl Default for Voice {
     fn default() -> Self {
-        Self {
-            formant: 1.0,
-            vib_rate: 5.5,
-            vib_depth: 0.35,
-            tempo: 1.0,
-            jitter: 0.0,
-            transpose: 0.0,
-            seed: 1,
-        }
+        Self { formant: 1.0, vib_rate: 5.5, vib_depth: 0.35, tempo: 1.0, jitter: 0.0, transpose: 0.0, seed: 1 }
     }
 }
 
@@ -94,11 +81,7 @@ pub fn sing(song: &[Syllable], v: &Voice, detune: &[f32], drift: f32, sr: f32) -
     let mut segs = vec![]; // (consonant start, vowel start, end)
     for s in song {
         let d = s.dur * v.tempo * (1.0 + v.jitter * rng.sym() as f64);
-        let cons = if s.consonant {
-            0.05f64.min(d * 0.3)
-        } else {
-            0.0
-        };
+        let cons = if s.consonant { 0.05f64.min(d * 0.3) } else { 0.0 };
         segs.push((t, t + cons, t + d));
         t += d;
     }
@@ -127,10 +110,7 @@ pub fn sing(song: &[Syllable], v: &Voice, detune: &[f32], drift: f32, sr: f32) -
         }
         // vowel
         let glide_from = if s.consonant { None } else { prev_end_pitch };
-        let (i0, i1) = (
-            (v0 * sr as f64) as usize,
-            ((e * sr as f64) as usize).min(total),
-        );
+        let (i0, i1) = ((v0 * sr as f64) as usize, ((e * sr as f64) as usize).min(total));
         let vib_phase = rng.next() * std::f32::consts::TAU;
         for (i, out) in audio.iter_mut().enumerate().take(i1).skip(i0) {
             let tt = i as f64 / sr as f64;
@@ -144,9 +124,7 @@ pub fn sing(song: &[Syllable], v: &Voice, detune: &[f32], drift: f32, sr: f32) -
                 }
             }
             let vib_amt = ((since - 0.15) / 0.2).clamp(0.0, 1.0);
-            let vib = v.vib_depth
-                * vib_amt
-                * (std::f32::consts::TAU * v.vib_rate * since + vib_phase).sin();
+            let vib = v.vib_depth * vib_amt * (std::f32::consts::TAU * v.vib_rate * since + vib_phase).sin();
             let pitch_true = intended + vib;
             let pitch_sung = pitch_true + det + drift / 100.0 * since;
             let hz = midi_to_hz(pitch_sung) as f64;
@@ -158,14 +136,9 @@ pub fn sing(song: &[Syllable], v: &Voice, detune: &[f32], drift: f32, sr: f32) -
             let mut y = 0f32;
             for h in 1..=nh.min(60) {
                 let fh = hz as f32 * h as f32;
-                let g = fm
-                    .iter()
-                    .zip([1.0f32, 0.7, 0.35])
-                    .map(|(f, a)| a * (-((fh - f) / (60.0 + 0.08 * f)).powi(2)).exp())
-                    .sum::<f32>()
+                let g = fm.iter().zip([1.0f32, 0.7, 0.35]).map(|(f, a)| a * (-((fh - f) / (60.0 + 0.08 * f)).powi(2)).exp()).sum::<f32>()
                     + 0.015;
-                y += g / (h as f32).sqrt()
-                    * (std::f32::consts::TAU as f64 * phase * h as f64).sin() as f32;
+                y += g / (h as f32).sqrt() * (std::f32::consts::TAU as f64 * phase * h as f64).sin() as f32;
             }
             *out += y * env * 0.12 + rng.sym() * 0.0015;
             let f = (tt * ANALYSIS_RATE as f64).round() as usize;
@@ -179,21 +152,9 @@ pub fn sing(song: &[Syllable], v: &Voice, detune: &[f32], drift: f32, sr: f32) -
         }
         prev_end_pitch = Some(target);
     }
-    let notes = song
-        .iter()
-        .enumerate()
-        .map(|(k, s)| (segs[k].1, segs[k].2, s.midi + v.transpose))
-        .collect();
+    let notes = song.iter().enumerate().map(|(k, s)| (segs[k].1, segs[k].2, s.midi + v.transpose)).collect();
     let onsets = segs.iter().map(|s| s.0).collect();
-    Rendition {
-        audio,
-        sr,
-        truth,
-        sung,
-        notes,
-        onsets,
-        edge,
-    }
+    Rendition { audio, sr, truth, sung, notes, onsets, edge }
 }
 
 /// |curve − truth| in cents over voiced, non-edge frames where both exist.
@@ -205,8 +166,7 @@ pub fn pitch_errors(truth: &[f32], edge: &[bool], curve: &[f32], offset: usize) 
         .filter_map(|(i, &c)| {
             let f = i + offset;
             let t = *truth.get(f)?;
-            (!t.is_nan() && !c.is_nan() && !edge.get(f).copied().unwrap_or(true))
-                .then(|| (c - t).abs() * 100.0)
+            (!t.is_nan() && !c.is_nan() && !edge.get(f).copied().unwrap_or(true)).then(|| (c - t).abs() * 100.0)
         })
         .collect()
 }
@@ -234,11 +194,7 @@ pub fn song(seed: u32, syllables: usize) -> Vec<Syllable> {
             Syllable {
                 vowel: (rng.next() * 5.0) as usize % 5,
                 midi: 55.0 + scale[deg] as f32,
-                dur: if long {
-                    0.7
-                } else {
-                    0.28 + 0.14 * (rng.next() as f64)
-                },
+                dur: if long { 0.7 } else { 0.28 + 0.14 * (rng.next() as f64) },
                 consonant: rng.next() < 0.7,
             }
         })

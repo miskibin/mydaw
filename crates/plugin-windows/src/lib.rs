@@ -60,8 +60,7 @@ mod win32;
 mod service;
 
 pub use service::{
-    Service, Window, WindowError, WindowEvent, WindowId, WindowOptions, WindowSize,
-    MAX_WINDOW_SIZE, MIN_WINDOW_SIZE, PUMP_INTERVAL_MS,
+    Service, Window, WindowError, WindowEvent, WindowId, WindowOptions, WindowSize, MAX_WINDOW_SIZE, MIN_WINDOW_SIZE, PUMP_INTERVAL_MS,
 };
 
 /// Whether this build has a native window backend. `false` means every

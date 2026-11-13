@@ -31,9 +31,17 @@ impl W {
 }
 
 /// `rec` = (track, clipStart, seconds, peakOffset, new peaks).
-pub fn frame(seq: u32, shared: &Shared, insert_ids: &[Id], fx: Option<&[FxAnalysis]>, rec: Option<&(u32, f64, f32, u32, Vec<f32>)>) -> Vec<u8> {
+pub fn frame(
+    seq: u32,
+    shared: &Shared,
+    insert_ids: &[Id],
+    fx: Option<&[FxAnalysis]>,
+    rec: Option<&(u32, f64, f32, u32, Vec<f32>)>,
+) -> Vec<u8> {
     let nfx = fx.map(|f| f.len()).unwrap_or(0);
-    let mut w = W(Vec::with_capacity(64 + insert_ids.len() * 12 + nfx * (144 + 4 * (128 * 2 + 256 * 2)) + rec.map(|r| r.4.len() * 4 + 32).unwrap_or(4)));
+    let mut w = W(Vec::with_capacity(
+        64 + insert_ids.len() * 12 + nfx * (144 + 4 * (128 * 2 + 256 * 2)) + rec.map(|r| r.4.len() * 4 + 32).unwrap_or(4),
+    ));
     w.u32(MAGIC);
     w.u32(seq);
     // the playhead shows what is heard, not what the mixer is rendering (playback latency)
