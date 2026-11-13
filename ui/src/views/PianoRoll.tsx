@@ -65,8 +65,6 @@ const [lastVel, setLastVel] = createSignal(1);
 const velProp = () => (lastVel() < 0.995 ? { v: lastVel() } : {});
 const [rollTool, setRollTool] = createSignal<Tool>('draw');
 const [rollSnap, setRollSnap] = createSignal(1);
-const [rollKey, setRollKey] = createSignal<number | null>(null);
-const [rollScale, setRollScale] = createSignal(0);
 
 /** The note tools the roll header offers: [A, B] are the two params' defaults; the
  * meaning of A/B is per tool (timing/velocity, grid/amount, hits/slots, width/ramp,
@@ -81,13 +79,15 @@ const TOOL_META: Record<'humanize' | 'quantize' | 'euclid' | 'strum' | 'drums' |
 };
 type ToolId = keyof typeof TOOL_META;
 
-/** Key and scale to highlight: chosen here (the project key — also what scale-aware
- * transforms use), else the project's Pitch Correct (a detected key), else C major.
+/** Key and scale to highlight: the project key (chosen here; also what scale-aware
+ * transforms use), else the project's Pitch Correct (a detected key), else C in the
+ * project scale — what the engine's melody generator falls back to without a key.
+ * Always derived from the project, so undo and loading another project follow.
  * `scale` is the engine's scale id (pitch::scale_mask), not the list position. */
 function projectKey(): { root: number; scale: number } {
   if (S.project.key != null) return { root: S.project.key, scale: S.project.scale ?? 1 };
   for (const m of S.project.inserts) for (const f of m.fx) if (f.type === 'tune' && (f.params.scale ?? 0) > 0) return { root: Math.round(f.params.key ?? 0), scale: f.params.scale ?? 1 };
-  return { root: 0, scale: 1 };
+  return { root: 0, scale: S.project.scale ?? 1 };
 }
 
 function Roll(props: { z: number }) {
@@ -130,19 +130,20 @@ function Roll(props: { z: number }) {
       ...(seed !== undefined ? { seed } : {}),
       // scope: the selection, else the channel the roll is showing — never the whole
       // pattern (a pattern is multi-channel; humanize with Hat shown must not jitter
-      // the kick). Generators target their channel anyway, so they stay unscoped.
-      ...(sel().size > 0
-        ? { select: { kind: 'indices' as const, indices: [...sel()].sort((x, y) => x - y) } }
-        : id === 'humanize' || id === 'quantize' || id === 'strum'
-          ? { select: { kind: 'range' as const, from: 0, to: 1e9, ch: chan } }
-          : {}),
+      // the kick). Generators replace their whole channel whatever the selection
+      // (the engine ignores a select for them), so they stay unscoped.
+      ...(id !== 'humanize' && id !== 'quantize' && id !== 'strum'
+        ? {}
+        : sel().size > 0
+          ? { select: { kind: 'indices' as const, indices: [...sel()].sort((x, y) => x - y) } }
+          : { select: { kind: 'range' as const, from: 0, to: 1e9, ch: chan } }),
     };
     commit([op], t(TOOL_META[id].label));
     setSel(new Set<number>());
     say(t('b.pr.toolApplied', { verb: t(TOOL_META[id].label) }));
   };
-  const root = () => rollKey() ?? pk().root;
-  const scaleIdx = () => (rollKey() != null ? rollScale() : pk().scale);
+  const root = () => pk().root;
+  const scaleIdx = () => pk().scale;
   const chansMap = createMemo(() => { arrVersion(); return new Map(unwrap(channels()).map(c => [c.id, c])); });
   const mask = () => scaleMask(scaleIdx());
   const unit = (alt = false) => (alt ? 0 : rollSnap());
@@ -813,10 +814,10 @@ function Roll(props: { z: number }) {
         </label>
         <label class="plab">{t('b.pe.lblKey')}
           <span class="row" style={{ gap: '4px' }}>
-            <select class="sel" title={rollKey() == null ? t('b.pe.keyAuto') : t('b.pe.keyScale')} value={String(root())} onChange={e => { const sc = scaleIdx(); setRollKey(+e.currentTarget.value); setRollScale(sc); commit([setKeyOp(+e.currentTarget.value, sc)], t('b.pr.keySet')); backToRoll(e.currentTarget); }}>
+            <select class="sel" title={S.project.key == null ? t('b.pe.keyAuto') : t('b.pe.keyScale')} value={String(root())} onChange={e => { commit([setKeyOp(+e.currentTarget.value, scaleIdx())], t('b.pr.keySet')); backToRoll(e.currentTarget); }}>
               <For each={NOTE_NAMES}>{(n, i) => <option value={String(i())}>{n}</option>}</For>
             </select>
-            <select class="sel" value={String(scaleIdx())} onChange={e => { if (rollKey() == null) setRollKey(root()); setRollScale(+e.currentTarget.value); commit([setKeyOp(rollKey() ?? root(), +e.currentTarget.value)], t('b.pr.keySet')); backToRoll(e.currentTarget); }}>
+            <select class="sel" value={String(scaleIdx())} onChange={e => { commit([setKeyOp(root(), +e.currentTarget.value)], t('b.pr.keySet')); backToRoll(e.currentTarget); }}>
               <For each={SCALES}>{([l, id]) => <option value={String(id)}>{t(l)}</option>}</For>
             </select>
           </span>

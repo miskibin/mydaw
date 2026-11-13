@@ -150,6 +150,18 @@ describe('mock engine ops (mirror of ops.rs)', () => {
   };
   // the starter kit: a source and its sampler channel per file, ids in that order (model.rs `add_starter_kit`)
   const K = 1001, C = 1003;
+  it('transformNotes keeps keys in 0..127 and refuses a result outside it, like the engine', () => {
+    let p = base();
+    p = applyAll(p, [{ op: 'putPattern', pattern: { id: 5, name: 'x', color: '#fff', len: 4, notes: [{ ch: K, step: 0, len: 1, p: 127 }] } }, { op: 'setKey', key: 1, scale: 3 }]);
+    // C# major pentatonic: 127 would snap up to 128; the in-range answer is 125
+    p = applyAll(p, [{ op: 'transformNotes', pattern: 5, verb: { kind: 'quantize', grid: 1, amount: 1, scaleAware: true } }]);
+    expect(p.patterns[0].notes[0].p).toBe(125);
+    // a note whose key is already out of range (not reachable through putPattern) fails the op
+    const bad = structuredClone(p);
+    bad.patterns[0].notes[0].p = 128;
+    expect(() => applyAll(bad, [{ op: 'transformNotes', pattern: 5, verb: { kind: 'humanize', timing: 0, velocity: 0 } }])).toThrow(/0\.\.127/);
+  });
+
   it('gives a project without channels the starter kit and refuses notes of unknown channels', () => {
     const p = base();
     expect(p.channels!.map(c => c.name)).toEqual(['Kick', 'Clap', 'Hat', 'Snare']);

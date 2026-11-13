@@ -150,7 +150,8 @@ pub fn humanize(notes: &mut [Note], timing: f32, velocity: f32, rng: &mut SplitM
     for n in notes {
         n.step = (n.step + rng.pm1() * max_jitter).max(0.0);
         let nudge = 1.0 + rng.pm1() * 0.5 * velocity.clamp(0.0, 1.0);
-        n.v = (n.v * nudge).clamp(0.05, 1.0);
+        // 0..=1 is the whole valid velocity range: amount 0 must leave every note as it was
+        n.v = (n.v * nudge).clamp(0.0, 1.0);
     }
 }
 
@@ -167,10 +168,34 @@ pub fn quantize(notes: &mut [Note], grid: f32, amount: f32, key_scale: Option<(u
         if let Some((key, mask)) = ks {
             let root = roots.iter().find(|(id, _)| *id == n.ch).map(|(_, r)| *r).unwrap_or(60);
             let midi = n.p.unwrap_or(root) as f32;
-            let snapped = pitch::snap(midi, key, mask);
-            n.p = Some(snapped.round() as u8);
+            n.p = Some(snap_midi(midi, key, mask));
         }
     }
+}
+
+/// [`pitch::snap`] limited to MIDI keys: the nearest in-scale key within 0..=127 (ties
+/// keep the lower). Unbounded snapping can leave the range at the edges — 127 in C#
+/// major pentatonic is nearest 128 — which `check_notes` would reject for the whole op.
+fn snap_midi(m: f32, key: u32, mask: u16) -> u8 {
+    let base = m.round() as i32;
+    let mut best: Option<i32> = None;
+    let mut bd = f32::MAX;
+    for d in -11..=11 {
+        let n = base + d;
+        if !(0..=127).contains(&n) {
+            continue;
+        }
+        let pc = (n - key as i32).rem_euclid(12) as u16;
+        if mask & (1 << pc) != 0 {
+            let dist = (n as f32 - m).abs();
+            if dist < bd {
+                bd = dist;
+                best = Some(n);
+            }
+        }
+    }
+    // an empty mask has no in-scale key: leave the note where it is
+    best.unwrap_or(base).clamp(0, 127) as u8
 }
 
 /// Bjorklund's Euclidean onsets: `k` hits spread as evenly as `n` slots allows, rotated
@@ -222,16 +247,18 @@ pub fn strum(notes: &mut [Note], width: f32, ramp: f32) {
         for (k, &i) in g.iter().enumerate() {
             let n = &mut notes[i];
             n.step += k as f32 * width;
-            n.v = (n.v + k as f32 * ramp).clamp(0.05, 1.0);
+            n.v = (n.v + k as f32 * ramp).clamp(0.0, 1.0);
         }
     }
 }
 
-/// Generate a scale-constrained melody for `ch`: `bars` bars of 16th slots, a note on
-/// every `density` slot, the pitch a small random walk over scale degrees. Bars past
-/// `repeat` replay that cycle's rhythm with the walk nudged ±1 degree, so the melody
-/// repeats instead of wandering.
+/// Replace channel `ch`'s notes with a scale-constrained melody: `bars` bars of 16th
+/// slots, a note on every `density` slot, the pitch a small random walk over scale
+/// degrees. Bars past `repeat` replay that cycle's rhythm with the walk nudged ±1
+/// degree, so the melody repeats instead of wandering. Like [`euclidean_fill`], a second
+/// run (another seed) replaces the first instead of stacking on it.
 pub fn melody(notes: &mut Vec<Note>, ch: Id, key_scale: (u8, u32), bars: u32, density: f32, repeat: u32, seed: u64) {
+    notes.retain(|n| n.ch != ch);
     let rng = &mut SplitMix64::new(seed);
     let (key, scale_id) = key_scale;
     let mask = pitch::scale_mask(scale_id);
@@ -344,6 +371,55 @@ mod tests {
         let c = &mut [Note { ch: 1, step: 4.0, len: 1.0, p: Some(66), v: 0.8 }];
         quantize(c, 1.0, 1.0, Some((0, 1)), &[(1, 60)]);
         assert_eq!(c[0].p, Some(65));
+    }
+
+    #[test]
+    fn zero_amount_keeps_quiet_velocities() {
+        // velocities below the old 0.05 floor must survive amount 0 unchanged
+        let h = &mut [note(1, 4.0, 0.02)];
+        humanize(h, 0.0, 0.0, &mut SplitMix64::new(9));
+        assert_eq!(h[0].v, 0.02);
+        let s = &mut [note(1, 4.0, 0.02), Note { ch: 1, step: 4.0, len: 1.0, p: Some(64), v: 0.02 }];
+        strum(s, 0.25, 0.0);
+        assert!(s.iter().all(|n| n.v == 0.02));
+        // and a full nudge still stays inside 0..=1
+        let h = &mut [note(1, 4.0, 0.02), note(1, 5.0, 1.0)];
+        humanize(h, 0.0, 1.0, &mut SplitMix64::new(9));
+        assert!(h.iter().all(|n| (0.0..=1.0).contains(&n.v)));
+    }
+
+    #[test]
+    fn scale_aware_quantize_stays_in_midi_range() {
+        // C# major pentatonic (key 1, scale 3): 127 would snap up to 128
+        let a = &mut [Note { ch: 1, step: 0.0, len: 1.0, p: Some(127), v: 0.8 }];
+        quantize(a, 1.0, 1.0, Some((1, 3)), &[]);
+        assert_eq!(a[0].p, Some(125));
+        // the bottom edge: 0 (C) in B major pentatonic (B C# D# F# G#) — nearest in-range is 1
+        let b = &mut [Note { ch: 1, step: 0.0, len: 1.0, p: Some(0), v: 0.8 }];
+        quantize(b, 1.0, 1.0, Some((11, 3)), &[]);
+        assert_eq!(b[0].p, Some(1));
+        // everywhere in range, the bounded snap agrees with pitch::snap
+        for key in 0..12u32 {
+            for scale in 0..5u32 {
+                let mask = pitch::scale_mask(scale);
+                for m in 0..=127u8 {
+                    let s = pitch::snap(m as f32, key, mask);
+                    if (0.0..=127.0).contains(&s) {
+                        assert_eq!(snap_midi(m as f32, key, mask), s as u8, "key {key} scale {scale} m {m}");
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn melody_replaces_its_channel() {
+        let a = &mut vec![note(3, 0.5, 0.9), note(4, 2.0, 0.9)];
+        melody(a, 3, (0, 1), 1, 0.5, 1, 1);
+        melody(a, 3, (0, 1), 1, 0.5, 1, 2);
+        let b = &mut vec![note(4, 2.0, 0.9)];
+        melody(b, 3, (0, 1), 1, 0.5, 1, 2);
+        assert_eq!(a, b, "a second run replaces the first; other channels stay");
     }
 
     #[test]

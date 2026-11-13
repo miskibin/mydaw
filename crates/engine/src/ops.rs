@@ -600,8 +600,19 @@ pub fn apply(p: &mut Project, op: &Op) -> Result<Dirty, OpError> {
                 | crate::transform::TransformVerb::Quantize { .. }
                 | crate::transform::TransformVerb::Strum { .. } => {}
             }
-            let all_notes = select.is_none();
-            let mut notes = std::mem::take(&mut p.patterns[pi].notes);
+            // positional verbs (humanize/quantize/strum) map every selected note 1:1.
+            // Generators replace every note of their target channel(s) and leave the
+            // other channels alone, so a selection does not scope them: scoping would keep
+            // unselected notes of the target channel under the new ones (duplicates)
+            let generative = matches!(
+                verb,
+                crate::transform::TransformVerb::EuclidFill { .. }
+                    | crate::transform::TransformVerb::EuclidDrums { .. }
+                    | crate::transform::TransformVerb::Melody { .. }
+            );
+            let all_notes = select.is_none() || generative;
+            // a copy: every refusal below leaves the pattern as it was (`apply` promises that)
+            let mut notes = p.patterns[pi].notes.clone();
             let idx: Vec<usize> = match select {
                 None => (0..notes.len()).collect(),
                 Some(crate::ops::TransformSelect::Indices { indices }) => {
@@ -620,6 +631,8 @@ pub fn apply(p: &mut Project, op: &Op) -> Result<Dirty, OpError> {
                         .collect()
                 }
             };
+            // (the selection is still validated above, so a bad index fails either way)
+            let idx: Vec<usize> = if generative { (0..notes.len()).collect() } else { idx };
             let mut target: Vec<Note> = idx.iter().map(|&i| notes[i].clone()).collect();
             let rng = &mut crate::transform::SplitMix64::new(seed.unwrap_or(0));
             match verb {
@@ -656,23 +669,8 @@ pub fn apply(p: &mut Project, op: &Op) -> Result<Dirty, OpError> {
                     );
                 }
             }
-            // positional verbs (humanize/quantize/strum) map every selected note 1:1;
-            // generators change cardinality, so they merge: everything that was not
-            // selected stays, and the full generator output takes the selection's place
-            let generative = matches!(
-                verb,
-                crate::transform::TransformVerb::EuclidFill { .. }
-                    | crate::transform::TransformVerb::EuclidDrums { .. }
-                    | crate::transform::TransformVerb::Melody { .. }
-            );
             let new_notes = if all_notes {
                 target
-            } else if generative {
-                let selected: std::collections::HashSet<usize> = idx.iter().copied().collect();
-                let mut merged: Vec<Note> =
-                    notes.iter().enumerate().filter(|(i, _)| !selected.contains(i)).map(|(_, n)| n.clone()).collect();
-                merged.extend(target);
-                merged
             } else {
                 for (slot, i) in idx.iter().enumerate() {
                     notes[*i] = target[slot].clone();
@@ -966,26 +964,125 @@ mod transform_tests {
     }
 
     #[test]
-    fn a_generator_with_a_selection_merges_instead_of_panicking() {
+    fn a_generator_replaces_its_whole_channel_whatever_the_selection() {
         let mut p = project_with_notes();
         p.channels.push(crate::model::Channel { id: 1002, ..p.channels[0].clone() });
-        p.patterns[0].notes[1].ch = 1002; // an unselected note on another channel must survive
+        p.patterns[0].notes[1].ch = 1002; // a note on another channel must survive
         crate::ops::apply_all(
             &mut p,
             &[Op::TransformNotes {
                 pattern: 1,
                 verb: crate::transform::TransformVerb::EuclidFill { ch: 1001, k: 3, n: 8, rotate: 0, vel: 0.7 },
                 seed: None,
-                select: Some(crate::ops::TransformSelect::Indices { indices: vec![0, 2] }),
+                // only the first ch-1001 note is selected: the unselected one at step 8
+                // must not stay under the generated onsets
+                select: Some(crate::ops::TransformSelect::Indices { indices: vec![0] }),
             }],
         )
         .unwrap();
-        // both selected ch-1001 notes are replaced by the 3 generated onsets; the
-        // unselected ch-1002 note survives untouched
         let notes = &p.patterns[0].notes;
         assert_eq!(notes.iter().filter(|n| n.ch == 1001).count(), 3);
+        assert!(notes.iter().filter(|n| n.ch == 1001).all(|n| n.p.is_none()), "only generated onsets on ch 1001");
         assert_eq!(notes.iter().filter(|n| n.ch == 1002).count(), 1);
         assert_eq!(notes.len(), 4);
+        // the same with a melody: selected or not, the result equals the unscoped run
+        let melody = |select: Option<crate::ops::TransformSelect>| {
+            let mut q = project_with_notes();
+            crate::ops::apply_all(
+                &mut q,
+                &[Op::TransformNotes {
+                    pattern: 1,
+                    verb: crate::transform::TransformVerb::Melody { ch: 1001, bars: 1, density: 0.5, repeat: 1 },
+                    seed: Some(3),
+                    select,
+                }],
+            )
+            .unwrap();
+            q.patterns[0].notes.clone()
+        };
+        assert_eq!(melody(Some(crate::ops::TransformSelect::Indices { indices: vec![1] })), melody(None));
+        // a bad index is still an error for a generator
+        let err = crate::ops::apply_all(
+            &mut project_with_notes(),
+            &[Op::TransformNotes {
+                pattern: 1,
+                verb: crate::transform::TransformVerb::EuclidFill { ch: 1001, k: 3, n: 8, rotate: 0, vel: 0.7 },
+                seed: None,
+                select: Some(crate::ops::TransformSelect::Indices { indices: vec![9] }),
+            }],
+        )
+        .unwrap_err();
+        assert!(err.to_string().contains("out of range"), "{err}");
+    }
+
+    #[test]
+    fn applying_a_melody_twice_equals_applying_it_once() {
+        let run = |p: &mut Project, seed: u64| {
+            crate::ops::apply_all(
+                p,
+                &[Op::TransformNotes {
+                    pattern: 1,
+                    verb: crate::transform::TransformVerb::Melody { ch: 1001, bars: 1, density: 0.5, repeat: 1 },
+                    seed: Some(seed),
+                    select: None,
+                }],
+            )
+            .unwrap();
+        };
+        let (mut once, mut twice) = (project_with_notes(), project_with_notes());
+        run(&mut once, 2);
+        run(&mut twice, 1);
+        run(&mut twice, 2);
+        assert_eq!(once.patterns[0].notes, twice.patterns[0].notes);
+    }
+
+    #[test]
+    fn scale_aware_quantize_keeps_the_top_key_in_range() {
+        // C# major pentatonic: 127 (G) is nearest 128 (G#) — out of MIDI range; the
+        // nearest in-range in-scale key is 125 (F)
+        let mut p = project_with_notes();
+        p.patterns[0].notes[2].p = Some(127);
+        crate::ops::apply_all(&mut p, &[Op::SetKey { key: Some(1), scale: 3 }]).unwrap();
+        crate::ops::apply_all(
+            &mut p,
+            &[Op::TransformNotes {
+                pattern: 1,
+                verb: crate::transform::TransformVerb::Quantize { grid: 1.0, amount: 1.0, scale_aware: true },
+                seed: None,
+                select: None,
+            }],
+        )
+        .unwrap();
+        assert_eq!(p.patterns[0].notes[2].p, Some(125));
+    }
+
+    /// Golden values for the drum generator's seeded velocity shading; the TS mirror
+    /// (`ui/src/lib/transforms.test.ts`, "euclidDrums") pins the same numbers.
+    #[test]
+    fn golden_euclid_drums_seeded_velocity() {
+        let mut p = project_with_notes();
+        p.channels.push(crate::model::Channel { id: 1002, ..p.channels[0].clone() });
+        crate::ops::apply_all(
+            &mut p,
+            &[Op::TransformNotes {
+                pattern: 1,
+                verb: crate::transform::TransformVerb::EuclidDrums {
+                    voices: vec![
+                        crate::transform::DrumVoice { ch: 1001, k: 4, n: 16, rotate: 0, vel: 0.7 },
+                        crate::transform::DrumVoice { ch: 1002, k: 3, n: 8, rotate: 1, vel: 0.5 },
+                    ],
+                    bars: 1,
+                },
+                seed: Some(42),
+                select: None,
+            }],
+        )
+        .unwrap();
+        let notes = &p.patterns[0].notes;
+        let of = |ch: Id| notes.iter().filter(|n| n.ch == ch).map(|n| (n.step, n.v)).collect::<Vec<_>>();
+        // every fourth onset accents to 1.0; the rest are shaded by the seed
+        assert_eq!(of(1001), [(0.0, 1.0), (4.0, 0.62858117), (8.0, 0.62858117), (12.0, 0.62858117)]);
+        assert_eq!(of(1002), [(4.0, 1.0), (10.0, 0.46679017), (14.0, 0.46679017)]);
     }
 
     #[test]

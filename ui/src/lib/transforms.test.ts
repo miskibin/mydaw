@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import type { Note } from '../api/types';
 import { SCALES, scaleMask } from './pattern';
-import { applyTransform, SplitMix64 } from './transforms';
+import { applyTransform, snapMidi, SplitMix64 } from './transforms';
 
 const note = (ch: number, step: number, p = 60, v = 0.8): Note => ({ ch, step, len: 1, p, v });
 const notes = () => [note(1, 0, 61), note(1, 4.3, 64), note(1, 8, 60)];
@@ -57,13 +57,53 @@ describe('transformNotes (TS mirror)', () => {
     expect(seq).not.toEqual([0, 0, 0]);
   });
 
-  it('a generator with a selection merges instead of overwriting positionally', () => {
+  it('a generator replaces its whole channel whatever the selection', () => {
     const a = [note(1, 0, 60, 1), note(2, 2, 70, 1), note(1, 4, 62, 1)];
-    applyTransform(a, { kind: 'euclidFill', ch: 1, k: 3, n: 8, rotate: 0, vel: 0.7 }, 0, { kind: 'indices', indices: [0, 2] }, [{ id: 1, root: 60 }, { id: 2, root: 60 }], null, 1, 16);
-    // both selected ch-1 notes are replaced by the 3 generated onsets; the ch-2 note survives
+    // only the first ch-1 note is selected: the unselected one must not stay under the onsets
+    applyTransform(a, { kind: 'euclidFill', ch: 1, k: 3, n: 8, rotate: 0, vel: 0.7 }, 0, { kind: 'indices', indices: [0] }, [{ id: 1, root: 60 }, { id: 2, root: 60 }], null, 1, 16);
     expect(a).toHaveLength(4);
     expect(a.filter(n => n.ch === 2)).toHaveLength(1);
-    expect(a.filter(n => n.ch === 1)).toHaveLength(3);
+    expect(a.filter(n => n.ch === 1).every(n => n.p === undefined)).toBe(true);
+    // a melody likewise: selected or not, the result equals the unscoped run
+    const roots = [{ id: 1, root: 60 }, { id: 2, root: 60 }];
+    const m1 = notes(), m2 = notes();
+    applyTransform(m1, { kind: 'melody', ch: 1, bars: 1, density: 0.5, repeat: 1 }, 3, { kind: 'indices', indices: [1] }, roots, 0, 1, 16);
+    applyTransform(m2, { kind: 'melody', ch: 1, bars: 1, density: 0.5, repeat: 1 }, 3, null, roots, 0, 1, 16);
+    expect(m1).toEqual(m2);
+    // a bad index still fails
+    expect(() => applyTransform(notes(), { kind: 'euclidFill', ch: 1, k: 3, n: 8 }, 0, { kind: 'indices', indices: [9] }, roots, null, 1, 16)).toThrow(/out of range/);
+  });
+
+  it('applying a melody twice equals applying it once', () => {
+    const roots = [{ id: 1, root: 60 }, { id: 2, root: 60 }];
+    const once = [...notes(), note(2, 2, 70)], twice = [...notes(), note(2, 2, 70)];
+    const verb = { kind: 'melody', ch: 1, bars: 1, density: 0.5, repeat: 1 } as const;
+    applyTransform(once, verb, 2, null, roots, 0, 1, 16);
+    applyTransform(twice, verb, 1, null, roots, 0, 1, 16);
+    applyTransform(twice, verb, 2, null, roots, 0, 1, 16);
+    expect(twice).toEqual(once);
+    expect(once.some(n => n.ch === 2 && n.step === 2)).toBe(true);
+  });
+
+  it('amount 0 keeps velocities below 0.05 (humanize, strum)', () => {
+    const roots = [{ id: 1, root: 60 }];
+    const h = [note(1, 4, 60, Math.fround(0.02))];
+    applyTransform(h, { kind: 'humanize', timing: 0, velocity: 0 }, 9, null, roots, null, 1, 16);
+    expect(h[0].v).toBe(Math.fround(0.02));
+    const s = [note(1, 4, 60, Math.fround(0.02)), note(1, 4, 64, Math.fround(0.02))];
+    applyTransform(s, { kind: 'strum', width: 0.25, ramp: 0 }, 0, null, roots, null, 1, 16);
+    expect(s.every(n => n.v === Math.fround(0.02))).toBe(true);
+  });
+
+  it('scale-aware quantize stays in MIDI range at the edges', () => {
+    const roots = [{ id: 1, root: 60 }];
+    const top = [note(1, 0, 127)];
+    applyTransform(top, { kind: 'quantize', grid: 1, amount: 1, scaleAware: true }, 0, null, roots, 1, 3, 16);
+    expect(top[0].p).toBe(125); // C# major pentatonic: not 128
+    const bottom = [note(1, 0, 0)];
+    applyTransform(bottom, { kind: 'quantize', grid: 1, amount: 1, scaleAware: true }, 0, null, roots, 11, 3, 16);
+    expect(bottom[0].p).toBe(1); // B major pentatonic: C# above, not the B below 0
+    expect(snapMidi(61, 0, scaleMask(1))).toBe(60); // ties still keep the lower note
   });
 
   it('a range select scoped to a channel touches only that channel', () => {
@@ -102,6 +142,14 @@ describe('transformNotes (TS mirror)', () => {
       applyTransform(e, { kind: 'euclidFill', ch: 1, k: 5, n: 16, rotate: 0, vel: 0.7 }, 0, null, roots, null, 1, 16);
       expect(e.map(n => n.step)).toEqual([0, 4, 7, 10, 13]);
       expect(e.map(n => n.v)).toEqual([1, 0.7, 0.7, 0.7, 1]);
+    });
+
+    it('euclidDrums (seeded velocity shading, from golden_euclid_drums_seeded_velocity)', () => {
+      const d: Note[] = [note(1, 0, 61)];
+      applyTransform(d, { kind: 'euclidDrums', voices: [{ ch: 1, k: 4, n: 16, rotate: 0, vel: 0.7 }, { ch: 2, k: 3, n: 8, rotate: 1, vel: 0.5 }], bars: 1 }, 42, null, [{ id: 1, root: 60 }, { id: 2, root: 60 }], null, 1, 16);
+      const of = (ch: number) => d.filter(n => n.ch === ch).map(n => [n.step, n.v]);
+      expect(of(1)).toEqual([[0, 1], [4, f(0.62858117)], [8, f(0.62858117)], [12, f(0.62858117)]]);
+      expect(of(2)).toEqual([[4, 1], [10, f(0.46679017)], [14, f(0.46679017)]]);
     });
 
     it('melody (A minor, seed 7)', () => {

@@ -27,19 +27,21 @@ export class SplitMix64 {
 
 const clamp01 = (v: number) => Math.min(1, Math.max(0, v));
 
-/** `pitch::snap` — nearest in-scale MIDI note, ties keep the lower note. */
-function snap(m: number, key: number, mask: number): number {
+/** The engine's `transform::snap_midi` (`pitch::snap` within MIDI keys): nearest
+ * in-scale key in 0..=127, ties keep the lower note. */
+export function snapMidi(m: number, key: number, mask: number): number {
   const base = Math.round(m);
-  let best = base, bd = Infinity;
-  for (let d = -6; d <= 6; d++) {
+  let best: number | null = null, bd = Infinity;
+  for (let d = -11; d <= 11; d++) {
     const n = base + d;
+    if (n < 0 || n > 127) continue;
     const pc = ((n - key) % 12 + 12) % 12;
     if (mask & (1 << pc)) {
       const dist = Math.abs(n - m);
       if (dist < bd) { bd = dist; best = n; }
     }
   }
-  return best;
+  return Math.min(127, Math.max(0, best ?? base));
 }
 
 function euclideanOnsets(k: number, n: number, rotate: number): boolean[] {
@@ -57,8 +59,12 @@ export function applyTransform(notes: Note[], verb: TransformVerb, seed: number,
   if ((verb.kind === 'euclidFill' || verb.kind === 'melody') && !chanOk(verb.ch)) throw new Error(`no channel with id ${verb.ch}`);
   if (verb.kind === 'euclidDrums' && verb.voices.some(v => !chanOk(v.ch))) throw new Error('no channel with that id');
 
+  // generators replace every note of their target channel(s) and keep the other
+  // channels, so a selection does not scope them (it would leave unselected notes of the
+  // target channel under the new ones); it is still validated, like the engine does
+  const generative = verb.kind === 'euclidFill' || verb.kind === 'euclidDrums' || verb.kind === 'melody';
   // the notes the verb sees — the engine builds the same index list
-  const idx = !select
+  const selIdx = !select
     ? notes.map((_, i) => i)
     : select.kind === 'indices'
       ? (select.indices.some(i => i >= notes.length)
@@ -66,6 +72,7 @@ export function applyTransform(notes: Note[], verb: TransformVerb, seed: number,
         : [...select.indices])
       : notes.map((n, i) => (n.step >= Math.min(select.from, select.to) && n.step < Math.max(select.from, select.to) && (!select.ch || n.ch === select.ch) ? i : -1))
           .filter(i => i >= 0);
+  const idx = generative ? notes.map((_, i) => i) : selIdx;
   const target: Note[] = idx.map(i => structuredClone(notes[i]));
 
   switch (verb.kind) {
@@ -75,7 +82,7 @@ export function applyTransform(notes: Note[], verb: TransformVerb, seed: number,
       for (const n of target) {
         n.step = Math.max(0, Math.fround(n.step + Math.fround(rng.pm1() * maxJitter)));
         const nudge = Math.fround(1 + Math.fround(Math.fround(rng.pm1() * 0.5) * vel));
-        n.v = Math.min(1, Math.max(0.05, Math.fround(Math.fround((n.v ?? 1) * nudge))));
+        n.v = Math.min(1, Math.max(0, Math.fround(Math.fround((n.v ?? 1) * nudge))));
       }
       break;
     }
@@ -89,7 +96,7 @@ export function applyTransform(notes: Note[], verb: TransformVerb, seed: number,
         n.v = n.v ?? 1;
         if (ks) {
           const root = roots.find(r => r.id === n.ch)?.root ?? 60;
-          n.p = snap(n.p ?? root, ks.key, ks.mask);
+          n.p = snapMidi(n.p ?? root, ks.key, ks.mask);
         }
       }
       break;
@@ -123,27 +130,32 @@ export function applyTransform(notes: Note[], verb: TransformVerb, seed: number,
         g.forEach((i, k) => {
           const n = target[i];
           n.step = Math.fround(n.step + Math.fround(k * width));
-          n.v = Math.min(1, Math.max(0.05, Math.fround((n.v ?? 1) + Math.fround(k * ramp))));
+          n.v = Math.min(1, Math.max(0, Math.fround((n.v ?? 1) + Math.fround(k * ramp))));
         });
       }
       break;
     }
     case 'euclidDrums': {
       const bars = Math.max(1, verb.bars ?? 2);
+      // the seed shades each voice's velocity ±15 % (its own stream, like the engine)
+      const shade = new SplitMix64(seed);
       for (const v of verb.voices) {
         for (let i = target.length - 1; i >= 0; i--) if (target[i].ch === v.ch) target.splice(i, 1);
+        const vel = Math.min(1, Math.max(0.1, Math.fround(Math.fround(v.vel ?? 0.7) * Math.fround(1 + Math.fround(shade.pm1() * Math.fround(0.15))))));
         const onsets = euclideanOnsets(v.k, v.n, v.rotate ?? 0);
         const slot = Math.fround((bars * 16) / Math.max(1, v.n));
         let hits = 0;
         onsets.forEach((on, i) => {
           if (on) {
-            target.push({ ch: v.ch, step: Math.fround(i * slot), len: Math.fround(Math.min(1, Math.max(0.25, slot))), p: undefined, v: hits++ % 4 === 0 ? 1 : v.vel ?? 0.7 });
+            target.push({ ch: v.ch, step: Math.fround(i * slot), len: Math.fround(Math.min(1, Math.max(0.25, slot))), p: undefined, v: hits++ % 4 === 0 ? 1 : vel });
           }
         });
       }
       break;
     }
     case 'melody': {
+      // a melody replaces its channel, like euclidFill: a second run does not stack
+      for (let i = target.length - 1; i >= 0; i--) if (target[i].ch === verb.ch) target.splice(i, 1);
       const bars = Math.max(1, verb.bars ?? 2);
       const rep = Math.max(1, verb.repeat ?? 1);
       const density = Math.min(1, Math.max(0.05, verb.density ?? 0.5));
@@ -182,15 +194,8 @@ export function applyTransform(notes: Note[], verb: TransformVerb, seed: number,
     }
   }
 
-  if (!select) {
+  if (!select || generative) {
     notes.splice(0, notes.length, ...target);
-  } else if (verb.kind === 'euclidFill' || verb.kind === 'euclidDrums' || verb.kind === 'melody') {
-    // generators change cardinality: everything unselected stays, the full output
-    // replaces the selection (positional overwrite would drop or misalign notes)
-    const selected = new Set(idx);
-    const merged = notes.filter((_, i) => !selected.has(i));
-    merged.push(...target);
-    notes.splice(0, notes.length, ...merged);
   } else {
     idx.forEach((ni, k) => { notes[ni] = target[k]; });
   }

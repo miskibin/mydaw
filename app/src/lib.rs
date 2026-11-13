@@ -1227,7 +1227,9 @@ mod locale_tests {
 
     /// `gtk_init` pulls `LC_NUMERIC` to the user's locale; plugin preset text
     /// (`atof` in state restore) must keep parsing `0.4` as 0.4 regardless.
-    /// Skips silently when no comma-decimal locale is installed.
+    /// Skips when no comma-decimal locale is installed (Windows, macOS, a bare
+    /// local Linux) — except on Linux CI (`CI` set), whose workflow generates
+    /// `de_DE.UTF-8`: there a missing locale fails instead of passing untested.
     ///
     /// The locale swap runs in a dedicated child process: `setlocale` is
     /// process-global and glibc documents it as thread-unsafe, and the test
@@ -1275,6 +1277,12 @@ mod locale_tests {
             }
         }
         let Some(loc) = found else {
+            // Linux CI generates de_DE.UTF-8 (.github/workflows/ci.yml): a silent
+            // skip there would mean the guard is never tested
+            assert!(
+                !(cfg!(target_os = "linux") && std::env::var_os("CI").is_some()),
+                "no comma-decimal locale on Linux CI: generate one (sudo locale-gen de_DE.UTF-8)"
+            );
             return; // no comma-decimal locale installed: nothing to guard against
         };
 
