@@ -935,10 +935,40 @@ mod locale_tests {
     /// `gtk_init` pulls `LC_NUMERIC` to the user's locale; plugin preset text
     /// (`atof` in state restore) must keep parsing `0.4` as 0.4 regardless.
     /// Skips silently when no comma-decimal locale is installed.
+    ///
+    /// The locale swap runs in a dedicated child process: `setlocale` is
+    /// process-global and glibc documents it as thread-unsafe, and the test
+    /// harness runs tests on parallel threads, so unrelated tests or native
+    /// dependencies must not observe the temporary comma locale.
     #[test]
     fn numeric_parsing_survives_the_user_locale() {
-        // SAFETY: setlocale/strtod with valid NUL-terminated strings; the
-        // process is single-threaded here so no other thread reads the locale.
+        const CHILD_ENV: &str = "WAVE_LOCALE_TEST_CHILD";
+        if std::env::var_os(CHILD_ENV).is_none() {
+            // parent: rerun this binary for just this test with the child
+            // marker set (keep the --exact name in sync with the fn name)
+            let exe = std::env::current_exe().expect("test executable path");
+            let out = std::process::Command::new(exe)
+                .args([
+                    "--exact",
+                    "locale_tests::numeric_parsing_survives_the_user_locale",
+                    "--nocapture",
+                ])
+                .env(CHILD_ENV, "1")
+                .output()
+                .expect("spawn the locale test child process");
+            let stdout = String::from_utf8_lossy(&out.stdout);
+            assert!(
+                out.status.success() && stdout.contains("1 passed"),
+                "locale child process failed: {}\n{stdout}",
+                out.status
+            );
+            return;
+        }
+
+        // child process only from here on: the swap stays out of the shared
+        // test process
+        // SAFETY: setlocale/strtod with valid NUL-terminated strings; this
+        // test is all the child runs, so no other thread reads the locale.
         unsafe extern "C" {
             fn setlocale(category: i32, locale: *const std::ffi::c_char) -> *mut std::ffi::c_char;
             fn strtod(s: *const std::ffi::c_char, end: *mut *mut std::ffi::c_char) -> f64;
@@ -964,6 +994,10 @@ mod locale_tests {
         };
 
         ensure_c_numeric_locale();
-        assert_eq!(parse("0.4"), 0.4, "after ensure_c_numeric_locale, {loc} must not break decimal parsing");
+        assert_eq!(
+            parse("0.4"),
+            0.4,
+            "after ensure_c_numeric_locale, {loc} must not break decimal parsing"
+        );
     }
 }
