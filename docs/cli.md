@@ -1,10 +1,15 @@
 # `wave` — the command line
 
-The CLI talks to the **running app** and edits the same project you see,
-with the same undo history. There is nothing to install: on start the app puts
-a `wave` launcher on your PATH (`%LOCALAPPDATA%\Microsoft\WindowsApps\wave.cmd`
-on Windows, `~/.local/bin/wave` elsewhere). Settings → CLI shows where it went.
-Open a new terminal after the first start and run:
+The CLI works in two ways, with the same commands:
+
+* **The running app** (the default): it edits the project you see, with the same undo history.
+* **A project file** (`--project FILE`, or `-p`): no app, no window and no audio device. The
+  file is loaded, the command runs, and the file is saved back if the command changed it.
+  See [Project files without the app](#project-files-without-the-app).
+
+There is nothing to install: on start the app puts a `wave` launcher on your PATH
+(`%LOCALAPPDATA%\Microsoft\WindowsApps\wave.cmd` on Windows, `~/.local/bin/wave` elsewhere).
+Settings → CLI shows where it went. Open a new terminal after the first start and run:
 
 ```sh
 wave status
@@ -12,8 +17,60 @@ wave context --pretty
 ```
 
 stdout is only JSON (`--pretty` to indent); messages go to stderr. Exit codes:
-`0` ok, `1` bad usage, `2` WAVE not running / unreachable, `3` the app refused
-(invalid op, revision conflict, missing plugin …).
+`0` ok, `1` bad usage, `2` WAVE not running / unreachable, `3` refused, as
+`CODE: message` (`BAD_OPS`, `REVISION_CONFLICT`, `NEEDS_APP`, `FILE_OPEN` …).
+
+## Project files without the app
+
+```sh
+wave new song.wave --template sketch --bpm 140      # or --template empty (default); --force replaces a file
+wave -p song.wave context                           # any read: nothing is written
+wave -p song.wave pattern --id 1 --ch kick --steps "x... x... x... x..."   # saved back to song.wave
+wave -p song.wave render --out song.wav             # or --stems --out stems/
+wave -p song.wave bpm 150 --save-as song-150.wave   # song.wave stays as it was
+wave -p song.wave apply --file ops.json --dry-run   # try it: the reply has dryRun.changed, nothing is saved
+```
+
+Every reply on a file has `saved`: the path written, or `null`. Audio that could not be loaded
+is printed as a warning on stderr and listed under `loadWarnings`; the command still runs (the
+missing sources play silence, as in the app).
+
+- **What is refused.** `play`, `stop`, `pattern --play`, `comp --audition`, `undo`, `redo` and
+  `open` answer `NEEDS_APP`: they need the audio device or the app's undo history, which a file
+  does not have. Listen by rendering; try edits with `--dry-run` or `--save-as`.
+- **A file the app has open.** An edit to a file that a running WAVE has open is refused with
+  `FILE_OPEN`: the app keeps its own copy and would overwrite the edit on its next save. Edit it
+  in the app (drop `--project`), close it there, or pass `--force`. Reading and rendering it are
+  fine.
+- **Saving.** The save works as it does in the app: a `(backup)` copy of the previous file, and
+  recordings moved next to the project. `save` saves even an unchanged file; `save --path` is
+  the same as `--save-as`.
+- **What is the same.** Renders and stems are the same bounce as the app's export (the WAVE Keys
+  piano is loaded, or the command fails with `KEYS_MISSING` instead of rendering silence;
+  pitch-edited clips use the installed RMVPE model as the app does). VST3 effects load from the
+  scan cache. `vst3-params` and `vst3-set` work, and the plugin's state is saved in the file.
+
+### Scripts: many commands, one load
+
+```sh
+wave -p song.wave script edits.txt      # or `script -` to read stdin
+```
+
+```text
+# edits.txt: one command per line, quoted like a shell ('…' or "…", no escapes)
+bpm 128
+pattern --id 1 --ch hat --steps "x.x. x.x. x.x5 x.x9"
+apply --json '[{"op":"setLoop","loop":{"a":0,"b":16}}]'
+render --out preview.wav
+```
+
+On a file the project is loaded once and saved once, at the end. The first line that fails stops
+the script and **nothing is written**; the error names the line (`line 2 (`pattern`): …`). The
+reply lists each line's result. Without `--project`, a script runs against the running app line
+by line: lines before a failing one stay applied, each as its own undo step. Options of the whole
+run (`--project`, `--session`, `--save-as`, `--dry-run`, `--force`, `--pretty`) go before
+`script`, not on its lines; a leading `wave` on a line is ignored. Relative paths in a line are
+relative to the current folder.
 
 ## Reading
 

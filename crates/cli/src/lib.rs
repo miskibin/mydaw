@@ -1,17 +1,38 @@
-//! `wave` — the command line for a running WAVE app (and `tune-file`, which runs offline).
+//! `wave` — the command line: the project open in a running WAVE app, or (with `--project`,
+//! given a [`Files`] provider by the app binary) a project file with no app running.
 //!
 //! stdout is only the JSON result; diagnostics go to stderr.
 //! Exit codes: 0 ok, 1 usage, 2 no session / connection, 3 the app refused the request.
 
+use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 
 use serde_json::{json, Value};
 use wave_session as ws;
 
-const HELP: &str = r#"wave — control the open WAVE project
+const HELP: &str = r#"wave — edit, render and inspect WAVE projects
+docs: https://github.com/miskibin/wave-DAW/blob/main/docs/cli.md
 
 USAGE
-  wave <command> [options]                 (add --session ID when several apps are open)
+  wave <command> [options]                 the project open in the running app (--session ID if several are open)
+  wave -p song.wave <command> [options]    a project file, no app needed: load, run, save back if it changed
+                                           [--save-as FILE] [--dry-run: save nothing] [--force: even if the app has it open]
+  wave new song.wave [--template empty|sketch] [--bpm N]   create a project file
+
+FOR SCRIPTS AND AGENTS
+  stdout is one JSON value, messages go to stderr. Exit: 0 ok, 1 usage, 2 app not running/unreachable,
+  3 refused ("CODE: message", e.g. BAD_OPS, REVISION_CONFLICT, NEEDS_APP, FILE_OPEN).
+  Read `context` first, then `schema` (ops for `apply`) and `catalog` (effect params, presets).
+  Units: time in beats (4 = 1 bar), note step/len in 16ths, vol 0.7937 = 0 dB, clip gain dB, pan -1..1.
+  New ids: count up from context.nextId. One `apply` batch is atomic: prefer it for related edits.
+  Check a result without listening: `render --out x.wav` returns peak/RMS/crest/clipping per file.
+  On a file, play/stop/undo/redo/auditions are refused (NEEDS_APP); edits to a file the app has
+  open are refused (FILE_OPEN) because the app would overwrite them on its next save.
+
+SCRIPTS
+  script FILE|-                            one command per line ('…'/"…" quote, # comments, a leading
+                                           `wave` is ignored); stops at the first failing line. With -p:
+                                           one load and one save, nothing written if a line fails
 
 READ
   sessions                                 list running WAVE apps
@@ -23,7 +44,7 @@ READ
 
 EDIT  (all edits are one undo step each; --if-revision N refuses to act if the project moved on)
   apply --file ops.json | --json '[...]'   apply a batch of ops atomically   [--label TEXT]
-  undo | redo
+  undo | redo                              (running app only)
   bpm <value>
   add-fx --insert ID --type eq|comp|sat|delay|half|warp|reverb|limit|... [--preset N]
   set-param --fx ID --param NAME --value V
@@ -55,7 +76,7 @@ TAKES & COMPING  (times in timeline beats; add --clip ID when a track has severa
   comp --track N --flatten                 render the comp to one audio clip (removes the takes)
   comp --track N --audition ID|off         play one take instead of the comp (not an edit)
 
-TRANSPORT
+TRANSPORT  (running app only)
   play [--from BEAT] | stop
 
 FILES
@@ -65,7 +86,7 @@ FILES
                                            one WAV per mixer insert with sound (named after it) + Master.wav
   WAV options: --wav-bits 24|32 (default 32-bit float); --dither (24-bit PCM only)
                --wrap-tail (carry effects into the start of the loop)
-  save [--path FILE] | open <FILE>
+  save [--path FILE] | open <FILE>          (app; with -p the file is saved for you, --save-as copies)
 
 PITCH  (Tune to Reference: pull a vocal take onto another performance of the same melody)
   tune-ref --clip ID --reference SOURCE | --melody CHANNEL [--correction 0..100 --vibrato 0..100
@@ -100,6 +121,26 @@ NOTES  (deterministic transforms and generators for a pattern's notes)
   --pretty                                 indent JSON output
 "#;
 
+/// Opens and creates project files in this process: what `--project` and `new` need.
+/// The app binary provides it; the standalone `wave` binary only talks to a running app.
+pub trait Files {
+    /// Loads a project file; the warnings name audio that could not be loaded.
+    fn open(&self, path: &Path) -> Result<(Box<dyn Doc>, Vec<String>), String>;
+    /// A new, unsaved project from a template: `empty` or `sketch`.
+    fn create(&self, template: &str) -> Result<Box<dyn Doc>, String>;
+}
+
+/// A project held by this process.
+pub trait Doc {
+    /// The same request the running app answers; an error is `CODE: message` or a message.
+    fn call(&self, command: &str, args: &Value, if_revision: Option<u64>) -> Result<Value, String>;
+    fn revision(&self) -> u64;
+    /// Changed since it was loaded or saved.
+    fn dirty(&self) -> bool;
+    fn save(&self, path: &Path) -> Result<(), String>;
+}
+
+#[derive(Clone)]
 struct Args {
     pos: Vec<String>,
     opts: Vec<(String, Option<String>)>,
@@ -111,7 +152,11 @@ impl Args {
         let mut opts = vec![];
         let mut it = raw.into_iter().peekable();
         while let Some(a) = it.next() {
-            if let Some(k) = a.strip_prefix("--") {
+            let key = match a.as_str() {
+                "-p" => Some("project"),
+                _ => a.strip_prefix("--"),
+            };
+            if let Some(k) = key {
                 let v = match it.peek() {
                     Some(n) if !n.starts_with("--") || n.parse::<f64>().is_ok() => it.next(),
                     _ => None,
@@ -140,14 +185,25 @@ impl Args {
     }
 }
 
+#[derive(Debug)]
 enum Fail {
     Usage(String),
     Conn(String),
     App(String),
 }
 
-/// Runs the CLI with `raw` arguments (without the program name).
+/// Where requests go: the running app (`doc` = None) or a project held here.
+struct Cx<'a> {
+    doc: Option<&'a dyn Doc>,
+}
+
+/// Runs the CLI with `raw` arguments (without the program name), against the running app only.
 pub fn run_cli(raw: Vec<String>) -> ExitCode {
+    run_cli_with(raw, None)
+}
+
+/// Runs the CLI; with `files`, `--project FILE` and `new` work without a running app.
+pub fn run_cli_with(raw: Vec<String>, files: Option<&dyn Files>) -> ExitCode {
     let a = Args::parse(raw);
     let pretty = a.has("pretty");
     let Some(cmd) = a.pos.first().cloned() else {
@@ -158,7 +214,14 @@ pub fn run_cli(raw: Vec<String>) -> ExitCode {
         print!("{HELP}");
         return ExitCode::SUCCESS;
     }
-    match run(&cmd, &a) {
+    let res = if cmd == "new" {
+        new_file(files, &a)
+    } else if a.has("project") {
+        on_file(files, &cmd, &a)
+    } else {
+        run(&Cx { doc: None }, &cmd, &a)
+    };
+    match res {
         Ok(v) => {
             let s = if pretty { serde_json::to_string_pretty(&v) } else { serde_json::to_string(&v) };
             println!("{}", s.unwrap_or_default());
@@ -179,6 +242,133 @@ pub fn run_cli(raw: Vec<String>) -> ExitCode {
     }
 }
 
+fn need_files(files: Option<&dyn Files>) -> Result<&dyn Files, Fail> {
+    files.ok_or_else(|| {
+        Fail::Usage(
+            "this `wave` binary only talks to a running app; project files need the `wave` the WAVE app installs (it runs `WAVE --cli`)"
+                .into(),
+        )
+    })
+}
+
+fn abs(p: &str) -> PathBuf {
+    std::path::absolute(p).unwrap_or_else(|_| PathBuf::from(p))
+}
+
+/// The same file, also when one of them does not exist yet (case-insensitive on Windows and macOS).
+fn same_file(a: &Path, b: &Path) -> bool {
+    let norm = |p: &Path| {
+        let p = std::fs::canonicalize(p).unwrap_or_else(|_| abs(&p.to_string_lossy()));
+        let s = p.to_string_lossy().trim_start_matches(r"\\?\").replace('\\', "/");
+        if cfg!(any(windows, target_os = "macos")) {
+            s.to_lowercase()
+        } else {
+            s
+        }
+    };
+    norm(a) == norm(b)
+}
+
+/// Refuses to write a file a running app has open: its next save would silently undo this edit.
+fn not_open_in_app(path: &Path, a: &Args) -> Result<(), Fail> {
+    if a.has("force") {
+        return Ok(());
+    }
+    for ep in ws::sessions() {
+        let Ok(rep) = ws::call(&ep, "status", json!({}), None, None) else { continue };
+        let open = rep.data.get("path").and_then(Value::as_str).map(PathBuf::from);
+        if open.as_deref().is_some_and(|o| same_file(o, path)) {
+            return Err(Fail::App(format!(
+                "FILE_OPEN: {} is open in WAVE (session {}). Edit it there (drop --project; the edit joins the app's undo history), close it in the app first, or add --force (the app overwrites the file on its next save)",
+                path.display(),
+                &ep.session_id[..ep.session_id.len().min(8)]
+            )));
+        }
+    }
+    Ok(())
+}
+
+/// `wave --project FILE <command>`: load, run, save if it changed.
+fn on_file(files: Option<&dyn Files>, cmd: &str, a: &Args) -> Result<Value, Fail> {
+    let files = need_files(files)?;
+    let given = a.get("project").ok_or_else(|| Fail::Usage("--project needs a file: --project song.wave".into()))?;
+    let path = abs(given);
+    if a.has("session") {
+        return Err(Fail::Usage("--session talks to a running app and --project works on a file; pick one".into()));
+    }
+    if a.has("save-as") && a.get("save-as").is_none() {
+        return Err(Fail::Usage("--save-as needs a file".into()));
+    }
+    if !path.is_file() {
+        return Err(Fail::Usage(format!("{given} does not exist (create it with `wave new {given}`)")));
+    }
+    let (doc, warnings) = files.open(&path).map_err(|e| Fail::App(format!("OPEN_FAILED: {e}")))?;
+    for w in &warnings {
+        eprintln!("wave: warning: {w}");
+    }
+    let cx = Cx { doc: Some(&*doc) };
+    let mut out = run(&cx, cmd, a)?;
+    let save_as = a.get("save-as").or(if cmd == "save" { a.get("path") } else { None }).map(abs);
+    let target = save_as.clone().unwrap_or(path);
+    let wanted = doc.dirty() || save_as.is_some() || cmd == "save";
+    let dry = a.has("dry-run");
+    let saved = if wanted && !dry {
+        not_open_in_app(&target, a)?;
+        doc.save(&target).map_err(|e| Fail::App(format!("SAVE_FAILED: {}: {e}", target.display())))?;
+        Some(target.display().to_string())
+    } else {
+        None
+    };
+    if let Value::Object(m) = &mut out {
+        m.insert("saved".into(), json!(saved));
+        if dry {
+            m.insert("dryRun".into(), json!({ "changed": doc.dirty(), "wouldSave": wanted.then(|| target.display().to_string()) }));
+        }
+        if !warnings.is_empty() {
+            m.insert("loadWarnings".into(), json!(warnings));
+        }
+    }
+    Ok(out)
+}
+
+/// `wave new FILE [--template empty|sketch] [--bpm N] [--force]`
+fn new_file(files: Option<&dyn Files>, a: &Args) -> Result<Value, Fail> {
+    let u = Fail::Usage;
+    let files = need_files(files)?;
+    let raw = a.pos.get(1).ok_or_else(|| u("new <FILE> [--template empty|sketch] [--bpm N]".into()))?;
+    let mut path = abs(raw);
+    if path.extension().is_none() {
+        path.set_extension("wave");
+    }
+    if path.exists() && !a.has("force") {
+        return Err(Fail::App(format!("EXISTS: {} already exists (--force replaces it)", path.display())));
+    }
+    let template = a.get("template").unwrap_or("empty");
+    let doc = files.create(template).map_err(u)?;
+    if let Some(bpm) = a.num("bpm").map_err(u)? {
+        doc.call("apply", &json!({"ops": [{"op": "setBpm", "bpm": bpm}]}), None).map_err(|e| Fail::App(app_error(e)))?;
+    }
+    if let Some(dir) = path.parent() {
+        std::fs::create_dir_all(dir).map_err(|e| Fail::App(format!("SAVE_FAILED: {}: {e}", dir.display())))?;
+    }
+    not_open_in_app(&path, a)?;
+    doc.save(&path).map_err(|e| Fail::App(format!("SAVE_FAILED: {}: {e}", path.display())))?;
+    let ctx = doc.call("context", &json!({}), None).map_err(|e| Fail::App(app_error(e)))?;
+    Ok(
+        json!({ "saved": path.display().to_string(), "template": template, "bpm": ctx["bpm"], "tracks": ctx["tracks"].as_array().map(Vec::len), "nextId": ctx["nextId"] }),
+    )
+}
+
+/// `CODE: message`, as the running app reports a refusal.
+fn app_error(m: String) -> String {
+    let coded = m.split(':').next().is_some_and(|c| c.len() > 2 && c.chars().all(|ch| ch.is_ascii_uppercase() || ch == '_'));
+    if coded {
+        m
+    } else {
+        format!("REFUSED: {m}")
+    }
+}
+
 fn session(a: &Args) -> Result<ws::Endpoint, Fail> {
     let all = ws::sessions();
     match a.get("session") {
@@ -186,16 +376,23 @@ fn session(a: &Args) -> Result<ws::Endpoint, Fail> {
             all.into_iter().find(|e| e.session_id.starts_with(id)).ok_or_else(|| Fail::Conn(format!("no running WAVE session {id}")))
         }
         None => match all.len() {
-            0 => Err(Fail::Conn("WAVE is not running (start the app, then try again)".into())),
+            0 => Err(Fail::Conn("WAVE is not running (start the app, or work on a file: wave --project song.wave …)".into())),
             1 => Ok(all.into_iter().next().unwrap()),
             n => Err(Fail::Conn(format!("{n} WAVE apps are open; pick one with --session ID (see `wave sessions`)"))),
         },
     }
 }
 
-fn send(a: &Args, command: &str, args: Value) -> Result<Value, Fail> {
-    let ep = session(a)?;
+fn send(cx: &Cx, a: &Args, command: &str, args: Value) -> Result<Value, Fail> {
     let rev = a.num("if-revision").map_err(Fail::Usage)?.map(|v| v as u64);
+    if let Some(doc) = cx.doc {
+        let mut d = doc.call(command, &args, rev).map_err(|e| Fail::App(app_error(e)))?;
+        if let Value::Object(m) = &mut d {
+            m.entry("revision").or_insert(json!(doc.revision()));
+        }
+        return Ok(d);
+    }
+    let ep = session(a)?;
     let rep = ws::call(&ep, command, args, rev, a.get("label").map(str::to_owned))
         .map_err(|e| Fail::Conn(format!("could not reach WAVE: {e}")))?;
     if rep.ok {
@@ -210,21 +407,119 @@ fn send(a: &Args, command: &str, args: Value) -> Result<Value, Fail> {
     }
 }
 
+/// Splits a script line like a shell: whitespace separates, '…' and "…" group. No escapes,
+/// so Windows paths keep their backslashes and JSON in '…' keeps its double quotes.
+fn split_line(line: &str) -> Result<Vec<String>, String> {
+    let mut out = vec![];
+    let mut cur = String::new();
+    let mut started = false;
+    let mut quote: Option<char> = None;
+    for ch in line.chars() {
+        match quote {
+            Some(q) if ch == q => quote = None,
+            Some(_) => cur.push(ch),
+            None if ch == '\'' || ch == '"' => {
+                quote = Some(ch);
+                started = true;
+            }
+            None if ch.is_whitespace() => {
+                if started {
+                    out.push(std::mem::take(&mut cur));
+                    started = false;
+                }
+            }
+            None => {
+                cur.push(ch);
+                started = true;
+            }
+        }
+    }
+    if let Some(q) = quote {
+        return Err(format!("unclosed {q}"));
+    }
+    if started {
+        out.push(cur);
+    }
+    Ok(out)
+}
+
+/// Options of the whole invocation, not of one script line.
+const OUTER_ONLY: &[&str] = &["project", "session", "save-as", "dry-run", "force", "pretty"];
+
+/// `wave [--project FILE] script FILE|-`: one command per line, stops at the first failure.
+fn script(cx: &Cx, a: &Args) -> Result<Value, Fail> {
+    let u = Fail::Usage;
+    let src = a.pos.get(1).ok_or_else(|| u("script <FILE> (or - for stdin)".into()))?;
+    let text = if src == "-" {
+        let mut t = String::new();
+        std::io::Read::read_to_string(&mut std::io::stdin(), &mut t).map_err(|e| u(format!("stdin: {e}")))?;
+        t
+    } else {
+        std::fs::read_to_string(src).map_err(|e| u(format!("{src}: {e}")))?
+    };
+    let mut results = vec![];
+    for (i, line) in text.lines().enumerate() {
+        let n = i + 1;
+        let t = line.trim();
+        if t.is_empty() || t.starts_with('#') {
+            continue;
+        }
+        let mut words = split_line(t).map_err(|e| u(format!("line {n}: {e}")))?;
+        if words.first().map(String::as_str) == Some("wave") {
+            words.remove(0);
+        }
+        let mut la = Args::parse(words);
+        let Some(cmd) = la.pos.first().cloned() else { continue };
+        if matches!(cmd.as_str(), "script" | "new" | "help") {
+            return Err(u(format!("line {n}: `{cmd}` cannot run inside a script")));
+        }
+        if let Some((k, _)) = la.opts.iter().find(|(k, _)| OUTER_ONLY.contains(&k.as_str())) {
+            return Err(u(format!("line {n}: --{k} belongs to the whole script: `wave --{k} … script FILE`")));
+        }
+        if let Some(s) = a.get("session") {
+            la.opts.push(("session".into(), Some(s.into())));
+        }
+        match run(cx, &cmd, &la) {
+            Ok(v) => results.push(json!({ "line": n, "command": cmd, "result": v })),
+            Err(e) => {
+                let done = if cx.doc.is_some() {
+                    "nothing was saved".to_string()
+                } else if results.is_empty() {
+                    "nothing was changed".to_string()
+                } else {
+                    format!(
+                        "the {} command(s) before it were applied to the open project (each is one undo step in the app)",
+                        results.len()
+                    )
+                };
+                let at = |m: String| format!("line {n} (`{cmd}`): {m}; {done}");
+                return Err(match e {
+                    Fail::Usage(m) => Fail::Usage(at(m)),
+                    Fail::Conn(m) => Fail::Conn(at(m)),
+                    Fail::App(m) => Fail::App(at(m)),
+                });
+            }
+        }
+    }
+    Ok(json!({ "results": results }))
+}
+
 /// `12` → 12, `kick` → "kick".
 fn id_or_name(s: &str) -> Value {
     s.parse::<u64>().map(|n| json!(n)).unwrap_or_else(|_| json!(s))
 }
 
-fn run(cmd: &str, a: &Args) -> Result<Value, Fail> {
+fn run(cx: &Cx, cmd: &str, a: &Args) -> Result<Value, Fail> {
     let u = Fail::Usage;
     match cmd {
         "sessions" => Ok(json!(ws::sessions()
             .into_iter()
             .map(|e| json!({"sessionId": e.session_id, "pid": e.pid, "project": e.project}))
             .collect::<Vec<_>>())),
-        "status" | "catalog" | "schema" | "undo" | "redo" | "stop" => send(a, cmd, json!({})),
-        "context" => send(a, "context", json!({"full": a.has("full")})),
+        "status" | "catalog" | "schema" | "undo" | "redo" | "stop" => send(cx, a, cmd, json!({})),
+        "context" => send(cx, a, "context", json!({"full": a.has("full")})),
         "analyze" => send(
+            cx,
             a,
             "music_analyze",
             json!({"clipId": a.num("clip").map_err(u)?.map(|v| v as u64), "excludeFx": a.num("exclude-fx").map_err(u)?.map(|v| v as u64)}),
@@ -242,23 +537,26 @@ fn run(cmd: &str, a: &Args) -> Result<Value, Fail> {
                 Value::Object(_) => json!([v]),
                 _ => return Err(u("ops must be an array of op objects".into())),
             };
-            send(a, "apply", json!({"ops": ops}))
+            send(cx, a, "apply", json!({"ops": ops}))
         }
         "bpm" => {
             let v: f64 = a.pos.get(1).and_then(|s| s.parse().ok()).ok_or_else(|| u("bpm <value>".into()))?;
-            send(a, "apply", json!({"ops": [{"op": "setBpm", "bpm": v}]}))
+            send(cx, a, "apply", json!({"ops": [{"op": "setBpm", "bpm": v}]}))
         }
         "add-fx" => send(
+            cx,
             a,
             "add_fx",
             json!({"insertId": a.num("insert").map_err(u)?.ok_or_else(|| u("missing --insert".into()))? as u64, "type": a.need("type").map_err(u)?, "preset": a.num("preset").map_err(u)?}),
         ),
         "set-param" => send(
+            cx,
             a,
             "set_param",
             json!({"fxId": a.num("fx").map_err(u)?.ok_or_else(|| u("missing --fx".into()))? as u64, "param": a.need("param").map_err(u)?, "value": a.num("value").map_err(u)?.ok_or_else(|| u("missing --value".into()))?}),
         ),
         "preset" => send(
+            cx,
             a,
             "load_preset",
             json!({"fxId": a.num("fx").map_err(u)?.ok_or_else(|| u("missing --fx".into()))? as u64, "index": a.num("index").map_err(u)?.ok_or_else(|| u("missing --index".into()))? as u64}),
@@ -271,7 +569,7 @@ fn run(cmd: &str, a: &Args) -> Result<Value, Fail> {
             if files.is_empty() {
                 return Err(u("import <file>...".into()));
             }
-            send(a, "import", json!({"paths": files, "track": a.num("track").map_err(u)?, "beat": a.num("beat").map_err(u)?}))
+            send(cx, a, "import", json!({"paths": files, "track": a.num("track").map_err(u)?, "beat": a.num("beat").map_err(u)?}))
         }
         "channels" => {
             let mut args = json!({});
@@ -301,13 +599,13 @@ fn run(cmd: &str, a: &Args) -> Result<Value, Fail> {
             if let Some(v) = a.num("value").map_err(u)? {
                 args["value"] = json!(v);
             }
-            send(a, "channels", args)
+            send(cx, a, "channels", args)
         }
         "pattern" => {
             if a.has("play") || a.has("stop") {
                 let id =
                     if a.has("stop") { None } else { Some(a.num("id").map_err(u)?.ok_or_else(|| u("--play needs --id".into()))? as u64) };
-                return send(a, "pattern_play", json!({ "id": id }));
+                return send(cx, a, "pattern_play", json!({ "id": id }));
             }
             let mut args = json!({ "new": a.has("new"), "clear": a.has("clear") });
             if let Some(id) = a.num("id").map_err(u)? {
@@ -329,7 +627,7 @@ fn run(cmd: &str, a: &Args) -> Result<Value, Fail> {
             if let Some(n) = a.get("notes") {
                 args["notes"] = serde_json::from_str(n).map_err(|e| u(format!("--notes is not JSON: {e}")))?;
             }
-            send(a, "pattern", args)
+            send(cx, a, "pattern", args)
         }
         "make-unique" => {
             let ids = a
@@ -338,9 +636,9 @@ fn run(cmd: &str, a: &Args) -> Result<Value, Fail> {
                 .split(',')
                 .map(|x| x.trim().parse::<u64>().map_err(|_| u(format!("--clip takes clip ids separated by commas, got {x}"))))
                 .collect::<Result<Vec<_>, _>>()?;
-            send(a, "make_unique", json!({ "clipIds": ids }))
+            send(cx, a, "make_unique", json!({ "clipIds": ids }))
         }
-        "takes" => send(a, "takes", json!({"track": a.num("track").map_err(u)?.ok_or_else(|| u("missing --track".into()))? as u64})),
+        "takes" => send(cx, a, "takes", json!({"track": a.num("track").map_err(u)?.ok_or_else(|| u("missing --track".into()))? as u64})),
         "comp" => {
             let mut args =
                 json!({"track": a.num("track").map_err(u)?.map(|v| v as u64), "clip": a.num("clip").map_err(u)?.map(|v| v as u64)});
@@ -348,7 +646,7 @@ fn run(cmd: &str, a: &Args) -> Result<Value, Fail> {
                 return Err(u("comp needs --track N (or --clip ID)".into()));
             }
             if a.has("flatten") {
-                return send(a, "flatten_comp", args);
+                return send(cx, a, "flatten_comp", args);
             }
             if a.has("audition") {
                 let v = a.need("audition").map_err(u)?;
@@ -357,7 +655,7 @@ fn run(cmd: &str, a: &Args) -> Result<Value, Fail> {
                 } else {
                     json!(v.parse::<u64>().map_err(|_| u(format!("--audition takes a take id or `off`, got {v}")))?)
                 };
-                return send(a, "comp_audition", args);
+                return send(cx, a, "comp_audition", args);
             }
             if let Some(s) = a.get("set") {
                 args["regions"] = serde_json::from_str(s).map_err(|e| u(format!("--set is not JSON: {e}")))?;
@@ -371,9 +669,9 @@ fn run(cmd: &str, a: &Args) -> Result<Value, Fail> {
             if a.has("remove-unused") {
                 args["removeUnused"] = json!(true);
             }
-            send(a, "comp", args)
+            send(cx, a, "comp", args)
         }
-        "play" => send(a, "play", json!({"from": a.num("from").map_err(u)?})),
+        "play" => send(cx, a, "play", json!({"from": a.num("from").map_err(u)?})),
         "render" => {
             let out = a.need("out").map_err(u)?;
             let out = std::path::absolute(out).map(|p| p.display().to_string()).unwrap_or_else(|_| out.to_string());
@@ -393,6 +691,7 @@ fn run(cmd: &str, a: &Args) -> Result<Value, Fail> {
                 }
             }
             send(
+                cx,
                 a,
                 "render",
                 json!({
@@ -405,27 +704,33 @@ fn run(cmd: &str, a: &Args) -> Result<Value, Fail> {
                 }),
             )
         }
+        // in file mode the project is saved after the command (see `on_file`)
+        "save" if cx.doc.is_some() => Ok(json!({})),
         "save" => send(
+            cx,
             a,
             "save",
             json!({"path": a.get("path").map(|p| std::path::absolute(p).map(|x| x.display().to_string()).unwrap_or_else(|_| p.to_string()))}),
         ),
         "open" => {
             let p = a.pos.get(1).ok_or_else(|| u("open <file>".into()))?;
-            send(a, "open", json!({"path": std::path::absolute(p).map(|x| x.display().to_string()).unwrap_or_else(|_| p.clone())}))
+            send(cx, a, "open", json!({"path": std::path::absolute(p).map(|x| x.display().to_string()).unwrap_or_else(|_| p.clone())}))
         }
-        "vst3" => send(a, "vst3_scan", json!({"rescan": a.has("rescan")})),
+        "vst3" => send(cx, a, "vst3_scan", json!({"rescan": a.has("rescan")})),
         "vst3-add" => send(
+            cx,
             a,
             "vst3_add",
             json!({"insertId": a.num("insert").map_err(u)?.ok_or_else(|| u("missing --insert".into()))? as u64, "path": a.need("path").map_err(u)?, "cid": a.need("cid").map_err(u)?}),
         ),
         "vst3-params" => send(
+            cx,
             a,
             "vst3_params",
             json!({"fxId": a.num("fx").map_err(u)?.ok_or_else(|| u("missing --fx".into()))? as u64, "query": a.get("query")}),
         ),
         "vst3-set" => send(
+            cx,
             a,
             "vst3_set_param",
             json!({"fxId": a.num("fx").map_err(u)?.ok_or_else(|| u("missing --fx".into()))? as u64, "id": a.num("id").map_err(u)?.ok_or_else(|| u("missing --id".into()))? as u64, "value": a.num("value").map_err(u)?.ok_or_else(|| u("missing --value".into()))?}),
@@ -452,13 +757,14 @@ fn run(cmd: &str, a: &Args) -> Result<Value, Fail> {
                 }
                 points.push(json!({"t": 0.0, "v": v}));
             }
-            let ctx = send(a, "context", json!({}))?;
+            let ctx = send(cx, a, "context", json!({}))?;
             let next = ctx.get("nextId").and_then(Value::as_u64).ok_or_else(|| u("no nextId in context".into()))?;
             let (auto_id, clip_id) = (next, next + 1);
             let track = a.num("track").map_err(u)?.unwrap_or(0.0) as u64;
             let name = a.get("name").unwrap_or("Automation").to_string();
             let len = points.iter().filter_map(|p| p["t"].as_f64()).fold(1.0, f64::max) + 1.0;
             send(
+                cx,
                 a,
                 "apply",
                 json!({"ops": [
@@ -541,11 +847,11 @@ fn run(cmd: &str, a: &Args) -> Result<Value, Fail> {
                 op["select"] =
                     json!({"kind": "indices", "indices": list.map_err(|_| u("--indices is a comma list of note indices".into()))?});
             }
-            send(a, "apply", json!({"ops": [op]}))
+            send(cx, a, "apply", json!({"ops": [op]}))
         }
         "key" => {
             if a.has("off") {
-                return send(a, "apply", json!({"ops": [{"op": "setKey", "key": null, "scale": 1}]}));
+                return send(cx, a, "apply", json!({"ops": [{"op": "setKey", "key": null, "scale": 1}]}));
             }
             let note_names = ["C", "C#", "D", "D#", "E", "F", "F#", "G", "G#", "A", "A#", "B"];
             let scales = ["chromatic", "major", "minor", "major pentatonic", "minor pentatonic"];
@@ -564,7 +870,7 @@ fn run(cmd: &str, a: &Args) -> Result<Value, Fail> {
                         .ok_or_else(|| u(format!("unknown scale `{sc}` ({} )", scales.join(", "))))
                 })
                 .transpose()?;
-            send(a, "apply", json!({"ops": [{"op": "setKey", "key": key_id, "scale": scale.unwrap_or(1)}]}))
+            send(cx, a, "apply", json!({"ops": [{"op": "setKey", "key": key_id, "scale": scale.unwrap_or(1)}]}))
         }
         "call" => {
             let c = a.pos.get(1).ok_or_else(|| u("call <command> [--args JSON]".into()))?;
@@ -572,9 +878,10 @@ fn run(cmd: &str, a: &Args) -> Result<Value, Fail> {
                 Some(t) => serde_json::from_str(t).map_err(|e| u(format!("--args is not JSON: {e}")))?,
                 None => json!({}),
             };
-            send(a, c, args)
+            send(cx, a, c, args)
         }
         "pitch-target" => send(
+            cx,
             a,
             "pitch_target",
             json!({"clipId": a.num("clip").map_err(u)?.ok_or_else(|| u("missing --clip".into()))? as u64, "full": a.has("full")}),
@@ -595,13 +902,15 @@ fn run(cmd: &str, a: &Args) -> Result<Value, Fail> {
                 Some(o) => args["octave"] = json!(o.parse::<i64>().map_err(|_| u("--octave is auto or semitones (-12, 0, 12…)".into()))?),
                 None => {}
             }
-            send(a, "tune_ref", args)
+            send(cx, a, "tune_ref", args)
         }
         "melody-channels" => {
-            send(a, "melody_channels", json!({"clipId": a.num("clip").map_err(u)?.ok_or_else(|| u("missing --clip".into()))? as u64}))
+            send(cx, a, "melody_channels", json!({"clipId": a.num("clip").map_err(u)?.ok_or_else(|| u("missing --clip".into()))? as u64}))
         }
-        "f0-model" => send(a, "f0_model", json!({})),
+        "f0-model" => send(cx, a, "f0_model", json!({})),
         "tune-file" => tune_file(a),
+        "script" => script(cx, a),
+        "new" => Err(u("`new` creates a file; run it on its own, without --project".into())),
         other => Err(u(format!("unknown command `{other}`"))),
     }
 }
@@ -661,4 +970,279 @@ fn tune_file(a: &Args) -> Result<Value, Fail> {
     Ok(
         json!({ "out": out_p, "backend": analysis.backend, "corrected": target.reason.is_none(), "reason": target.reason, "score": target.score, "octave": target.octave, "notes": target.notes.len(), "seconds": out.seconds() }),
     )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::cell::RefCell;
+    use std::rc::Rc;
+    use std::sync::{Arc, Once};
+
+    /// Keeps the tests away from WAVE apps really running on this machine.
+    fn isolate() -> PathBuf {
+        static ONCE: Once = Once::new();
+        let root = std::env::temp_dir().join(format!("wave-cli-tests-{}", std::process::id()));
+        ONCE.call_once(|| {
+            let _ = std::fs::remove_dir_all(&root);
+            std::fs::create_dir_all(root.join("sessions")).unwrap();
+            std::env::set_var("WAVE_SESSION_DIR", root.join("sessions"));
+        });
+        root
+    }
+
+    fn dir(name: &str) -> PathBuf {
+        let d = isolate().join(name);
+        std::fs::create_dir_all(&d).unwrap();
+        d
+    }
+
+    fn args(s: &[&str]) -> Args {
+        Args::parse(s.iter().map(|x| x.to_string()).collect())
+    }
+
+    /// A project held in memory: `apply` of `setBpm` changes it, `set_param` always fails.
+    struct FakeDoc {
+        bpm: RefCell<f64>,
+        dirty: RefCell<bool>,
+        saves: Rc<RefCell<Vec<PathBuf>>>,
+    }
+
+    impl Doc for FakeDoc {
+        fn call(&self, command: &str, args: &Value, _: Option<u64>) -> Result<Value, String> {
+            match command {
+                "apply" => {
+                    for op in args["ops"].as_array().cloned().unwrap_or_default() {
+                        match op["op"].as_str() {
+                            Some("setBpm") => *self.bpm.borrow_mut() = op["bpm"].as_f64().unwrap(),
+                            other => return Err(format!("BAD_OPS: unknown op {other:?}")),
+                        }
+                    }
+                    *self.dirty.borrow_mut() = true;
+                    Ok(json!({}))
+                }
+                "context" => Ok(json!({ "bpm": *self.bpm.borrow(), "tracks": [], "nextId": 7 })),
+                "set_param" => Err("no effect 5".into()),
+                _ => Ok(json!({})),
+            }
+        }
+        fn revision(&self) -> u64 {
+            1
+        }
+        fn dirty(&self) -> bool {
+            *self.dirty.borrow()
+        }
+        fn save(&self, path: &Path) -> Result<(), String> {
+            std::fs::write(path, format!("bpm {}", self.bpm.borrow())).map_err(|e| e.to_string())?;
+            *self.dirty.borrow_mut() = false;
+            self.saves.borrow_mut().push(path.to_path_buf());
+            Ok(())
+        }
+    }
+
+    #[derive(Default)]
+    struct FakeFiles {
+        saves: Rc<RefCell<Vec<PathBuf>>>,
+    }
+
+    impl FakeFiles {
+        fn doc(&self) -> Box<dyn Doc> {
+            Box::new(FakeDoc { bpm: RefCell::new(120.0), dirty: RefCell::new(false), saves: self.saves.clone() })
+        }
+        fn saves(&self) -> Vec<PathBuf> {
+            self.saves.borrow().clone()
+        }
+    }
+
+    impl Files for FakeFiles {
+        fn open(&self, _: &Path) -> Result<(Box<dyn Doc>, Vec<String>), String> {
+            Ok((self.doc(), vec![]))
+        }
+        fn create(&self, template: &str) -> Result<Box<dyn Doc>, String> {
+            match template {
+                "empty" | "sketch" => Ok(self.doc()),
+                t => Err(format!("unknown template `{t}`")),
+            }
+        }
+    }
+
+    fn project(d: &Path) -> String {
+        let p = d.join("song.wave");
+        std::fs::write(&p, "bpm 120").unwrap();
+        p.display().to_string()
+    }
+
+    fn file(f: &FakeFiles, a: &[&str]) -> Result<Value, Fail> {
+        let a = args(a);
+        let cmd = a.pos[0].clone();
+        on_file(Some(f), &cmd, &a)
+    }
+
+    #[test]
+    fn short_project_flag_and_shell_like_script_lines() {
+        let a = args(&["-p", "a.wave", "bpm", "120"]);
+        assert_eq!(a.get("project"), Some("a.wave"));
+        assert_eq!(a.pos, ["bpm", "120"]);
+        assert_eq!(split_line(r#"pattern --ch kick --steps "x... x...""#).unwrap(), ["pattern", "--ch", "kick", "--steps", "x... x..."]);
+        assert_eq!(
+            split_line(r#"apply --json '[{"op":"setBpm","bpm":90}]'"#).unwrap(),
+            ["apply", "--json", r#"[{"op":"setBpm","bpm":90}]"#]
+        );
+        assert_eq!(
+            split_line(r#"import "C:\My Samples\kick.wav"  --beat 4"#).unwrap(),
+            ["import", r"C:\My Samples\kick.wav", "--beat", "4"]
+        );
+        assert_eq!(split_line(r#"channels --synth """#).unwrap(), ["channels", "--synth", ""]);
+        assert!(split_line("bpm '90").is_err());
+    }
+
+    #[test]
+    fn refusals_keep_the_apps_error_codes() {
+        assert_eq!(app_error("BAD_OPS: x".into()), "BAD_OPS: x");
+        assert_eq!(app_error("no effect 5".into()), "REFUSED: no effect 5");
+        assert_eq!(app_error("no: such".into()), "REFUSED: no: such");
+    }
+
+    #[test]
+    fn an_edit_is_saved_back_and_a_read_saves_nothing() {
+        let d = dir("save");
+        let p = project(&d);
+        let f = FakeFiles::default();
+        let v = file(&f, &["context", "--project", &p]).unwrap();
+        assert_eq!(v["saved"], Value::Null);
+        assert!(f.saves().is_empty());
+        let v = file(&f, &["bpm", "140", "--project", &p]).unwrap();
+        assert_eq!(v["saved"], json!(p));
+        assert_eq!(std::fs::read_to_string(&p).unwrap(), "bpm 140");
+        // `save` writes even an unchanged project; `save --path` is a save-as
+        file(&f, &["save", "--project", &p]).unwrap();
+        let other = d.join("copy.wave");
+        file(&f, &["save", "--path", &other.display().to_string(), "--project", &p]).unwrap();
+        assert_eq!(f.saves().len(), 3);
+        assert!(same_file(f.saves().last().unwrap(), &other));
+    }
+
+    #[test]
+    fn dry_run_reports_and_save_as_leaves_the_original() {
+        let d = dir("dry");
+        let p = project(&d);
+        let f = FakeFiles::default();
+        let v = file(&f, &["bpm", "90", "--dry-run", "--project", &p]).unwrap();
+        assert_eq!(v["saved"], Value::Null);
+        assert_eq!(v["dryRun"]["changed"], true);
+        assert_eq!(v["dryRun"]["wouldSave"], json!(p));
+        assert!(f.saves().is_empty());
+        let v2 = d.join("v2.wave").display().to_string();
+        let v = file(&f, &["bpm", "90", "--save-as", &v2, "--project", &p]).unwrap();
+        assert_eq!(v["saved"], json!(v2));
+        assert_eq!(std::fs::read_to_string(&p).unwrap(), "bpm 120");
+        assert_eq!(std::fs::read_to_string(&v2).unwrap(), "bpm 90");
+        assert!(matches!(file(&f, &["bpm", "90", "--save-as", "--project", &p]), Err(Fail::Usage(_))));
+    }
+
+    #[test]
+    fn a_refused_command_saves_nothing() {
+        let d = dir("refused");
+        let p = project(&d);
+        let f = FakeFiles::default();
+        match file(&f, &["set-param", "--fx", "5", "--param", "mix", "--value", "1", "--project", &p]) {
+            Err(Fail::App(m)) => assert_eq!(m, "REFUSED: no effect 5"),
+            other => panic!("{other:?}"),
+        }
+        assert!(f.saves().is_empty());
+    }
+
+    #[test]
+    fn file_mode_needs_an_existing_file_and_the_app_binary() {
+        let d = dir("missing");
+        let missing = d.join("nope.wave").display().to_string();
+        match file(&FakeFiles::default(), &["context", "--project", &missing]) {
+            Err(Fail::Usage(m)) => assert!(m.contains("wave new"), "{m}"),
+            other => panic!("{other:?}"),
+        }
+        let p = project(&d);
+        assert!(matches!(on_file(None, "context", &args(&["context", "--project", &p])), Err(Fail::Usage(_))));
+        assert!(matches!(file(&FakeFiles::default(), &["context", "--session", "ab", "--project", &p]), Err(Fail::Usage(_))));
+    }
+
+    #[test]
+    fn a_script_is_all_or_nothing_on_a_file() {
+        let d = dir("script");
+        let p = project(&d);
+        let f = FakeFiles::default();
+        let ok = d.join("ok.txt");
+        std::fs::write(&ok, "# tempo first\n\nwave bpm 100\napply --json '[{\"op\":\"setBpm\",\"bpm\":101}]'\ncontext\n").unwrap();
+        let v = file(&f, &["script", &ok.display().to_string(), "--project", &p]).unwrap();
+        let lines: Vec<_> = v["results"].as_array().unwrap().iter().map(|r| r["line"].as_u64().unwrap()).collect();
+        assert_eq!(lines, [3, 4, 5]);
+        assert_eq!(v["results"][2]["result"]["bpm"], 101.0);
+        assert_eq!(f.saves().len(), 1, "one save for the whole script");
+        assert_eq!(std::fs::read_to_string(&p).unwrap(), "bpm 101");
+
+        let bad = d.join("bad.txt");
+        std::fs::write(&bad, "bpm 60\nset-param --fx 5 --param mix --value 1\nbpm 70\n").unwrap();
+        match file(&f, &["script", &bad.display().to_string(), "--project", &p]) {
+            Err(Fail::App(m)) => assert!(m.starts_with("line 2 (`set-param`): REFUSED") && m.ends_with("nothing was saved"), "{m}"),
+            other => panic!("{other:?}"),
+        }
+        assert_eq!(f.saves().len(), 1);
+        assert_eq!(std::fs::read_to_string(&p).unwrap(), "bpm 101");
+
+        for (body, why) in
+            [("script x.txt\n", "cannot run inside"), ("bpm 90 --project o.wave\n", "--project belongs"), ("bpm '90\n", "unclosed")]
+        {
+            std::fs::write(&bad, body).unwrap();
+            match file(&f, &["script", &bad.display().to_string(), "--project", &p]) {
+                Err(Fail::Usage(m)) => assert!(m.contains(why), "{m}"),
+                other => panic!("{other:?}"),
+            }
+        }
+    }
+
+    #[test]
+    fn new_creates_a_file_once() {
+        let d = dir("new");
+        let f = FakeFiles::default();
+        let base = d.join("beat").display().to_string();
+        let v = new_file(Some(&f), &args(&["new", &base, "--bpm", "95"])).unwrap();
+        let made = d.join("beat.wave");
+        assert_eq!(v["saved"], json!(made.display().to_string()));
+        assert_eq!(v["bpm"], 95.0);
+        assert_eq!(std::fs::read_to_string(&made).unwrap(), "bpm 95");
+        match new_file(Some(&f), &args(&["new", &base])) {
+            Err(Fail::App(m)) => assert!(m.starts_with("EXISTS"), "{m}"),
+            other => panic!("{other:?}"),
+        }
+        new_file(Some(&f), &args(&["new", &base, "--force"])).unwrap();
+        assert!(matches!(new_file(Some(&f), &args(&["new", &base, "--force", "--template", "nope"])), Err(Fail::Usage(_))));
+    }
+
+    #[test]
+    fn a_file_the_app_has_open_is_not_overwritten() {
+        let d = dir("open");
+        let p = project(&d);
+        let open = PathBuf::from(&p);
+        let handler: Arc<ws::Handler> = Arc::new(move |_req: &ws::Request| Ok((json!({ "path": open.display().to_string() }), 1)));
+        let _server = ws::Server::start(handler).unwrap();
+        let f = FakeFiles::default();
+        // reading (and rendering) a file the app has open is fine
+        file(&f, &["context", "--project", &p]).unwrap();
+        match file(&f, &["bpm", "90", "--project", &p]) {
+            Err(Fail::App(m)) => assert!(m.starts_with("FILE_OPEN") && m.contains("--force"), "{m}"),
+            other => panic!("{other:?}"),
+        }
+        if cfg!(windows) {
+            // the same file, spelled differently
+            match file(&f, &["bpm", "90", "--project", &p.to_uppercase()]) {
+                Err(Fail::App(m)) => assert!(m.starts_with("FILE_OPEN"), "{m}"),
+                other => panic!("{other:?}"),
+            }
+        }
+        assert!(f.saves().is_empty());
+        // a copy next to it, or --force, is written
+        let v2 = d.join("v2.wave").display().to_string();
+        file(&f, &["bpm", "90", "--save-as", &v2, "--project", &p]).unwrap();
+        file(&f, &["bpm", "90", "--force", "--project", &p]).unwrap();
+        assert_eq!(f.saves().len(), 2);
+    }
 }

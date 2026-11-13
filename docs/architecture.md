@@ -304,6 +304,16 @@ client: take them from `project.nextId` and increase locally (the engine bumps
 | `vst3_set_param` | `{fxId,id,value}` | – |
 | `cli_status` | – | `{installed, command, path, note?}` |
 
+**CLI on a file (`wave --project FILE`).** The same binary (`WAVE --cli`) runs
+`actions::control` in-process on an engine of its own (`app/src/headless.rs`), against the
+`actions::Host` trait that `App` also implements: no window, no audio device, no MIDI, no
+session socket. Commands in `actions::LIVE_ONLY` (transport, auditions, undo/redo, open) are
+refused with `NEEDS_APP`. Hosted plugins become live instances only when a VST3 parameter is
+asked for (`create_rt` on an audio half that is pumped by hand after each command, never by a
+device), so plain edits and bounces do not pay for them. `crates/cli` owns load → run → save
+(`wave_cli::Files`/`Doc`), refuses to write a file a running app reports as open, and runs
+`script` files with one load and one save.
+
 Events: `state` (a `StateDto`, after every change from any origin: UI, CLI,
 undo, import, recording, file open), `library-progress`, `model-progress`, `audio-status`.
 

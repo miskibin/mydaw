@@ -7,6 +7,13 @@ shown in the app after an update and is published as the release notes (see
 ## Unreleased
 
 ### Added
+- **Edit and render projects from the command line without opening WAVE.** `wave new song.wave`
+  creates a project, and `wave --project song.wave <command>` (or `-p`) runs any edit or read on
+  the file and saves it back: change the tempo, write patterns, add effects, then
+  `render --out mix.wav` or `--stems` for batch bounces, build servers and AI agents. `script
+  edits.txt` runs many commands with one load and one save, and writes nothing if a line fails.
+  `--dry-run` tries an edit without saving, `--save-as` writes a copy. A file the app has open is
+  never overwritten behind its back.
 - **Wrap effect tails on WAV loops.** Choose *Wrap* to hear the end of the delay and reverb at the start of the exported mix or stems. The file is one loop long.
 - **Export 24-bit PCM WAV.** Choose it for the mix or stems and enable dithering if needed. WAV defaults to 32-bit float.
 - **Open `.wave` projects from Windows File Explorer.** Projects have a document icon and open on double-click. If WAVE is already running, it brings the window forward and asks about unsaved changes before switching projects.

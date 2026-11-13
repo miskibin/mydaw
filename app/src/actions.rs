@@ -1,15 +1,49 @@
 //! Everything the GUI and the CLI can ask for, implemented once.
+//!
+//! The actions run against a [`Host`]: the running app (`App`), or a project file opened
+//! by `wave --project FILE` with no window and no audio device (`headless::Headless`).
 
 use std::path::PathBuf;
 use std::sync::Arc;
 
 use serde_json::{json, Value};
 use wave_engine::catalog::{self, load_preset, new_fx};
-use wave_engine::{FxKind, Op, PluginRef, RefTune};
+use wave_engine::{Engine, FxKind, Op, PluginRef, RefTune};
 
-use crate::App;
+use crate::plugins::Plugins;
 
 pub type R<T> = Result<T, String>;
+
+/// What an action needs from the process it runs in.
+pub trait Host {
+    fn engine(&self) -> &Arc<Engine>;
+    fn plugins(&self) -> &Arc<Plugins>;
+    /// True in the running app: an audio device, a live undo history and a musician.
+    /// False for a project file edited from the command line.
+    fn live(&self) -> bool;
+    fn audio_json(&self) -> Value;
+    fn cli_json(&self) -> Value;
+    /// Why the installed RMVPE model could not be used, if it could not.
+    fn model_error(&self) -> Option<String>;
+    /// Before an offline bounce: the WAVE Keys piano the project plays is loaded.
+    fn wait_keys(&self) -> R<()>;
+    /// Before pitch work or a bounce of pitch-edited clips: the pitch model is in place.
+    fn ensure_pitch_model(&self) {}
+    /// Before VST3 parameter access: the project's plugins run as live instances.
+    fn ensure_live_plugins(&self) {}
+}
+
+/// Commands that need the audio device, the musician's undo history or the app's window.
+pub const LIVE_ONLY: &[&str] = &["play", "stop", "pattern_play", "comp_audition", "note_audition", "undo", "redo", "open"];
+
+fn live_only_error(cmd: &str) -> String {
+    let why = match cmd {
+        "undo" | "redo" => "a project file has no undo history (each `wave --project` call starts fresh; edit with `apply` and keep the file under version control, or use --dry-run / --save-as to try an edit)",
+        "open" => "pass the file with --project instead",
+        _ => "it plays through the audio device; render with `wave --project FILE render --out x.wav` to listen",
+    };
+    format!("NEEDS_APP: `{cmd}` needs the running app: {why}")
+}
 
 fn arg<'a>(a: &'a Value, k: &str) -> Option<&'a Value> {
     a.get(k).filter(|v| !v.is_null())
@@ -33,11 +67,11 @@ pub fn parse_kind(s: &str) -> R<FxKind> {
     })
 }
 
-pub fn add_fx(app: &App, insert_id: u64, kind: FxKind, preset: Option<usize>, index: Option<usize>) -> R<(u64, u64)> {
+pub fn add_fx(app: &dyn Host, insert_id: u64, kind: FxKind, preset: Option<usize>, index: Option<usize>) -> R<(u64, u64)> {
     if kind == FxKind::Vst3 {
         return Err("use vst3_add for plugins".into());
     }
-    let p = app.engine.project();
+    let p = app.engine().project();
     if p.insert(insert_id).is_none() {
         return Err(format!("no insert {insert_id}"));
     }
@@ -48,12 +82,12 @@ pub fn add_fx(app: &App, insert_id: u64, kind: FxKind, preset: Option<usize>, in
             return Err(format!("{} has no preset {i}", catalog::type_name(kind)));
         }
     }
-    let rev = app.engine.apply(&[Op::PutFx { insert_id, fx, index }], false, None).map_err(|e| e.to_string())?;
+    let rev = app.engine().apply(&[Op::PutFx { insert_id, fx, index }], false, None).map_err(|e| e.to_string())?;
     Ok((id, rev))
 }
 
-pub fn set_param(app: &App, fx_id: u64, param: &str, value: f64, if_revision: Option<u64>) -> R<u64> {
-    let p = app.engine.project();
+pub fn set_param(app: &dyn Host, fx_id: u64, param: &str, value: f64, if_revision: Option<u64>) -> R<u64> {
+    let p = app.engine().project();
     let (m, f) = p.find_fx(fx_id).ok_or(format!("no effect {fx_id}"))?;
     let def = catalog::params(f.kind).iter().find(|d| d.id == param).ok_or_else(|| {
         format!(
@@ -67,25 +101,27 @@ pub fn set_param(app: &App, fx_id: u64, param: &str, value: f64, if_revision: Op
     }
     let mut f = f.clone();
     f.params.insert(param.into(), value);
-    app.engine.apply(&[Op::PutFx { insert_id: m.id, fx: f, index: None }], false, if_revision).map_err(|e| e.to_string())
+    app.engine().apply(&[Op::PutFx { insert_id: m.id, fx: f, index: None }], false, if_revision).map_err(|e| e.to_string())
 }
 
-pub fn preset(app: &App, fx_id: u64, index: usize) -> R<u64> {
-    let p = app.engine.project();
+pub fn preset(app: &dyn Host, fx_id: u64, index: usize) -> R<u64> {
+    let p = app.engine().project();
     let (m, f) = p.find_fx(fx_id).ok_or(format!("no effect {fx_id}"))?;
     let mut f = f.clone();
     if !load_preset(&mut f, index, p.bpm) {
         return Err(format!("no preset {index}"));
     }
-    app.engine.apply(&[Op::PutFx { insert_id: m.id, fx: f, index: None }], false, None).map_err(|e| e.to_string())
+    app.engine().apply(&[Op::PutFx { insert_id: m.id, fx: f, index: None }], false, None).map_err(|e| e.to_string())
 }
 
-pub fn vst3_add(app: &App, insert_id: u64, path: &str, cid: &str, index: Option<usize>) -> R<(u64, u64)> {
-    let p = app.engine.project();
+pub fn vst3_add(app: &dyn Host, insert_id: u64, path: &str, cid: &str, index: Option<usize>) -> R<(u64, u64)> {
+    let p = app.engine().project();
     if p.insert(insert_id).is_none() {
         return Err(format!("no insert {insert_id}"));
     }
-    let (name, vendor) = app.plugins.info(path, cid).ok_or("that plugin is not in the scan results; run a VST3 scan first")?;
+    let (name, vendor) = app.plugins().info(path, cid).ok_or("that plugin is not in the scan results; run a VST3 scan first")?;
+    // the load error below comes from instantiating the plugin live
+    app.ensure_live_plugins();
     let id = p.next_id;
     let fx = wave_engine::Fx {
         id,
@@ -98,8 +134,8 @@ pub fn vst3_add(app: &App, insert_id: u64, path: &str, cid: &str, index: Option<
         plugin: Some(PluginRef { format: "vst3".into(), path: path.into(), cid: cid.into(), name, vendor, state: None }),
         maps: None,
     };
-    let rev = app.engine.apply(&[Op::PutFx { insert_id, fx, index }], false, None).map_err(|e| e.to_string())?;
-    if let Some(err) = app.engine.state().fx_errors.get(&id) {
+    let rev = app.engine().apply(&[Op::PutFx { insert_id, fx, index }], false, None).map_err(|e| e.to_string())?;
+    if let Some(err) = app.engine().state().fx_errors.get(&id) {
         return Err(format!("added, but the plugin failed to load: {err}"));
     }
     Ok((id, rev))
@@ -212,7 +248,7 @@ impl Bounce {
 
 /// Offline bounce shared by the GUI export dialog and `wave render`.
 pub fn render_to_file(
-    app: &Arc<App>,
+    app: &dyn Host,
     out: &std::path::Path,
     bounce: Bounce,
     cancel: &std::sync::atomic::AtomicBool,
@@ -222,8 +258,8 @@ pub fn render_to_file(
         return Err("wrap tail requires WAV export".into());
     }
     // a bounce must not start while the piano is still loading (it would be silent)
-    crate::keys::wait(app);
-    let audio = bounce.render(&app.engine, None, cancel)?;
+    app.wait_keys()?;
+    let audio = bounce.render(app.engine(), None, cancel)?;
     if cancel.load(std::sync::atomic::Ordering::Relaxed) {
         return Err("cancelled".into());
     }
@@ -231,7 +267,7 @@ pub fn render_to_file(
         ExportFormat::Wav(encoding) => encoding.write(out, &audio, bounce.rate)?,
         ExportFormat::Mp3 { kbps } => {
             let title = app
-                .engine
+                .engine()
                 .state()
                 .path
                 .as_deref()
@@ -384,9 +420,9 @@ pub fn render_stems_to_dir(
     }))
 }
 
-pub fn render(app: &Arc<App>, a: &Value) -> R<Value> {
+pub fn render(app: &dyn Host, a: &Value) -> R<Value> {
     let out = PathBuf::from(need_str(a, "out")?);
-    let p = app.engine.project();
+    let p = app.engine().project();
     let wrap = arg(a, "wrapTail").and_then(Value::as_bool).unwrap_or(false);
     let from = opt_f64(a, "from");
     let to = opt_f64(a, "to");
@@ -404,6 +440,10 @@ pub fn render(app: &Arc<App>, a: &Value) -> R<Value> {
         })
         .transpose()?;
     let dither = arg(a, "dither").and_then(Value::as_bool).unwrap_or(false);
+    if p.clips.iter().any(|c| c.tune.is_some()) {
+        // pitch-edited clips are rendered with the same detector the app uses
+        app.ensure_pitch_model();
+    }
     if arg(a, "stems").and_then(Value::as_bool).unwrap_or(false) {
         if arg(a, "format").and_then(Value::as_str).is_some_and(|f| !f.eq_ignore_ascii_case("wav")) {
             return Err("stems are always WAV; drop --format".into());
@@ -416,8 +456,16 @@ pub fn render(app: &Arc<App>, a: &Value) -> R<Value> {
         let encoding = WavEncoding::parse(wav_bits, dither)?;
         let master = arg(a, "master").and_then(Value::as_bool).unwrap_or(true);
         // a stem export must not start while the piano is still loading (its stems would be silent)
-        crate::keys::wait(app);
-        return render_stems_to_dir(&app.engine, &out, bounce, &std::sync::atomic::AtomicBool::new(false), master, encoding, &|_, _, _| {});
+        app.wait_keys()?;
+        return render_stems_to_dir(
+            app.engine(),
+            &out,
+            bounce,
+            &std::sync::atomic::AtomicBool::new(false),
+            master,
+            encoding,
+            &|_, _, _| {},
+        );
     }
     let by_ext = out.extension().and_then(|e| e.to_str()).filter(|e| e.eq_ignore_ascii_case("mp3")).map(|_| "mp3");
     let fmt = ExportFormat::parse(
@@ -429,8 +477,8 @@ pub fn render(app: &Arc<App>, a: &Value) -> R<Value> {
     render_to_file(app, &out, bounce, &std::sync::atomic::AtomicBool::new(false), fmt)
 }
 
-pub fn context(app: &App, full: bool) -> Value {
-    let st = app.engine.state();
+pub fn context(app: &dyn Host, full: bool) -> Value {
+    let st = app.engine().state();
     if full {
         return json!({ "revision": st.revision, "project": st.project, "transport": st.transport, "path": st.path, "fxErrors": st.fx_errors });
     }
@@ -514,7 +562,7 @@ pub fn schema() -> Value {
     })
 }
 
-pub fn import(app: &App, a: &Value) -> R<Value> {
+pub fn import(app: &dyn Host, a: &Value) -> R<Value> {
     let paths: Vec<PathBuf> = arg(a, "paths")
         .and_then(Value::as_array)
         .ok_or("`paths` is required")?
@@ -526,7 +574,7 @@ pub fn import(app: &App, a: &Value) -> R<Value> {
         (None, Some(b)) => Some((0, b)),
         _ => None,
     };
-    let (s, c) = app.engine.import_audio(&paths, place).map_err(|e| e.to_string())?;
+    let (s, c) = app.engine().import_audio(&paths, place).map_err(|e| e.to_string())?;
     Ok(json!({ "sourceIds": s, "clipIds": c }))
 }
 
@@ -564,9 +612,9 @@ fn find_channel<'a>(p: &'a wave_engine::Project, v: &Value) -> R<&'a wave_engine
     p.channels.iter().find(|c| c.name.to_lowercase() == s).ok_or(format!("no channel named `{s}` (see `wave channels`)"))
 }
 
-pub fn channels(app: &App, a: &Value, if_revision: Option<u64>) -> R<Value> {
+pub fn channels(app: &dyn Host, a: &Value, if_revision: Option<u64>) -> R<Value> {
     use wave_engine::{factory, Channel, ChannelSrc};
-    let e = &app.engine;
+    let e = app.engine();
     let mut p = e.project();
     let mut ops = vec![];
     let mut added = None;
@@ -734,9 +782,9 @@ fn pattern_json(p: &wave_engine::Project, pt: &wave_engine::Pattern) -> Value {
 }
 
 /// `wave pattern`: show a pattern as step strings, or edit it (one undo step).
-pub fn pattern(app: &App, a: &Value, if_revision: Option<u64>) -> R<Value> {
+pub fn pattern(app: &dyn Host, a: &Value, if_revision: Option<u64>) -> R<Value> {
     use wave_engine::{Note, Pattern};
-    let e = &app.engine;
+    let e = app.engine();
     let p = e.project();
     let new = arg(a, "new").and_then(Value::as_bool).unwrap_or(false);
     let mut pt = if new {
@@ -843,10 +891,10 @@ fn comp_clip(p: &wave_engine::Project, a: &Value) -> R<wave_engine::Clip> {
 }
 
 /// Takes and comp of the comp clips on a track, in timeline beats.
-pub fn takes(app: &App, a: &Value) -> R<Value> {
-    let p = app.engine.project();
+pub fn takes(app: &dyn Host, a: &Value) -> R<Value> {
+    let p = app.engine().project();
     let track = need_u64(a, "track")? as u32;
-    let audition = app.engine.state().audition;
+    let audition = app.engine().state().audition;
     let out: Vec<Value> = p
         .clips
         .iter()
@@ -876,8 +924,8 @@ pub fn takes(app: &App, a: &Value) -> R<Value> {
 /// Edits the comp of a comp clip. Times are timeline beats, crossfades milliseconds.
 /// `regions` replaces the comp, `take` uses one whole take, `xfadeMs` sets the default
 /// crossfade, `removeUnused` drops takes the comp does not play. One undo step.
-pub fn comp(app: &App, a: &Value, if_revision: Option<u64>) -> R<Value> {
-    let p = app.engine.project();
+pub fn comp(app: &dyn Host, a: &Value, if_revision: Option<u64>) -> R<Value> {
+    let p = app.engine().project();
     let clip = comp_clip(&p, a)?;
     let mut cp = p.comp(clip.source).cloned().ok_or("the clip's comp is missing")?;
     let local = |b: f64| b - clip.start + clip.offset;
@@ -930,14 +978,14 @@ pub fn comp(app: &App, a: &Value, if_revision: Option<u64>) -> R<Value> {
     if did.is_empty() {
         return Err("nothing to do: pass regions, take, xfadeMs or removeUnused".into());
     }
-    let rev = app.engine.apply(&[Op::PutComp { comp: cp }], false, if_revision).map_err(|e| e.to_string())?;
+    let rev = app.engine().apply(&[Op::PutComp { comp: cp }], false, if_revision).map_err(|e| e.to_string())?;
     Ok(json!({ "revision": rev, "clipId": clip.id, "changed": did }))
 }
 
 /// Switches a clip to Tune to Reference (`reference` = source id), or back to
 /// manual editing with `off`. Unset parameters keep their current values.
-pub fn tune_ref(app: &App, a: &Value, if_revision: Option<u64>) -> R<u64> {
-    let p = app.engine.project();
+pub fn tune_ref(app: &dyn Host, a: &Value, if_revision: Option<u64>) -> R<u64> {
+    let p = app.engine().project();
     let cid = need_u64(a, "clipId")?;
     let mut clip = p.clips.iter().find(|c| c.id == cid).cloned().ok_or(format!("no clip {cid}"))?;
     let mut tune = clip.tune.take().unwrap_or_default();
@@ -948,7 +996,7 @@ pub fn tune_ref(app: &App, a: &Value, if_revision: Option<u64>) -> R<u64> {
         // `melodyChannel`: the notes that channel plays over the clip become the reference (a
         // copy, collected again by naming the channel again); `reference`: a recording
         let melody = match arg(a, "melodyChannel").and_then(as_index) {
-            Some(ch) => Some(app.engine.melody_reference(cid, ch, None).map_err(|e| e.to_string())?.0),
+            Some(ch) => Some(app.engine().melody_reference(cid, ch, None).map_err(|e| e.to_string())?.0),
             None if arg(a, "reference").is_some() => None,
             None => prev.as_ref().and_then(|r| r.melody.clone()),
         };
@@ -1001,18 +1049,26 @@ pub fn tune_ref(app: &App, a: &Value, if_revision: Option<u64>) -> R<u64> {
         });
     }
     clip.tune = tune.is_active().then_some(tune);
-    app.engine.apply(&[Op::PutClips { clips: vec![clip] }], false, if_revision).map_err(|e| e.to_string())
+    app.engine().apply(&[Op::PutClips { clips: vec![clip] }], false, if_revision).map_err(|e| e.to_string())
 }
 
 /// The CLI entry: one request → JSON data.
-pub fn control(app: &Arc<App>, cmd: &str, a: &Value, if_revision: Option<u64>) -> R<Value> {
-    let e = &app.engine;
+pub fn control(app: &dyn Host, cmd: &str, a: &Value, if_revision: Option<u64>) -> R<Value> {
+    let e = app.engine();
     let ok_rev = |r: u64| json!({ "revision": r });
+    if !app.live() && LIVE_ONLY.contains(&cmd) {
+        return Err(live_only_error(cmd));
+    }
+    match cmd {
+        "pitch_analyze" | "pitch_target" | "tune_ref" | "auto_vocal_plan" | "f0_model" => app.ensure_pitch_model(),
+        "vst3_params" | "vst3_set_param" => app.ensure_live_plugins(),
+        _ => {}
+    }
     match cmd {
         "status" => {
             let st = e.state();
             Ok(
-                json!({ "revision": st.revision, "transport": st.transport, "path": st.path, "dirty": st.dirty, "audio": app.audio_status(), "cli": *app.cli.lock() }),
+                json!({ "revision": st.revision, "transport": st.transport, "path": st.path, "dirty": st.dirty, "mode": if app.live() { "app" } else { "file" }, "audio": app.audio_json(), "cli": app.cli_json() }),
             )
         }
         "context" => Ok(context(app, arg(a, "full").and_then(Value::as_bool).unwrap_or(false))),
@@ -1126,7 +1182,7 @@ pub fn control(app: &Arc<App>, cmd: &str, a: &Value, if_revision: Option<u64>) -
             melody_reference(e, need_u64(a, "clipId")?, need_u64(a, "channel")?, span)
         }
         "tune_ref" => tune_ref(app, a, if_revision).map(ok_rev),
-        "f0_model" => Ok(json!(crate::models::status(e, app.model_error.lock().clone()))),
+        "f0_model" => Ok(json!(crate::models::status(e, app.model_error()))),
         "music_analyze" => {
             let cid = arg(a, "clipId").and_then(as_index);
             let ex = arg(a, "excludeFx").and_then(as_index);
@@ -1153,18 +1209,18 @@ pub fn control(app: &Arc<App>, cmd: &str, a: &Value, if_revision: Option<u64>) -
             let (source, clip) = e.bake_rider(cid, &params).map_err(|x| x.to_string())?;
             Ok(json!({ "clipId": clip, "sourceId": source, "revision": e.revision() }))
         }
-        "vst3_scan" => Ok(json!(app.plugins.scan(arg(a, "rescan").and_then(Value::as_bool).unwrap_or(false)))),
+        "vst3_scan" => Ok(json!(app.plugins().scan(arg(a, "rescan").and_then(Value::as_bool).unwrap_or(false)))),
         "vst3_add" => {
             let (id, rev) = vst3_add(app, need_u64(a, "insertId")?, need_str(a, "path")?, need_str(a, "cid")?, None)?;
             Ok(json!({ "fxId": id, "revision": rev }))
         }
         "vst3_params" => {
             let q = arg(a, "query").and_then(Value::as_str).map(str::to_lowercase);
-            let ps = app.plugins.params(need_u64(a, "fxId")?)?;
+            let ps = app.plugins().params(need_u64(a, "fxId")?)?;
             Ok(json!(ps.into_iter().filter(|p| q.as_ref().map(|q| p.name.to_lowercase().contains(q)).unwrap_or(true)).collect::<Vec<_>>()))
         }
         "vst3_set_param" => {
-            app.plugins.set_param(need_u64(a, "fxId")?, need_u64(a, "id")? as u32, opt_f64(a, "value").ok_or("`value` is required")?)?;
+            app.plugins().set_param(need_u64(a, "fxId")?, need_u64(a, "id")? as u32, opt_f64(a, "value").ok_or("`value` is required")?)?;
             Ok(json!({}))
         }
         other => Err(format!("UNKNOWN_COMMAND: `{other}` (see `wave catalog`)")),
