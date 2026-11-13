@@ -55,6 +55,13 @@ const CATS: Cat[] = [
   { id: 'tools', label: 'c.picker.cat.tools' },
 ];
 
+/**
+ * The section an entry is listed under in "All": the first effect category holding it (an effect
+ * in two categories is listed once), then VST3 plugins, then project tools.
+ */
+const sectionOf = (e: { builtin?: BuiltinKind; vst?: unknown; tool?: string }): string =>
+  e.tool ? 'tools' : e.vst ? 'vst' : CATS.find(c => c.types?.includes(e.builtin!))?.id ?? 'vst';
+
 /** An entry in the grid: a built-in effect or a scanned VST3 plugin. */
 type Entry = { key: string; builtin?: BuiltinKind; vst?: Vst3Info; tool?: 'notebook'; name: string; desc: string; presets: number };
 
@@ -122,7 +129,7 @@ function FxPicker(props: { insId: Id; x: number; y: number }) {
     else if (c.id === 'vst') list = plugins();
     else if (c.id === 'tools') list = tools();
     else if (c.types) list = builtins().filter(e => c.types!.includes(e.builtin!));
-    else list = all;
+    else list = CATS.flatMap(sc => all.filter(e => sectionOf(e) === sc.id)); // All: in sections, in the rail's order
     if (!s) return list;
     const words = s.split(/\s+/);
     // rank: name, then keywords/tag, then description
@@ -137,6 +144,9 @@ function FxPicker(props: { insId: Id; x: number; y: number }) {
     return list.map(e => [e, score(e)] as const).filter(([, sc]) => sc >= 0).sort((a, b) => a[1] - b[1]).map(([e]) => e);
   });
   createEffect(() => { shown(); setFocus(0); setPresetFocus(-1); });
+  /** "All" without a search is drawn in sections, with a subtle divider (the section's name) before each. */
+  const sectioned = () => cat() === 'all' && !q().trim();
+  const sectionStart = (i: number) => sectioned() && (i === 0 || sectionOf(shown()[i]) !== sectionOf(shown()[i - 1]));
   const cur = () => shown()[Math.min(focus(), shown().length - 1)];
   // "Kompresor" covers both compressors: its preset list holds the clean ones and the FET (1176) ones
   const curPresets = () => {
@@ -154,8 +164,22 @@ function FxPicker(props: { insId: Id; x: number; y: number }) {
     close();
   };
 
-  // grid geometry for arrow keys
-  const cols = () => { const w = grid?.clientWidth ?? 400; return Math.max(1, Math.floor((w + 8) / (200 + 8))); };
+  // arrow keys follow the tiles on screen (rows end early before a section divider)
+  const tileRect = (i: number) => grid?.querySelector(`[data-i="${i}"]`)?.getBoundingClientRect();
+  /** The tile in the row below (dir 1) or above (-1) nearest the current one horizontally; itself when there is none. */
+  const vertical = (dir: 1 | -1) => {
+    const r = tileRect(focus()); if (!r) return focus();
+    let best = focus(), bestRow = Infinity, bestDx = Infinity;
+    shown().forEach((_, i) => {
+      const t = tileRect(i); if (!t) return;
+      const dy = (t.top - r.top) * dir; if (dy < 4) return;
+      const dx = Math.abs(t.left - r.left);
+      if (dy < bestRow - 4 || (Math.abs(dy - bestRow) <= 4 && dx < bestDx)) { best = i; bestRow = dy; bestDx = dx; }
+    });
+    return best;
+  };
+  /** The current tile is the last one in its row. */
+  const rowEnd = () => { const a = tileRect(focus()), b = tileRect(focus() + 1); return !a || !b || Math.abs(b.top - a.top) > 4; };
   const keep = (i: number) => { setFocus(i); queueMicrotask(() => grid?.querySelector(`[data-i="${i}"]`)?.scrollIntoView({ block: 'nearest' })); };
   const onKey = (e: KeyboardEvent) => {
     e.stopPropagation();
@@ -172,12 +196,12 @@ function FxPicker(props: { insId: Id; x: number; y: number }) {
     if (!n) return;
     if (e.key === 'ArrowRight') {
       // at the end of a row, → steps into the preset column
-      if ((focus() % cols() === cols() - 1 || focus() === n - 1) && curPresets().length) { e.preventDefault(); return setPresetFocus(0); }
+      if (rowEnd() && curPresets().length) { e.preventDefault(); return setPresetFocus(0); }
       if (input.selectionStart === input.value.length) { e.preventDefault(); keep(Math.min(n - 1, focus() + 1)); }
     } else if (e.key === 'ArrowLeft') {
       if (input.selectionStart === 0 || !q()) { e.preventDefault(); keep(Math.max(0, focus() - 1)); }
-    } else if (e.key === 'ArrowDown') { e.preventDefault(); keep(Math.min(n - 1, focus() + cols())); }
-    else if (e.key === 'ArrowUp') { e.preventDefault(); keep(Math.max(0, focus() - cols())); }
+    } else if (e.key === 'ArrowDown') { e.preventDefault(); keep(vertical(1)); }
+    else if (e.key === 'ArrowUp') { e.preventDefault(); keep(vertical(-1)); }
     else if (e.key === 'Enter') {
       e.preventDefault();
       if (e.shiftKey && curPresets().length) setPresetFocus(0); else add(cur());
@@ -263,7 +287,8 @@ function FxPicker(props: { insId: Id; x: number; y: number }) {
             </div>
             <div class="fxp-grid" ref={grid}>
               <For each={shown()} fallback={<div class="fxp-empty">{cat() === 'fav' && !q() ? tr('c.picker.emptyFav') : cat() === 'recent' && !q() ? tr('c.picker.emptyRecent') : cat() === 'vst' && !vsts() ? tr('c.picker.scanning') : tr('c.picker.noMatch')}</div>}>
-                {(e, i) => (
+                {(e, i) => (<>
+                  <Show when={sectionStart(i())}><div class="fxp-sect">{tr(CATS.find(c => c.id === sectionOf(e))!.label)}</div></Show>
                   <div class="fxp-tile" data-i={i()} classList={{ focus: i() === focus() && presetFocus() < 0, cur: i() === focus() }}
                     onPointerDown={ev => tileDown(ev, e, i())} onPointerEnter={() => presetFocus() < 0 && setFocus(i())} title={e.vst?.path ?? (e.tool ? tr('c.picker.tipOpen') : tr('c.picker.tipAdd'))}>
                     <Show when={e.builtin} fallback={<span class="tile" style={{ width: '40px', height: '40px', background: e.tool ? 'color-mix(in srgb, var(--blue) 18%, transparent)' : FXMETA.vst3.color + '26', color: e.tool ? 'var(--blue)' : FXMETA.vst3.color }}><Icon d={e.tool ? NOTEBOOK_ICON : ICONS.vst} size={20} /></span>}>
@@ -277,7 +302,7 @@ function FxPicker(props: { insId: Id; x: number; y: number }) {
                     <button class="fxp-star" classList={{ on: favs().includes(e.key) }} title={favs().includes(e.key) ? tr('c.picker.favRemove') : tr('c.picker.favAdd')}
                       onPointerDown={ev => { ev.stopPropagation(); }} onClick={ev => { ev.stopPropagation(); toggleFav(e.key); }}>{favs().includes(e.key) ? '★' : '☆'}</button>
                   </div>
-                )}
+                </>)}
               </For>
             </div>
           </div>

@@ -663,6 +663,10 @@ select option { background: var(--bg4); color: var(--fg); }
 .fxp-def { font: 500 9.5px var(--mono); color: var(--fg5); }
 .fxp-note, .fxp-empty { padding: 8px 6px; font: 400 12px/1.4 var(--sans); color: var(--fg4); }
 .fxp-grid .fxp-empty { grid-column: 1 / -1; padding: 24px 4px; }
+/* "All": a quiet section label with a hairline, spanning the grid */
+.fxp-sect { grid-column: 1 / -1; display: flex; align-items: center; gap: 8px; margin-top: 6px; font: 600 9px var(--sans); letter-spacing: .08em; text-transform: uppercase; color: var(--fg5); }
+.fxp-sect::after { content: ''; flex: 1; height: 1px; background: var(--line); }
+.fxp-grid > .fxp-sect:first-child { margin-top: 0; }
 .fxp-ft { display: flex; align-items: center; gap: 14px; padding: 7px 12px; border-top: 1px solid var(--line2); font: 400 11px var(--sans); color: var(--fg4); }
 .fxp-ft kbd { padding: 0 4px; border: 1px solid var(--line3); border-radius: 3px; font: 500 10px var(--mono); color: var(--fg3); background: var(--bg2); }
 .fxp-ft .grow { flex: 1; }
