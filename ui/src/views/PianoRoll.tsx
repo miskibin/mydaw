@@ -130,7 +130,14 @@ function Roll(props: { z: number }) {
     const op: { op: 'transformNotes'; pattern: number; verb: TransformVerb; seed?: number; select?: TransformSelect } = {
       op: 'transformNotes', pattern: p.id, verb,
       ...(seed !== undefined ? { seed } : {}),
-      ...(sel().size > 0 ? { select: { kind: 'indices' as const, indices: [...sel()].sort((x, y) => x - y) } } : {}),
+      // scope: the selection, else the channel the roll is showing — never the whole
+      // pattern (a pattern is multi-channel; humanize with Hat shown must not jitter
+      // the kick). Generators target their channel anyway, so they stay unscoped.
+      ...(sel().size > 0
+        ? { select: { kind: 'indices' as const, indices: [...sel()].sort((x, y) => x - y) } }
+        : id === 'humanize' || id === 'quantize' || id === 'strum'
+          ? { select: { kind: 'range' as const, from: 0, to: 1e9, ch: chan } }
+          : {}),
     };
     commit([op], t(TOOL_META[id].label));
     setSel(new Set<number>());

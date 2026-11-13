@@ -66,6 +66,15 @@ describe('transformNotes (TS mirror)', () => {
     expect(a.filter(n => n.ch === 1)).toHaveLength(3);
   });
 
+  it('a range select scoped to a channel touches only that channel', () => {
+    const a = [note(1, 0, 60, 1), note(2, 2, 70, 1), note(1, 8, 62, 1)];
+    applyTransform(a, { kind: 'humanize', timing: 1, velocity: 0 }, 41, { kind: 'range', from: 0, to: 1e9, ch: 1 }, [{ id: 1, root: 60 }, { id: 2, root: 60 }], null, 1, 16);
+    // the ch-2 note is untouched; the in-scope ch-1 note moved off step 8
+    expect(a[1].step).toBe(2);
+    expect(a[1].v).toBe(1);
+    expect(a[2].step).not.toBe(8);
+  });
+
   describe('golden: engine parity (values from the engine golden_fixed_seed_values test)', () => {
     const f = Math.fround;
     const noteF = (ch: number, step: number, p: number, v: number): Note => ({ ch, step, len: 1, p, v: f(v) });
