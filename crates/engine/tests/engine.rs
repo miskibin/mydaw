@@ -96,7 +96,7 @@ fn audio_clips_play_at_their_position() {
     let mut p = Project::routed();
     p.inserts[0].fx.clear(); // no limiter, so levels are exact
     let e = Engine::new(p, Arc::new(NoPlugins));
-    let (_, clips) = e.import_audio(&[wav.clone()], Some((0, 4.0))).unwrap();
+    let (_, clips) = e.import_audio(std::slice::from_ref(&wav), Some((0, 4.0))).unwrap();
     assert_eq!(clips.len(), 1);
     let out = e.render(0.0, 8.0, 0.0, 48000).unwrap();
     let spb = 60.0 / 128.0;

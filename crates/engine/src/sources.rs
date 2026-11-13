@@ -26,9 +26,9 @@ impl Audio {
         let frames = interleaved.len() / 2;
         let peaks = peaks_of(&interleaved, sr);
         let mut data = Vec::with_capacity((frames + wave_audio_file::PAD_LEAD + wave_audio_file::PAD_TRAIL) * 2);
-        data.extend(std::iter::repeat(0.0).take(wave_audio_file::PAD_LEAD * 2));
+        data.extend(std::iter::repeat_n(0.0, wave_audio_file::PAD_LEAD * 2));
         data.extend_from_slice(&interleaved);
-        data.extend(std::iter::repeat(0.0).take(wave_audio_file::PAD_TRAIL * 2));
+        data.extend(std::iter::repeat_n(0.0, wave_audio_file::PAD_TRAIL * 2));
         Self { data, frames, sr, channels, peaks }
     }
 

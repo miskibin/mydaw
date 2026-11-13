@@ -178,7 +178,7 @@ impl Smooth {
 /// Samples for a one-pole decay with per-sample coefficient `k` to fall `taus` time constants.
 pub(crate) fn decay_samples(k: f32, taus: f32) -> usize {
     if k > 0.0 && k < 1.0 {
-        (taus * -1.0 / k.ln()) as usize + 1
+        (-taus / k.ln()) as usize + 1
     } else if k >= 1.0 {
         usize::MAX / 4
     } else {
@@ -402,8 +402,8 @@ impl Processor for Eq {
         self.gain.v = self.out;
     }
     fn meters(&self, out: &mut [f32; crate::processor::METERS]) {
-        for k in 0..EQ_BANDS {
-            out[k] = self.bands[k].dyn_g;
+        for (o, b) in out[..EQ_BANDS].iter_mut().zip(&self.bands[..EQ_BANDS]) {
+            *o = b.dyn_g;
         }
     }
 }
@@ -645,10 +645,10 @@ impl Processor for Reverb {
             }
             // FDN
             let mut o = [0f32; FDN];
-            for k in 0..FDN {
+            for (k, ok) in o.iter_mut().enumerate() {
                 let y = self.lines[k].read();
                 self.lp[k] = flush(y * (1.0 - self.damp[k]) + self.lp[k] * self.damp[k]);
-                o[k] = self.lp[k] * self.g[k];
+                *ok = self.lp[k] * self.g[k];
             }
             // fast Walsh–Hadamard (orthogonal mixing)
             let mut h = 1;
@@ -664,8 +664,8 @@ impl Processor for Reverb {
                 }
                 h *= 2;
             }
-            for k in 0..FDN {
-                self.lines[k].write(flush(o[k] * s + d));
+            for (line, &ok) in self.lines[..FDN].iter_mut().zip(&o) {
+                line.write(flush(ok * s + d));
             }
             let wl = self.lines[0].read() + self.lines[2].read() + self.lines[4].read() + self.lines[6].read();
             let wr = self.lines[1].read() + self.lines[3].read() + self.lines[5].read() + self.lines[7].read();

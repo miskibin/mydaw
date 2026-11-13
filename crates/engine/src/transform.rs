@@ -363,7 +363,7 @@ mod tests {
 
     #[test]
     fn strum_spreads_a_chord_by_pitch() {
-        let notes = &mut vec![
+        let notes = &mut [
             note(1, 4.0, 0.8),
             Note { ch: 1, step: 4.0, len: 1.0, p: Some(64), v: 0.8 },
             Note { ch: 1, step: 4.0, len: 1.0, p: Some(57), v: 0.8 },
@@ -411,7 +411,7 @@ mod tests {
 
     #[test]
     fn strum_groups_nonadjacent_same_step_notes() {
-        let notes = &mut vec![
+        let notes = &mut [
             note(1, 4.0, 0.8),
             Note { ch: 1, step: 8.0, len: 1.0, p: Some(64), v: 0.8 },
             Note { ch: 1, step: 4.0, len: 1.0, p: Some(57), v: 0.8 },
@@ -419,9 +419,9 @@ mod tests {
         strum(notes, 0.25, 0.0);
         // the two step-4 notes form one chord (lowest first) even though they are
         // separated by the step-8 note; the lone step-8 note does not move
-        assert!(notes.iter().any(|n| (n.p == Some(57) && (n.step - 4.0).abs() < 1e-4)));
-        assert!(notes.iter().any(|n| (n.p == Some(60) && (n.step - 4.25).abs() < 1e-4)));
-        assert!(notes.iter().any(|n| (n.p == Some(64) && (n.step - 8.0).abs() < 1e-4)));
+        assert!(notes.iter().any(|n| n.p == Some(57) && (n.step - 4.0).abs() < 1e-4));
+        assert!(notes.iter().any(|n| n.p == Some(60) && (n.step - 4.25).abs() < 1e-4));
+        assert!(notes.iter().any(|n| n.p == Some(64) && (n.step - 8.0).abs() < 1e-4));
     }
 
     /// Golden values for one fixed seed per verb; the TS mirror pins the same numbers
@@ -429,14 +429,14 @@ mod tests {
     /// Refresh by running with `--nocapture` and copying the H/Q/S/E/M lines.
     #[test]
     fn golden_fixed_seed_values() {
-        let h = &mut vec![note(1, 4.0, 0.8)];
+        let h = &mut [note(1, 4.0, 0.8)];
         humanize(h, 0.5, 0.4, &mut SplitMix64::new(41));
         assert_eq!(h[0].step, 4.033452);
         assert_eq!(h[0].v, 0.67452526);
-        let q = &mut vec![note(1, 4.3, 0.8)];
+        let q = &mut [note(1, 4.3, 0.8)];
         quantize(q, 1.0, 1.0, None, &[]);
         assert_eq!(q[0].step, 4.0);
-        let s = &mut vec![
+        let s = &mut [
             note(1, 4.0, 0.8),
             Note { ch: 1, step: 4.0, len: 1.0, p: Some(64), v: 0.8 },
             Note { ch: 1, step: 4.0, len: 1.0, p: Some(57), v: 0.8 },

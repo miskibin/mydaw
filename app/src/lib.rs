@@ -866,7 +866,7 @@ pub fn ensure_c_numeric_locale() {
         fn setlocale(category: i32, locale: *const std::ffi::c_char) -> *mut std::ffi::c_char;
     }
     unsafe {
-        setlocale(libc::LC_NUMERIC, b"C\0".as_ptr().cast());
+        setlocale(libc::LC_NUMERIC, c"C".as_ptr());
     }
 }
 
@@ -1160,6 +1160,7 @@ mod tests {
     }
 }
 
+#[cfg(test)]
 mod locale_tests {
     use super::ensure_c_numeric_locale;
 

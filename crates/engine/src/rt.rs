@@ -579,6 +579,9 @@ pub struct Preview {
 
 // ------------------------------------------------------------------ messages
 
+// `Params` is large on purpose: a parameter move is a fixed-size message the audio thread
+// reads in place. Boxing it (what the lint suggests) would free memory on the audio thread.
+#[allow(clippy::large_enum_variant)]
 pub enum Cmd {
     Graph(Box<Graph>),
     Timeline(Box<Timeline>),

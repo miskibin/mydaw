@@ -198,7 +198,7 @@ pub fn sessions() -> Vec<Endpoint> {
             out.push((m, ep));
         }
     }
-    out.sort_by(|a, b| b.0.cmp(&a.0));
+    out.sort_by_key(|x| std::cmp::Reverse(x.0));
     out.into_iter().map(|x| x.1).collect()
 }
 

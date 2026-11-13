@@ -557,7 +557,7 @@ pub fn analyze(mono: &[f32], sr: f32) -> PitchAnalysis {
             cur_conf = det.confidence;
             cur_rms = det.rms;
         }
-        if i >= lat && (i - lat) % step == 0 {
+        if i >= lat && (i - lat).is_multiple_of(step) {
             let f = (i - lat) / step;
             if f < frames {
                 levels[f] = cur_rms;

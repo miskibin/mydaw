@@ -102,9 +102,9 @@ pub fn run(c: &Case, p: &RefTune, est: Option<&dyn F0Estimator>) -> (Outcome, Au
         .map(|f| matches!((ta.curve[f], c.sung.get(f)), (a, Some(&s)) if a.is_finite() && s.is_finite() && (a - s).abs() > 1.0))
         .collect();
     let (mut frames_before, mut frames_after) = (vec![], vec![]);
-    for f in 0..n {
+    for (f, &slipped) in slip.iter().enumerate() {
         let Some(&w) = c.truth.get(f) else { break };
-        if !w.is_finite() || c.edge.get(f).copied().unwrap_or(true) || slip[f] {
+        if !w.is_finite() || c.edge.get(f).copied().unwrap_or(true) || slipped {
             continue;
         }
         if ta.curve[f].is_finite() {

@@ -1115,6 +1115,24 @@ pub fn control(app: &Arc<App>, cmd: &str, a: &Value, if_revision: Option<u64>) -
     }
 }
 
+/// `melody_channels`: the channels whose notes play over an audio clip, best fit to the
+/// singing first: `[{channel, name, notes, fit}]` (`fit` 0..1).
+pub fn melody_channels(e: &wave_engine::Engine, clip_id: u64) -> Result<Value, String> {
+    let list = e.melody_channels(clip_id).map_err(|x| x.to_string())?;
+    let p = e.project();
+    Ok(json!(list
+        .into_iter()
+        .map(|(id, n, fit)| json!({ "channel": id, "name": p.channels.iter().find(|c| c.id == id).map(|c| c.name.clone()).unwrap_or_default(), "notes": n, "fit": fit }))
+        .collect::<Vec<_>>()))
+}
+
+/// `melody_reference`: the notes of `channel` over an audio clip as a melody reference
+/// (`span`: seconds of the source) — `{melody: {channel, span?, notes}, fit}`.
+pub fn melody_reference(e: &wave_engine::Engine, clip_id: u64, channel: u64, span: Option<[f64; 2]>) -> Result<Value, String> {
+    let (m, fit) = e.melody_reference(clip_id, channel, span).map_err(|x| x.to_string())?;
+    Ok(json!({ "melody": m, "fit": fit }))
+}
+
 #[cfg(test)]
 mod tests {
     use super::{parse_steps, render_stems_to_dir, safe_file_stem, unique_file_stems};
@@ -1251,22 +1269,4 @@ mod tests {
         assert!(parse_steps("x?x", 1.0).is_err());
         assert!(parse_steps("", 1.0).unwrap().is_empty());
     }
-}
-
-/// `melody_channels`: the channels whose notes play over an audio clip, best fit to the
-/// singing first: `[{channel, name, notes, fit}]` (`fit` 0..1).
-pub fn melody_channels(e: &wave_engine::Engine, clip_id: u64) -> Result<Value, String> {
-    let list = e.melody_channels(clip_id).map_err(|x| x.to_string())?;
-    let p = e.project();
-    Ok(json!(list
-        .into_iter()
-        .map(|(id, n, fit)| json!({ "channel": id, "name": p.channels.iter().find(|c| c.id == id).map(|c| c.name.clone()).unwrap_or_default(), "notes": n, "fit": fit }))
-        .collect::<Vec<_>>()))
-}
-
-/// `melody_reference`: the notes of `channel` over an audio clip as a melody reference
-/// (`span`: seconds of the source) — `{melody: {channel, span?, notes}, fit}`.
-pub fn melody_reference(e: &wave_engine::Engine, clip_id: u64, channel: u64, span: Option<[f64; 2]>) -> Result<Value, String> {
-    let (m, fit) = e.melody_reference(clip_id, channel, span).map_err(|x| x.to_string())?;
-    Ok(json!({ "melody": m, "fit": fit }))
 }

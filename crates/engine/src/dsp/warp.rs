@@ -626,8 +626,8 @@ mod tests {
         let mut w = make(flat(), flat(), &[]);
         let sine = |i: usize| (i as f32 * 0.05).sin() * 0.5;
         let out = run(&mut w, sine, 48000);
-        for i in 1000..48000 {
-            assert!((out[i] - sine(i - LATENCY)).abs() < 2e-3, "sample {i}: {} vs {}", out[i], sine(i - LATENCY));
+        for (i, &o) in out.iter().enumerate().take(48000).skip(1000) {
+            assert!((o - sine(i - LATENCY)).abs() < 2e-3, "sample {i}: {o} vs {}", sine(i - LATENCY));
         }
     }
 
