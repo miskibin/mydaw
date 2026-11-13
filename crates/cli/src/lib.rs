@@ -408,7 +408,7 @@ fn run(cmd: &str, a: &Args) -> Result<Value, Fail> {
                     for (i, v) in a.get_all("voice").iter().enumerate() {
                         let parts: Vec<&str> = v.split(':').collect();
                         if parts.len() < 3 {
-                            return Err(u(format!("--voice is CH:K:N[:ROT[:VEL]] (voice {i})").into()));
+                            return Err(u(format!("--voice is CH:K:N[:ROT[:VEL]] (voice {i})")));
                         }
                         let num = |i: usize| parts.get(i).and_then(|x| x.trim().parse::<f64>().ok())
                             .ok_or_else(|| u(format!("--voice {i}: bad number `{}`", parts.get(i).unwrap_or(&"")).into()));
@@ -421,7 +421,7 @@ fn run(cmd: &str, a: &Args) -> Result<Value, Fail> {
                     (json!({"kind": "euclidDrums", "voices": voices, "bars": f("bars").map_err(u)?.unwrap_or(2.0) as u32}), false)
                 }
                 "melody" => (json!({"kind": "melody", "ch": f("ch").map_err(u)?.ok_or_else(|| u("missing --ch".into()))? as u64, "bars": f("bars").map_err(u)?.unwrap_or(2.0) as u32, "density": f("density").map_err(u)?.unwrap_or(0.5), "repeat": f("repeat").map_err(u)?.unwrap_or(1.0) as u32}), true),
-                other => return Err(u(format!("unknown notes verb `{other}` (humanize|quantize|euclid|strum|drums|melody)").into())),
+                other => return Err(u(format!("unknown notes verb `{other}` (humanize|quantize|euclid|strum|drums|melody)"))),
             };
             if needs_ch {
                 // a channel id here is the Channel Rack channel: accepted as-is, validated by the engine
@@ -433,10 +433,10 @@ fn run(cmd: &str, a: &Args) -> Result<Value, Fail> {
             if let Some(sel) = a.get("select") {
                 let (from, rest) = sel.split_once(':').ok_or_else(|| u("--select is FROM:TO[@CH]".into()))?;
                 let (to, ch) = rest.split_once('@').map_or((rest, None), |(t, c)| (t, Some(c)));
-                let pf = |x: &str| x.trim().parse::<f64>().map_err(|_| u(format!("--select: bad number `{x}`").into()));
+                let pf = |x: &str| x.trim().parse::<f64>().map_err(|_| u(format!("--select: bad number `{x}`")));
                 let mut node = json!({"kind": "range", "from": pf(from)?, "to": pf(to)?});
                 if let Some(c) = ch {
-                    node["ch"] = json!(c.trim().parse::<u64>().map_err(|_| u(format!("--select: bad channel `{c}`").into()))?);
+                    node["ch"] = json!(c.trim().parse::<u64>().map_err(|_| u(format!("--select: bad channel `{c}`")))?);
                 }
                 op["select"] = node;
             } else if let Some(ix) = a.get("indices") {
@@ -453,7 +453,7 @@ fn run(cmd: &str, a: &Args) -> Result<Value, Fail> {
             let scales = ["chromatic", "major", "minor", "major pentatonic", "minor pentatonic"];
             let note = a.pos.get(1).ok_or_else(|| u("key <NOTE> [SCALE] | key --off  (e.g. key C minor)".into()))?;
             let key_id = note_names.iter().position(|n| n.eq_ignore_ascii_case(note))
-                .ok_or_else(|| u(format!("unknown note `{note}` (C…B)").into()))? as u64;
+                .ok_or_else(|| u(format!("unknown note `{note}` (C…B)")))? as u64;
             let scale = a.pos.get(2).map(|sc| {
                 scales.iter().position(|n| n.eq_ignore_ascii_case(sc))
                     .map(|i| i as u64)

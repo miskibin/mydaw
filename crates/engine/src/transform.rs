@@ -16,8 +16,8 @@ impl SplitMix64 {
         Self(seed.wrapping_add(0x9E37_79B9_7F4A_7C15))
     }
 
-    /// Next raw 64 bits; never all-zero.
-    pub fn next(&mut self) -> u64 {
+    /// Next raw 64 bits; never all-zero. (Not `Iterator::next` — hence the name.)
+    pub fn raw(&mut self) -> u64 {
         self.0 = self.0.wrapping_add(0x9E37_79B9_7F4A_7C15);
         let mut z = self.0;
         z = (z ^ (z >> 30)).wrapping_mul(0xBF58_476D_1CE4_E5B9);
@@ -27,17 +27,17 @@ impl SplitMix64 {
 
     /// Uniform −1.0..1.0.
     pub fn pm1(&mut self) -> f32 {
-        (self.next() >> 11) as f32 / ((1u64 << 53) as f32) * 2.0 - 1.0
+        (self.raw() >> 11) as f32 / ((1u64 << 53) as f32) * 2.0 - 1.0
     }
 
     /// Uniform 0..1.
     pub fn unit(&mut self) -> f32 {
-        (self.next() >> 11) as f32 / ((1u64 << 53) as f32)
+        (self.raw() >> 11) as f32 / ((1u64 << 53) as f32)
     }
 
     /// Uniform integer `0..n` (n > 0).
     fn below(&mut self, n: usize) -> usize {
-        (self.next() % n as u64) as usize
+        (self.raw() % n as u64) as usize
     }
 }
 
@@ -183,7 +183,7 @@ pub fn euclidean_fill(notes: &mut Vec<Note>, ch: Id, k: u32, n: u32, rotate: i32
             notes.push(Note {
                 ch,
                 step: (i as f32 * slot).round() * 0.001 + i as f32 * slot,
-                len: slot.min(1.0).max(0.25),
+                len: slot.clamp(0.25, 1.0),
                 p: None,
                 v: if i % 4 == 0 { 1.0 } else { vel },
             });
@@ -216,8 +216,9 @@ pub fn strum(notes: &mut [Note], width: f32, ramp: f32) {
 /// every `density` slot, the pitch a small random walk over scale degrees. Bars past
 /// `repeat` replay that cycle's rhythm with the walk nudged ±1 degree, so the melody
 /// repeats instead of wandering.
-pub fn melody(notes: &mut Vec<Note>, ch: Id, key: u8, scale_id: u32, bars: u32, density: f32, repeat: u32, seed: u64) {
+pub fn melody(notes: &mut Vec<Note>, ch: Id, key_scale: (u8, u32), bars: u32, density: f32, repeat: u32, seed: u64) {
     let rng = &mut SplitMix64::new(seed);
+    let (key, scale_id) = key_scale;
     let mask = pitch::scale_mask(scale_id);
     let degrees: Vec<u8> = (0..12u16).filter(|pc| mask & (1 << pc) != 0).map(|pc| pc as u8).collect();
     let n = degrees.len() as i32;
@@ -356,13 +357,13 @@ mod tests {
     #[test]
     fn melody_is_scale_constrained_and_deterministic() {
         let a = &mut vec![];
-        melody(a, 3, 0, 1, 2, 0.5, 1, 77);
+        melody(a, 3, (0, 1), 2, 0.5, 1, 77);
         assert!(a.iter().all(|n| n.ch == 3));
         assert!(a.iter().all(|n| n.p.is_some()));
         // every pitch in C major
         assert!(a.iter().all(|n| [0, 2, 4, 5, 7, 9, 11].contains(&(n.p.unwrap() % 12))));
         let b = &mut vec![];
-        melody(b, 3, 0, 1, 2, 0.5, 1, 77);
+        melody(b, 3, (0, 1), 2, 0.5, 1, 77);
         assert_eq!(a, b);
     }
 }

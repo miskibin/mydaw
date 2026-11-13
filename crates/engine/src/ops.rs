@@ -568,7 +568,7 @@ pub fn apply(p: &mut Project, op: &Op) -> Result<Dirty, OpError> {
                     }
                 }
                 crate::transform::TransformVerb::Melody { ch, bars, density, repeat } => {
-                    crate::transform::melody(&mut target, *ch, ks.map(|(k, _)| k).unwrap_or(0), p.scale, *bars, *density, *repeat, seed.unwrap_or(0));
+                    crate::transform::melody(&mut target, *ch, (ks.map(|(k, _)| k).unwrap_or(0), p.scale), *bars, *density, *repeat, seed.unwrap_or(0));
                 }
             }
             // the transformed notes must satisfy the same sanity as a putPattern
@@ -819,7 +819,6 @@ pub fn apply_all(p: &mut Project, ops: &[Op]) -> Result<Dirty, OpError> {
 #[cfg(test)]
 mod transform_tests {
     use super::*;
-    use crate::model::*;
 
     fn project_with_notes() -> Project {
         let mut p = crate::demo::routed_project();
