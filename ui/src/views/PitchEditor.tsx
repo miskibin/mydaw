@@ -14,10 +14,10 @@ import { setNoteClip } from '../state/noteClipboard';
 import { sungToPattern } from '../lib/vocalNotes';
 import { createEffect, createMemo, createSignal, For, on, onCleanup, onMount, Show } from 'solid-js';
 import { be } from '../api/backend';
-import type { Clip, ClipTune, F0ModelStatus, Melody, MelodyChannel, Op, PitchAnalysis, PitchTarget, RefTune } from '../api/types';
+import type { Clip, ClipTune, F0ModelStatus, Melody, MelodyChannel, Op, PitchAnalysis, PitchTarget, RefTune, TuneEdit } from '../api/types';
 import { clamp, dbg, dbText, fmtPos } from '../lib/format';
 import {
-  addPencil, CORRECT_PRESETS, correctPitch, DEFAULT_REF, dragShift, editedCurve, editNotes, erasePencil, inScale, initTune, isBlack, lowConfidenceRuns,
+  CORRECT_PRESETS, correctPitch, DEFAULT_REF, dragShift, editedCurve, editNotes, inScale, initTune, isBlack, lowConfidenceRuns,
   mergeNotes, MIN_NOTE, noteCenters, NOTE_NAMES, noteName, scaleMask, splitNear, splitNote,
 } from '../lib/pitch';
 import * as A from '../state/actions';
@@ -211,6 +211,9 @@ function PitchBody(props: { clipId: number }) {
   const showEdited = () => !!tune() || !!activeTarget();
   const mask = () => scaleMask(scale());
   const putTune = (t: ClipTune | null): Op => ({ op: 'putClips', clips: [{ ...plain(c()), tune: t } as Clip] });
+  /** Note edits go to the engine as `editTune` (the op `wave pitch edit` sends too): indices are the notes shown, and
+   *  a clip without notes of its own starts from the analysis' segmentation (`init`). */
+  const editOp = (e: TuneEdit): Op => ({ op: 'editTune', clip: c().id, edit: tune()?.notes.length ? e : { init: tuneOrInit().notes.map(n => [n.start, n.end] as [number, number]), ...e } });
 
   // ---- geometry
   const X = (t: number) => KW + (t - view.t) * view.pps;
@@ -439,7 +442,7 @@ function PitchBody(props: { clipId: number }) {
       const dy = (sy - ev.clientY) * (ev.shiftKey ? 0.25 : 1);
       if (!g) { if (Math.abs(dy) < 2) return; g = new Gesture(label); }
       const t = editNotes(base, idx, (n, k) => patch(base.notes[k], k, dy, ev));
-      g.update([putTune(t)]);
+      g.update([editOp({ notes: [...idx].map(k => ({ i: k, ...patch(base.notes[k], k, dy, ev) })) })]);
       const n0 = t.notes[i];
       say(label + ' · ' + (tool() === 'main' ? noteName((centers()[i] ?? 0) + n0.shift / 100) + ' (' + (n0.shift >= 0 ? '+' : '') + Math.round(n0.shift) + ' ct)' : tool() === 'drift' ? Math.round(n0.drift * 100) + '%' : tool() === 'formant' ? (n0.formant >= 0 ? '+' : '') + Math.round(n0.formant) + ' ct' : dbText(n0.gain)));
     }, () => { g?.end(); }, 'ns-resize');
@@ -457,8 +460,8 @@ function PitchBody(props: { clipId: number }) {
     const i = hitNote(x, y), sp = hitSplit(x, y), tk = tool();
     if (tk === 'pencil') return pencil(e);
     if (tk === 'split' || (tk === 'main' && dblCheck('pnote' + props.clipId))) {
-      if (sp >= 0) { const nt = mergeNotes(tuneOrInit(), sp); if (nt) { commit([putTune(nt)], t('d.pitch.op.merge')); setSel(new Set<number>()); say(t('d.pitch.say.merged')); } return; }
-      if (i >= 0) { const nt = splitNote(tuneOrInit(), i, tAt(x)); if (nt) { commit([putTune(nt)], t('d.pitch.op.split')); setSel(new Set([i + 1])); say(t('d.pitch.say.split', { s: tAt(x).toFixed(3) })); } else say(t('d.pitch.say.tooclose', { ms: MIN_NOTE * 1000 })); }
+      if (sp >= 0) { const nt = mergeNotes(tuneOrInit(), sp); if (nt) { commit([editOp({ merge: [sp] })], t('d.pitch.op.merge')); setSel(new Set<number>()); say(t('d.pitch.say.merged')); } return; }
+      if (i >= 0) { const nt = splitNote(tuneOrInit(), i, tAt(x)); if (nt) { commit([editOp({ split: [{ i, at: tAt(x) }] })], t('d.pitch.op.split')); setSel(new Set([i + 1])); say(t('d.pitch.say.split', { s: tAt(x).toFixed(3) })); } else say(t('d.pitch.say.tooclose', { ms: MIN_NOTE * 1000 })); }
       return;
     }
     if (i < 0) return marquee(e, x, y);
@@ -522,9 +525,8 @@ function PitchBody(props: { clipId: number }) {
     track(addPt, () => {
       setPencilLive(null);
       if (pts.length < 2 && !erase) return;
-      const base = tuneOrInit(), ta = Math.min(...pts.map(p => p[0])), tb = Math.max(...pts.map(p => p[0]));
-      const nt: ClipTune = { ...base, pencil: erase ? erasePencil(base.pencil, ta, tb) : addPencil(base.pencil, pts) };
-      commit([putTune(nt)], erase ? t('d.pitch.op.erase') : t('d.pitch.op.pencil'));
+      const ta = Math.min(...pts.map(p => p[0])), tb = Math.max(...pts.map(p => p[0]));
+      commit([editOp(erase ? { erasePencil: [[ta, tb]] } : { pencil: pts.map(p => [p[0], p[1]] as [number, number]) })], erase ? t('d.pitch.op.erase') : t('d.pitch.op.pencil'));
       say(erase ? t('d.pitch.say.erased') : t('d.pitch.say.drew', { s: (tb - ta).toFixed(2) }));
     }, 'crosshair');
   };
@@ -588,7 +590,7 @@ function PitchBody(props: { clipId: number }) {
   const correct = () => {
     const a = an(); if (!a) return;
     const nt = correctPitch(tuneOrInit(), a, scope(), centerPct(), driftPct(), key(), mask(), speedMs());
-    commit([putTune(nt)], t('d.pitch.op.correct'));
+    commit([editOp({ notes: scope().map(i => ({ i, shift: nt.notes[i].shift, drift: nt.notes[i].drift, speed: nt.notes[i].speed ?? null })) })], t('d.pitch.op.correct'));
     say(t('d.pitch.say.corrected', { n: scope().length, c: centerPct(), s: speedMs(), d: driftPct(), key: NOTE_NAMES[key()], scale: SCALES[scale()] }));
   };
   const applyRef = () => {
@@ -671,12 +673,11 @@ function PitchBody(props: { clipId: number }) {
     if (!tune()) return;
     if (!sel().size) {
       const r = tune()!.reference;
-      commit([putTune(r ? { notes: [], pencil: [], reference: r } : null)], t('d.pitch.op.reset'));
+      commit([{ op: 'editTune', clip: c().id, edit: { clear: true } }], t('d.pitch.op.reset'));
       say(t(r ? 'd.pitch.say.reset1' : 'd.pitch.say.reset2'));
       return;
     }
-    const nt = editNotes(tuneOrInit(), sel(), () => ({ shift: 0, drift: 0, formant: 0, gain: 0, speed: null }));
-    commit([putTune(nt)], t('d.pitch.op.resetnotes')); say(t('d.pitch.say.resetn', { n: sel().size }));
+    commit([editOp({ reset: [...sel()] })], t('d.pitch.op.resetnotes')); say(t('d.pitch.say.resetn', { n: sel().size }));
   };
   const previewing = () => U.previewing;
   /** Solo: the take alone with its edits, from the start marker when it is inside the clip, else from its start. */

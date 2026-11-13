@@ -958,6 +958,57 @@ impl Engine {
         Ok(Arc::new(crate::sources::target_for(&clip, &take, &al, &p)))
     }
 
+    /// Everything the pitch editor shows for an audio clip, read without holding the project
+    /// lock during analysis: the clip, its analysis, the Tune to Reference target (if any), the
+    /// notes it is edited by (its own, else the analysis' segmentation: `own` says which) and the
+    /// pitch every analysis frame will sound at.
+    pub fn pitch_view(&self, clip_id: Id) -> Result<PitchView, EngineError> {
+        let clip = self.audio_clip(clip_id)?;
+        let analysis = self.source_analysis(clip.source, clip.norm, clip.rev).ok_or(EngineError::Msg("audio not loaded".into()))?;
+        let target = match clip.tune.as_ref().and_then(|t| t.reference.as_ref()) {
+            Some(_) => Some(self.pitch_target(clip_id, None)?),
+            None => None,
+        };
+        let (notes, own) = crate::pitch_api::clip_notes(clip.tune.as_ref(), &analysis);
+        let tune = clip.tune.clone().unwrap_or_default();
+        let out = crate::tune_render::edited_curve(&analysis, &tune, target.as_deref());
+        let (bpm, sr, seconds) = {
+            let mut c = self.core.lock();
+            let bpm = c.project.bpm;
+            let a = c.sources.variant(clip.source, clip.norm, clip.rev).ok_or(EngineError::Msg("audio not loaded".into()))?;
+            (bpm, a.sr, a.seconds())
+        };
+        Ok(PitchView { clip, analysis, target, notes, own, out, bpm, sr, seconds })
+    }
+
+    /// Compares an audio clip's singing with another source's (`crate::pitch_api::compare`).
+    /// Read-only; seconds per minute of audio (two alignments at most).
+    pub fn pitch_compare(&self, clip_id: Id, reference: Id) -> Result<crate::pitch_api::Comparison, EngineError> {
+        let view = self.pitch_view(clip_id)?;
+        if !self.core.lock().project.sources.iter().any(|s| s.id == reference) {
+            return Err(EngineError::Msg(format!("no source {reference}")));
+        }
+        let tc = self.source_content(view.clip.source, view.clip.norm, view.clip.rev).ok_or(EngineError::Msg("audio not loaded".into()))?;
+        let ra = self.source_analysis(reference, false, false).ok_or(EngineError::Msg("reference audio not loaded".into()))?;
+        let rc = self.source_content(reference, false, false).ok_or(EngineError::Msg("reference audio not loaded".into()))?;
+        let spans: Vec<(f64, f64)> = view.notes.iter().map(|n| (n.start, n.end)).collect();
+        Ok(crate::pitch_api::compare(&view.analysis, &tc, view.region(), &spans, &ra, &rc))
+    }
+
+    /// What an audio clip plays before time-stretching — with its pitch edits rendered (now, not
+    /// in the background) when `edits`, else its plain source — and the part of it the clip
+    /// shows (source seconds).
+    pub fn clip_tuned_audio(&self, clip_id: Id, edits: bool) -> Result<(Arc<crate::sources::Audio>, (f64, f64)), EngineError> {
+        let mut clip = self.audio_clip(clip_id)?;
+        if !edits {
+            clip.tune = None;
+        }
+        let mut c = self.core.lock();
+        let bpm = c.project.bpm;
+        let a = c.sources.clip_source_audio(&clip, false, bpm).ok_or(EngineError::Msg("audio not loaded".into()))?;
+        Ok((a, clip.source_span(bpm)))
+    }
+
     /// The notes `channel` plays over an audio clip, as a melody reference (`span`: seconds of
     /// the source, only notes overlapping it), and how well they fit what is sung (0..1).
     pub fn melody_reference(&self, clip_id: Id, channel: Id, span: Option<[f64; 2]>) -> Result<(crate::model::Melody, f32), EngineError> {
@@ -2923,4 +2974,35 @@ fn resolve_target(p: &Project, t: &AutoTarget) -> Option<TargetRt> {
         AutoTarget::ClipGain { id } => TargetRt::ClipGain(p.clips.iter().find(|c| c.id == *id && c.kind == ClipKind::Audio)?.id as usize),
         AutoTarget::ClipPan { id } => TargetRt::ClipPan(p.clips.iter().find(|c| c.id == *id && c.kind == ClipKind::Audio)?.id as usize),
     })
+}
+
+/// See [`Engine::pitch_view`].
+pub struct PitchView {
+    pub clip: Clip,
+    pub analysis: Arc<crate::pitch::PitchAnalysis>,
+    pub target: Option<Arc<crate::reference::PitchTarget>>,
+    pub notes: Vec<crate::model::NoteEdit>,
+    /// The notes are the clip's own edits (else the analysis' segmentation, unedited).
+    pub own: bool,
+    /// MIDI per analysis frame as it will sound (NaN = unvoiced).
+    pub out: Vec<f32>,
+    pub bpm: f64,
+    pub sr: u32,
+    /// Length of the source, seconds.
+    pub seconds: f64,
+}
+
+impl PitchView {
+    /// The part of the source the clip plays, seconds (clamped to the audio).
+    pub fn region(&self) -> (f64, f64) {
+        let (a, b) = self.clip.source_span(self.bpm);
+        (a.clamp(0.0, self.seconds), b.clamp(0.0, self.seconds).max(a.clamp(0.0, self.seconds)))
+    }
+    /// Timeline beat of a source second of this clip.
+    pub fn beat_of(&self, t: f64) -> f64 {
+        self.clip.start + t * self.clip.stretch / (60.0 / self.bpm.max(1.0)) - self.clip.offset
+    }
+    pub fn spans(&self) -> Vec<(f64, f64)> {
+        self.notes.iter().map(|n| (n.start, n.end)).collect()
+    }
 }

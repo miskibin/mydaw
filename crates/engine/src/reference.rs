@@ -345,7 +345,22 @@ struct Evidence {
 
 /// Judges the path `map` of take frames `uf` into reference frames `rf`; `chance` is the
 /// content cost against arbitrary reference frames.
-fn evidence(uf: &[Fr], rf: &[Fr], map: &[f32], chance: &[f32]) -> Evidence {
+/// How different the two performances' timing may be before a stretch of the alignment is
+/// distrusted: the local tempo ratio (reference over take) and how far the path may wander from
+/// a straight line, in 10 ms frames, over 2 s windows.
+#[derive(Clone, Copy, Debug)]
+pub struct Tempo {
+    pub slope: (f32, f32),
+    pub wander: f32,
+}
+
+/// Tune to Reference's: a guide vocal of the same part, sung close to the take's timing.
+pub const STRICT: Tempo = Tempo { slope: (0.6, 1.67), wander: 6.0 };
+/// Another singer's own performance (other pauses, rubato, held notes): the timing may differ
+/// much more; the content must then carry the match.
+pub const LOOSE: Tempo = Tempo { slope: (0.4, 2.5), wander: 14.0 };
+
+fn evidence(uf: &[Fr], rf: &[Fr], map: &[f32], chance: &[f32], tempo: Tempo) -> Evidence {
     let (n, m) = (uf.len(), rf.len());
     let jr = |u: usize| (map[u].round().max(0.0) as usize).min(m - 1);
     // matched content (pitch left out, so an off-key take still matches) against chance
@@ -368,7 +383,7 @@ fn evidence(uf: &[Fr], rf: &[Fr], map: &[f32], chance: &[f32]) -> Evidence {
             let res = median(map[a..b].iter().enumerate().map(|(i, &y)| (y - my - slope * ((a + i) as f32 - mx)).abs()).collect())
                 .unwrap_or(0.0)
                 * 1.25;
-            if !(0.6..=1.67).contains(&slope) {
+            if !(tempo.slope.0..=tempo.slope.1).contains(&slope) {
                 return f32::INFINITY;
             }
             res
@@ -379,7 +394,7 @@ fn evidence(uf: &[Fr], rf: &[Fr], map: &[f32], chance: &[f32]) -> Evidence {
     let content_n: Vec<f32> = (0..n).map(|u| ((1.0 - ratio[u]) / 0.4).clamp(0.0, 1.0)).collect();
     // ... unless the content matches far better than chance: a reference sung with its own
     // rubato is irregular against the take, and that is no sign of a wrong path
-    let strict_ok: Vec<f32> = (0..n).map(|u| ((6.0 - warp[u]) / 3.0).clamp(0.0, 1.0)).collect();
+    let strict_ok: Vec<f32> = (0..n).map(|u| ((tempo.wander - warp[u]) / 3.0).clamp(0.0, 1.0)).collect();
     let warp_ok: Vec<f32> = (0..n).map(|u| strict_ok[u].max(((0.2 - ratio[u]) / 0.1).clamp(0.0, 1.0))).collect();
     // ... and how well the pitch contours move together
     let rp: Vec<f32> = (0..n).map(|u| rf[jr(u)].p).collect();
@@ -458,11 +473,16 @@ fn bridged(map: &[f32], ok: &[f32]) -> Option<Vec<f32>> {
 /// in another voice, can be pulled to wrong places by it; then a path from content
 /// alone is tried as well and the better-scoring one wins.
 pub fn align(take: &Performance, region: (f64, f64), reference: &Performance) -> Alignment {
-    let with_pitch = align_pass(take, region, reference, 1.0);
+    align_with(take, region, reference, STRICT)
+}
+
+/// [`align`] with a timing tolerance of its own ([`LOOSE`] for another singer's performance).
+pub fn align_with(take: &Performance, region: (f64, f64), reference: &Performance, tempo: Tempo) -> Alignment {
+    let with_pitch = align_pass(take, region, reference, 1.0, tempo);
     if with_pitch.score >= 0.8 {
         return with_pitch;
     }
-    let content_only = align_pass(take, region, reference, 0.0);
+    let content_only = align_pass(take, region, reference, 0.0, tempo);
     if content_only.score > with_pitch.score {
         content_only
     } else {
@@ -471,7 +491,7 @@ pub fn align(take: &Performance, region: (f64, f64), reference: &Performance) ->
 }
 
 /// One alignment; `pitch_weight` scales the pitch terms of the path cost (0 = content only).
-fn align_pass(take: &Performance, region: (f64, f64), reference: &Performance, pitch_weight: f32) -> Alignment {
+fn align_pass(take: &Performance, region: (f64, f64), reference: &Performance, pitch_weight: f32, tempo: Tempo) -> Alignment {
     let rate = take.pitch.rate;
     let a0 = ((region.0.max(0.0) * rate as f64).round() as usize).min(take.pitch.curve.len());
     let a1 = ((region.1 * rate as f64).round() as usize).min(take.pitch.curve.len()).max(a0);
@@ -519,7 +539,7 @@ fn align_pass(take: &Performance, region: (f64, f64), reference: &Performance, p
     let probes: Vec<usize> = (0..24).map(|k| (k * m + m / 2) / 24).collect();
     let chance: Vec<f32> = (0..n).map(|u| median(probes.iter().map(|&j| content_cost(&uf[u], &rf[j])).collect()).unwrap_or(1.0)).collect();
     let chance = smooth(&chance, 25);
-    let mut ev = evidence(&uf, &rf, &map, &chance);
+    let mut ev = evidence(&uf, &rf, &map, &chance, tempo);
     // a jump-and-stall of the path (repeated syllables, a misleading contour) shows as an
     // implausible tempo map: bridge it with a straight line and align again, narrowly, around
     // it. A straight path is plausible by construction, so over the bridged stretch the
@@ -527,7 +547,7 @@ fn align_pass(take: &Performance, region: (f64, f64), reference: &Performance, p
     if let Some(line) = bridged(&map, &ev.strict_ok) {
         let jf2 = dtw_band(m, &line, (0.15 * cr) as usize, |u, j| cost(&uf[u], &rf[j], 0.2 * pitch_weight, SHAPE * pitch_weight), 0.1);
         let map2 = monotone(&jf2);
-        let ev2 = evidence(&uf, &rf, &map2, &chance);
+        let ev2 = evidence(&uf, &rf, &map2, &chance, tempo);
         let bridged_ratio = median((0..n).filter(|&u| ev.strict_ok[u] < 0.5 && uf[u].v).map(|u| ev2.ratio[u]).collect()).unwrap_or(1.0);
         let total = |e: &Evidence| (0..n).filter(|&u| uf[u].v).map(|u| e.strict[u]).sum::<f32>();
         if bridged_ratio < BRIDGE_RATIO && total(&ev2) > total(&ev) {

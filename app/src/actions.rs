@@ -45,16 +45,16 @@ fn live_only_error(cmd: &str) -> String {
     format!("NEEDS_APP: `{cmd}` needs the running app: {why}")
 }
 
-fn arg<'a>(a: &'a Value, k: &str) -> Option<&'a Value> {
+pub(crate) fn arg<'a>(a: &'a Value, k: &str) -> Option<&'a Value> {
     a.get(k).filter(|v| !v.is_null())
 }
-fn as_index(v: &Value) -> Option<u64> {
+pub(crate) fn as_index(v: &Value) -> Option<u64> {
     v.as_u64().or_else(|| v.as_f64().filter(|f| *f >= 0.0 && f.fract() == 0.0).map(|f| f as u64))
 }
-fn need_u64(a: &Value, k: &str) -> R<u64> {
+pub(crate) fn need_u64(a: &Value, k: &str) -> R<u64> {
     arg(a, k).and_then(as_index).ok_or(format!("`{k}` (whole number) is required"))
 }
-fn need_str<'a>(a: &'a Value, k: &str) -> R<&'a str> {
+pub(crate) fn need_str<'a>(a: &'a Value, k: &str) -> R<&'a str> {
     arg(a, k).and_then(Value::as_str).ok_or(format!("`{k}` (string) is required"))
 }
 /// A `[from, to]` pair of beats (`null` or missing = none).
@@ -69,7 +69,7 @@ fn beat_range(a: &Value, k: &str) -> R<Option<(f64, f64)>> {
     }
 }
 
-fn opt_f64(a: &Value, k: &str) -> Option<f64> {
+pub(crate) fn opt_f64(a: &Value, k: &str) -> Option<f64> {
     arg(a, k).and_then(Value::as_f64)
 }
 
@@ -566,10 +566,12 @@ pub fn schema() -> Value {
             "setKey": {"key": 2, "scale": 1},
             "putComp": {"comp": {"id": 0, "name": "Comp 1", "xfade": 0.01, "takes": [{"id": 0, "name": "Take 1", "ref": "source id", "start": 0, "len": 8, "offset": 0}], "regions": [{"take": 0, "from": 0, "to": 4, "xfade": 0.02}]}},
             "removeComp": {"id": 0},
+            "editTune": {"clip": 412, "edit": {"base": "segmentation fingerprint from `wave pitch inspect` (optional; refused as STALE_NOTES when the notes changed)", "init": "[[start, end], …] seconds: the analysis' notes, used only when the clip has no notes of its own yet (`pitch edit` adds it)", "notes": [{"i": 3, "shift": -20, "shiftBy": 0, "drift": 0.2, "formant": 0, "gain": 0, "speed": 60}], "reset": [5], "split": [{"i": 7, "at": 12.35}], "merge": [9], "clear": false, "erasePencil": [[1.0, 1.5]], "pencil": [[2.0, 64.0], [2.02, 64.1]]}},
             "putNotebook": {"notebook": {"pages": [{"id": 0, "name": "Zwrotka 1", "startBar": 1, "text": "[Zwrotka]\nfirst bar\n\nthird bar"}]}},
         },
         "notebook": "lyrics notebook (text only, never played): pages in tab order; each line of `text` is one bar counted from `startBar` (1-based, bar = 4 beats), an empty line is a bar of rest, a line wrapped in [brackets] is a header and takes no bar. putNotebook replaces all pages; the full text is in `wave context --full`",
         "comps": "take lanes: a clip of kind `comp` plays comp `ref`; takes/regions are in comp beats (comp beat = clip.offset + timeline beat − clip.start); regions sorted, non-overlapping, gaps are silent; xfade in seconds (equal-power crossfade centred on each region start, default 0.01). Easier: `wave takes --track N`, `wave comp --track N --set '[{\"take\":ID,\"from\":B,\"to\":B}]'` (timeline beats)",
+        "pitchEdits": "editTune changes only a clip's pitch edits (the pitch editor's notes): indices name the notes as `wave pitch inspect` lists them (before this op), whatever order the parts are in; they apply as clear, reset, notes, split, merge, erasePencil, pencil. shift/formant in cents (within 2400), drift 0..1, gain -24..12 dB, speed 0..1000 ms (null = the reference's, else immediate). Easier: `wave pitch edit`",
         "example": [{"op": "setBpm", "bpm": 140}, {"op": "removeClips", "ids": [3]}],
     })
 }
@@ -1073,8 +1075,12 @@ pub fn control(app: &dyn Host, cmd: &str, a: &Value, if_revision: Option<u64>) -
     }
     match cmd {
         "pitch_analyze" | "pitch_target" | "tune_ref" | "auto_vocal_plan" | "f0_model" => app.ensure_pitch_model(),
+        c if crate::pitch_actions::COMMANDS.contains(&c) => app.ensure_pitch_model(),
         "vst3_params" | "vst3_set_param" => app.ensure_live_plugins(),
         _ => {}
+    }
+    if let Some(r) = crate::pitch_actions::control(app, cmd, a, if_revision) {
+        return r;
     }
     match cmd {
         "status" => {
@@ -1085,7 +1091,7 @@ pub fn control(app: &dyn Host, cmd: &str, a: &Value, if_revision: Option<u64>) -
         }
         "context" => Ok(context(app, arg(a, "full").and_then(Value::as_bool).unwrap_or(false))),
         "catalog" => Ok(
-            json!({ "effects": catalog::catalog(), "commands": ["status","context","catalog","schema","apply","undo","redo","play","stop","render","import","add_fx","set_param","load_preset","save","open","pitch_analyze","pitch_target","melody_channels","melody_reference","tune_ref","f0_model","music_analyze","auto_vocal_plan","bake_rider","make_unique","takes","comp","flatten_comp","comp_audition","channels","pattern","pattern_play","pattern_loop","note_audition","vst3_scan","vst3_add","vst3_params","vst3_set_param"] }),
+            json!({ "effects": catalog::catalog(), "commands": ["status","context","catalog","schema","apply","undo","redo","play","stop","render","import","add_fx","set_param","load_preset","save","open","pitch_analyze","pitch_target","pitch_inspect","pitch_compare","pitch_suggest","pitch_edit","pitch_render","melody_channels","melody_reference","tune_ref","f0_model","music_analyze","auto_vocal_plan","bake_rider","make_unique","takes","comp","flatten_comp","comp_audition","channels","pattern","pattern_play","pattern_loop","note_audition","vst3_scan","vst3_add","vst3_params","vst3_set_param"] }),
         ),
         "schema" => Ok(schema()),
         "apply" => {

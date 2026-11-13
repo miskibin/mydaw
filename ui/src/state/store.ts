@@ -6,6 +6,7 @@ import type { Catalog, Clip, Fx, Id, Insert, Op, Project, StateDto, TransportDto
 import { applyCompOp, compExtent } from '../lib/comp';
 import { applyNotebookOp } from '../lib/notebook';
 import { applyPatternOp } from '../lib/pattern';
+import { applyTuneEdit } from '../lib/pitch';
 
 export interface EngineState {
   ready: boolean;
@@ -242,6 +243,12 @@ function applyInPlace(p: Project, op: Op) {
       p.automations = (p.automations ?? []).filter(a => a.id !== op.id);
       p.clips = p.clips.filter(c => !(c.kind === 'auto' && c.ref === op.id));
       return;
+    case 'editTune': {
+      // the engine's own semantics (tune_edit.rs, ported): an edit it would refuse is left to its reply to undo
+      const c = p.clips.find(x => x.id === op.clip); if (!c || c.kind !== 'audio') return;
+      try { c.tune = applyTuneEdit(c.tune, op.edit); } catch { /* refused: the engine's reply resyncs */ }
+      return;
+    }
   }
 }
 

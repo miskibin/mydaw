@@ -288,7 +288,142 @@ octaves and tempi, plus unrelated references that must be refused),
 errors, cross-singer references, mismatched references) and `… -- ab --out DIR`
 (a blind A/B listening kit; `ab-score` evaluates the filled-in ratings). Add
 `--rmvpe model.onnx` or `--yin`, and `--json out.json` for the full results.
-Exit code 0 means every criterion passed.
+Exit code 0 means every criterion passed; a run with no case, no criterion or a
+failed case is a failure. The agent workflow (`pitch suggest` → `editTune` →
+render) is measured on real recordings by `agent-vocalset`, `agent-gtsinger`,
+`agent-medley`, `estimation` and the three-way `listen` kit; see
+[`crates/tune-bench/RESULTS.md`](../crates/tune-bench/RESULTS.md) for the commands,
+datasets and the latest results.
+
+## Pitch editing for agents
+
+The pitch editor's notes, for scripts and agents: what a vocal clip sings, how it relates to
+another performance, a cautious correction proposal, and note-level edits. Edits are the same
+`editTune` op the pitch editor sends, so they are one undo step in the app and save into the
+project like any manual edit. Tune to Reference (`tune-ref`) is unchanged and independent:
+both can be used on one clip (note edits apply on top of a reference).
+
+```sh
+wave pitch inspect --clip 412                     # notes, tuning, range; `base` fingerprint
+wave pitch inspect --clip 412 --full --from 10 --to 14   # plus 5 ms frame curves for 4 s
+wave pitch compare --clip 412 --source 7          # read-only: against another singer's take
+wave pitch suggest --clip 412 --source 7          # a proposal with a reason per note; changes nothing
+wave pitch edit --clip 412 --base 9d0cbbba3b9fc299 --note 3 --cents -25
+wave pitch edit --clip 412 --file edit.json       # several notes at once (or a suggestion's `op`)
+wave pitch render --clip 412 --out take.wav       # the clip alone with its edits (--original: without)
+```
+
+Times are **seconds of the clip's source**; pitch is **MIDI** (60 = C4, fractional), changes in
+**cents**. Notes are addressed by index `i` in the clip's segmentation: its own notes once it has
+any edit, else the analysis' (`segmentation`: `edits` / `analysis`).
+
+### `pitch inspect`
+
+```jsonc
+{ "clipId": 412, "revision": 31, "base": "9d0cbbba3b9fc299", "segmentation": "analysis",
+  "backend": "rmvpe", "rate": 200,
+  "clip": { "source": 1008, "start": 0, "len": 65.06, "offset": 0, "stretch": 1, "bpm": 120,
+            "region": [0, 32.53], "sourceSeconds": 32.53, "sampleRate": 44100, … },
+  "tuning": { "offsetCents": 9.5, "spreadCents": 14.9, "notes": 41 },   // the take vs A440
+  "range": { "low": 61.9, "high": 74.1, "lowName": "D4", "highName": "D5" },
+  "kinds": { "stable": 24, "vibrato": 17, "glide": 4, "short": 6 },
+  "reference": null, "pencil": { "points": 0, "runs": [] },
+  "notes": [ { "i": 2, "start": 1.015, "end": 1.835, "beats": [2.03, 3.67], "kind": "vibrato",
+               "sung": 74.21, "nearest": "D5", "cents": 21.4, "out": 74.21,
+               "shift": 0, "drift": 0, "formant": 0, "gain": 0, "confidence": 0.92, "voiced": 1,
+               "levelDb": -18.9, "slopeCents": 22.7, "spreadCents": 44.5, "vibrato": [3.2, 37.5] } ],
+  "frames": { "rate": 200, "start": 10.0, "f0": [69.02, null, …], "confidence": […], "out": […] }  // --full
+}
+```
+
+`kind`: `stable` (a held pitch), `vibrato` (held, with a vibrato: `[rate Hz, depth ct]`), `glide`
+(a slide through the note's held middle), `short` (< 80 ms: ornament or transition), `unsure`
+(breathy, mostly unvoiced or low detector confidence). `sung` is the recording; `out` what it
+sounds like with the current edits (and Tune to Reference). `slopeCents` is the pitch change
+across the note's central 60 %, `spreadCents` the movement around it.
+
+### `pitch compare`
+
+Read-only. Aligns the take with another source (another singer, another key, other phrasing)
+and reports, without deciding anything:
+
+* `related` — the reference sings the same melody: the alignment is trusted **and** at least
+  half of the confidently matched notes agree within 50 ct after the interval. `aligned` alone
+  means the same material in time (a harmony part aligns but is not related). Only a related
+  reference is used by `suggest`.
+* `intervals` — the take's interval above the reference, best first: `semitones` (any interval,
+  not only octaves) and `cents` (the measured offset, which includes a difference between the two
+  singers' tunings), with `support`; `ambiguousInterval` when a second interval is close.
+* `notes[]` — per take note: `relation` `match` / `merged` (one take note over several reference
+  notes: the reference ornaments) / `split` / `complex` / `extra` (nothing aligned with
+  confidence: an ad-lib, or not trusted), the reference notes it covers, `expected` (the
+  reference's note in the take's register), `diffCents`, `onsetMs`, `confidence`.
+* `referenceNotes[]` with `ornament` (short notes inside a run the take sings as one note),
+  `counts` (`matched`, `merged`, `split`, `extra`, `missing`), `sameNotes`, `contour`,
+  `coverage`, `unmatched` stretches, `timingMs`, `referenceTuningCents`.
+
+### `pitch suggest`
+
+A conservative proposal, with a decision and a reason for every note; it changes nothing.
+Rules: short, unsure and sliding notes are kept; an unrelated reference changes nothing at all;
+with a related reference the intended pitch is the reference's note in the take's register,
+unless the take is further than `--max-cents` (default 60) from it — a semitone or more off yet
+itself in tune is what a deliberate variation looks like, so it is kept; without a reference,
+the nearest note of the key (`--key C --scale minor`, or the project's key) or the nearest
+semitone, unless the take is near the middle between two notes. Within `--min-cents` (15) a note
+is left alone. `--strength 50` goes half the way; `--tuning 8` puts the grid at A = 442 Hz (use the
+backing track's `wave analyze` tuning offset). The result's `op` is a ready `editTune` op.
+
+### `pitch edit`
+
+One undo step, refused as a whole if any part is invalid. `--base` (from `inspect`) refuses
+the edit with `STALE_NOTES` if the notes were split, merged or re-analysed since;
+`--if-revision` refuses it if anything in the project changed. `--max-cents C` refuses a
+result that shifts a note further than C (`OVER_LIMIT`).
+
+| flag / JSON field | meaning |
+| --- | --- |
+| `--note I --shift C` / `{"i": I, "shift": C}` | the note's pitch move, cents (absolute) |
+| `--cents C` / `"shiftBy": C` | add C cents to its current move |
+| `--target M` / `"target": M` | move the note's centre to MIDI M (turned into `shift`) |
+| `--drift %` / `"drift": 0..1` | flatten the movement inside the note toward its centre |
+| `--formant C`, `--gain dB`, `--speed MS\|none` | formant cents, level, retune speed |
+| `--split I@SEC`, `--merge I`, `--reset I,J`, `--clear` | structure; reset = back to as sung; clear = every note edit and pencil off |
+| `"pencil": [[sec, midi], …]`, `"erasePencil": [[from, to]]` | draw / erase pitch |
+
+All indices in one edit name the notes as they were **before** it, whatever order the parts are
+in; they apply as clear, reset, notes, split, merge, erasePencil, pencil. A note cannot be both
+split and merged, nor edited and merged into its neighbour, in one edit. The reply has the new
+`base`.
+
+### An agent's correction workflow
+
+Your recording is clip 412; the original singer (another key, range and phrasing) is source 7;
+the instrumental is clip 300.
+
+```sh
+wave analyze --clip 300                                # key and tuning offset of the backing
+wave pitch inspect --clip 412 > take.json              # what you sang: kinds, cents, tuning, range
+wave pitch compare --clip 412 --source 7 > cmp.json    # related? interval? which notes match?
+wave pitch suggest --clip 412 --source 7 --key A --scale minor --max-cents 60 > plan.json
+```
+
+Then decide, note by note: accept the plan's edits that make sense, drop the ones that touch a
+deliberate variation, add your own (`--target`, a split before a scoop you want to keep), and
+apply them as one edit:
+
+```sh
+jq '.op' plan.json > edit.json
+wave pitch edit --clip 412 --file edit.json --if-revision "$(jq .revision plan.json)" --max-cents 80
+wave pitch render --clip 412 --out after.wav && wave pitch render --clip 412 --out before.wav --original
+wave pitch inspect --clip 412                          # `out` per note: did it land?
+wave pitch edit --clip 412 --reset 7                   # put back a note that sounds worse; or `wave undo`
+```
+
+What the defaults protect: a different note, an ornament the reference has and you do not (or
+the other way round), a slide or vibrato, and a reference that is not the same song are left
+as sung. Timing is never changed. `--max-cents` raises the limit when you know the take is far
+off; low-level `pitch edit` always lets you override the plan.
 
 ## Plugins
 

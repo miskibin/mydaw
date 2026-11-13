@@ -1,11 +1,12 @@
 // A TS port of crates/engine/src/ops.rs `apply` — used by the in-browser mock backend.
 // The real engine is the source of truth; this only has to agree on the happy path and
 // reject the same obviously-invalid batches.
-import { CLIP_PITCH, MAX_BANDS, STRETCH_MAX, STRETCH_MIN, type Id, type Op, type Project } from '../api/types';
+import { CLIP_PITCH, MAX_BANDS, STRETCH_MAX, STRETCH_MIN, type ClipTune, type Id, type Op, type Project } from '../api/types';
 import { applyCompOp } from './comp';
 import { applyNotebookOp } from './notebook';
 import { applyPatternOp, fitLen as fitPatternLen, followPatternLength, PatternOpError } from './pattern';
 import { applyTransform } from './transforms';
+import { applyTuneEdit } from './pitch';
 
 export class OpError extends Error {}
 
@@ -178,6 +179,15 @@ export function applyOp(p: Project, op: Op): void {
       fitPatternLen(pt);
       // a generator can push notes past the pattern's end: whole-pass clips follow, like putPattern
       if (Math.abs(oldLen - pt.len) > 1e-9) followPatternLength(p, op.pattern, oldLen, pt.len);
+      return;
+    }
+    case 'editTune': {
+      const c = p.clips.find(x => x.id === op.clip);
+      if (!c) throw new OpError(`no clip with id ${op.clip}`);
+      if (c.kind !== 'audio') throw new OpError(`clip ${op.clip}: only audio clips have pitch edits`);
+      let next: ClipTune | null;
+      try { next = applyTuneEdit(c.tune, op.edit); } catch (e) { throw new OpError(`clip ${op.clip}: ${(e as Error).message}`); }
+      if (next) c.tune = next; else delete c.tune;
       return;
     }
     case 'setKey':
