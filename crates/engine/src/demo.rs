@@ -21,6 +21,8 @@ fn base(names: &[&str], ins_names: &[&str]) -> Project {
         comps: vec![],
         channels: vec![],
         notebook: Notebook::default(),
+        key: None,
+        scale: 1,
         next_id: 1000,
     };
     for (i, name) in ins_names.iter().enumerate() {

@@ -52,6 +52,14 @@ pub struct Project {
     /// The lyrics notebook ("Notatnik"): pages of text where one line is one bar.
     #[serde(default)]
     pub notebook: Notebook,
+    /// Musical key for the piano roll and the note transforms (0 = C … 11 = B).
+    /// `None` = no key set: scale-aware tools stay pitch-neutral.
+    #[serde(default)]
+    pub key: Option<u8>,
+    /// Which pitches are in (`pitch::scale_mask` id: 0 chromatic, 1 major, 2 natural
+    /// minor, 3 major pentatonic, 4 minor pentatonic). Meaningful once `key` is set.
+    #[serde(default = "major_scale")]
+    pub scale: u32,
     /// Next id handed out by [`Project::alloc_id`]. Ids are never reused.
     pub next_id: Id,
 }
@@ -527,6 +535,10 @@ fn is_zero(v: &f32) -> bool {
 
 fn bar() -> f64 {
     4.0
+}
+
+fn major_scale() -> u32 {
+    1
 }
 
 /// Beats in one bar (the project is in 4/4).

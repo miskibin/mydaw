@@ -318,7 +318,24 @@ export interface Project {
   channels?: Channel[];
   /** The lyrics notebook (absent in old projects = no pages). */
   notebook?: Notebook;
+  /** Musical key for the piano roll and scale-aware note tools (0 = C; null = none set). */
+  key?: number | null;
+  /** Which pitches are in: 0 chromatic, 1 major, 2 natural minor, 3/4 pentatonic (`pitch::scale_mask`). */
+  scale?: number;
 }
+
+/** A `transformNotes` verb: deterministic in `seed` and the pattern's notes. */
+export type TransformVerb =
+  | { kind: 'humanize'; timing?: number; velocity?: number }
+  | { kind: 'quantize'; grid?: number; amount?: number; scaleAware?: boolean }
+  | { kind: 'euclidFill'; ch: Id; k: number; n: number; rotate?: number; vel?: number }
+  | { kind: 'strum'; width?: number; ramp?: number }
+  | { kind: 'euclidDrums'; voices: { ch: Id; k: number; n: number; rotate?: number; vel?: number }[]; bars?: number }
+  | { kind: 'melody'; ch: Id; bars?: number; density?: number; repeat?: number };
+/** Which notes a `transformNotes` verb touches. */
+export type TransformSelect =
+  | { kind: 'indices'; indices: number[] }
+  | { kind: 'range'; from: number; to: number; ch?: Id };
 
 /** One notebook page: each line of `text` is a bar counted from `startBar` (1-based); `[…]` lines are headers. */
 export interface LyricPage { id: Id; name: string; startBar: number; text: string }
@@ -343,6 +360,8 @@ export type Op =
   | { op: 'setBpm'; bpm: number }
   | { op: 'setLoop'; loop: LoopRange | null }
   | { op: 'putAutomation'; automation: Automation }
+  | { op: 'transformNotes'; pattern: Id; verb: TransformVerb; seed?: number; select?: TransformSelect }
+  | { op: 'setKey'; key: number | null; scale?: number }
   | { op: 'removeAutomation'; id: Id }
   | { op: 'putComp'; comp: Comp }
   | { op: 'removeComp'; id: Id }

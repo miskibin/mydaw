@@ -226,10 +226,14 @@ All edits are "put" ops, applied atomically per batch:
 (also removes its notes in every pattern; `removeSource` removes sampler channels of that
 source), `putSource{source}`,
 `removeSource{id}`, `putAutomation{automation}`, `removeAutomation{id}`,
+`transformNotes{pattern, verb, seed, select}` (deterministic note transforms: verb kinds
+`humanize|quantize|euclidFill|strum|euclidDrums|melody`; same seed and notes ⇒ identical
+notes; `select` limits the notes touched), `setKey{key, scale}` (project key/scale for the
+scale-aware tools),
 `putComp{comp}`, `removeComp{id}`, `putNotebook{notebook}`, `setBpm{bpm}`, `setLoop{loop}`.
 
 Every effect has `mix` (0..1 dry/wet, default 1). Automation:
-`project.automations[] = {id, name, color, target, points:[{t, v}]}`; a clip of
+`project.key` (0 = C, `null` = none) and `project.scale` (0 chromatic, 1 major, 2 minor, 3/4 pentatonic) feed the scale-aware note tools; `project.automations[] = {id, name, color, target, points:[{t, v}]}`; a clip of
 kind `auto` with `ref` = automation id plays it (`offset` in beats into it).
 Targets: `{kind:"fx", fxId, param}` (catalog id, or `band:<i>:f|g|q` for EQ:
 f log 20–20k, g −30..30 dB, q log 0.1–18), `{kind:"mix", fxId}`,

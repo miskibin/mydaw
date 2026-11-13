@@ -11,6 +11,7 @@ pub mod factory;
 pub mod model;
 pub mod music;
 pub mod ops;
+pub mod transform;
 pub mod pitch;
 pub mod poly;
 pub mod processor;
