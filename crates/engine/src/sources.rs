@@ -36,7 +36,7 @@ impl Audio {
         // cap at 30 minutes so a stray podcast cannot eat the machine
         let d = wave_audio_file::decode_stereo(path, |sr| Some((sr * 1800.0) as usize)).map_err(|e| e.to_string())?;
         let sr = d.sample_rate.round() as u32;
-        let mono = d.data.chunks_exact(2).all(|f| f[0] == f[1]);
+        let mono = d.data.as_chunks::<2>().0.iter().all(|f| f[0] == f[1]);
         Ok(Self::from_stereo(d.data, sr, if mono { 1 } else { 2 }))
     }
 
@@ -94,7 +94,7 @@ impl Audio {
     pub fn derived(&self, norm: bool, rev: bool) -> Audio {
         let mut c = self.content().to_vec();
         if rev {
-            let frames: Vec<[f32; 2]> = c.chunks_exact(2).rev().map(|f| [f[0], f[1]]).collect();
+            let frames: Vec<[f32; 2]> = c.as_chunks::<2>().0.iter().rev().copied().collect();
             c = frames.into_iter().flatten().collect();
         }
         if norm {
@@ -276,7 +276,7 @@ impl Stretcher {
 
 /// Mono mix of a variant.
 pub fn mono_of(audio: &Audio) -> Vec<f32> {
-    audio.content().chunks_exact(2).map(|f| (f[0] + f[1]) * 0.5).collect()
+    audio.content().as_chunks::<2>().0.iter().map(|f| (f[0] + f[1]) * 0.5).collect()
 }
 
 /// The part of the audio [`SourceStore::clip_audio`] returned that clip `c` plays, in
@@ -610,20 +610,48 @@ pub fn write_wav(path: &Path, interleaved: &[f32], sr: u32) -> Result<(), String
     w.finalize().map_err(|e| e.to_string())
 }
 
-/// Float stereo → 16-bit with TPDF dither (±1 LSB triangular) and hard clip protection.
-pub fn to_i16_dithered(interleaved: &[f32]) -> Vec<i16> {
-    let mut state: u32 = 0x9E37_79B9;
-    let mut next = move || {
+/// Quantizes interleaved stereo to signed 24-bit PCM. TPDF is applied once, just before rounding.
+pub fn write_wav_pcm24(path: &Path, interleaved: &[f32], sr: u32, dither: bool) -> Result<(), String> {
+    use std::hash::{BuildHasher, RandomState};
+
+    if !interleaved.len().is_multiple_of(2) {
+        return Err("stereo WAV needs complete frames".into());
+    }
+    if let Some(dir) = path.parent() {
+        std::fs::create_dir_all(dir).map_err(|e| e.to_string())?;
+    }
+    let spec = hound::WavSpec { channels: 2, sample_rate: sr, bits_per_sample: 24, sample_format: hound::SampleFormat::Int };
+    let mut writer = hound::WavWriter::create(path, spec).map_err(|e| e.to_string())?;
+    // Give each file its own sequence so stems don't sum correlated dither noise.
+    let mut noise = tpdf((RandomState::new().hash_one(path) as u32).max(1));
+    const SCALE: f64 = 8_388_608.0;
+    for &x in interleaved {
+        let sample = if x.is_finite() { f64::from(x) } else { 0.0 };
+        let d = if dither { f64::from(noise()) } else { 0.0 };
+        let pcm = (sample * SCALE + d).round().clamp(-SCALE, SCALE - 1.0) as i32;
+        writer.write_sample(pcm).map_err(|e| e.to_string())?;
+    }
+    writer.finalize().map_err(|e| e.to_string())
+}
+
+fn tpdf(mut state: u32) -> impl FnMut() -> f32 {
+    let mut uniform = move || {
         state ^= state << 13;
         state ^= state >> 17;
         state ^= state << 5;
         state as f32 / u32::MAX as f32
     };
+    move || uniform() - uniform()
+}
+
+/// Float stereo → 16-bit with TPDF dither (±1 LSB triangular) and hard clip protection.
+pub fn to_i16_dithered(interleaved: &[f32]) -> Vec<i16> {
+    let mut noise = tpdf(0x9E37_79B9);
     interleaved
         .iter()
         .map(|&x| {
             let x = if x.is_finite() { x.clamp(-1.0, 1.0) } else { 0.0 };
-            let d = next() - next();
+            let d = noise();
             (x * 32767.0 + d).round().clamp(-32768.0, 32767.0) as i16
         })
         .collect()

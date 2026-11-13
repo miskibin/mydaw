@@ -20,7 +20,7 @@ import { collectMelody, melodyFit, melodyTarget } from '../lib/melody';
 import { newFx } from '../lib/presets';
 import { synthVocal, vocalAt, vocalPeaks, type VocalSample } from './mockVocal';
 import type {
-  AudioConfig, AudioStatus, LatencyReport, AnyBuiltinKind, AutoVocalPlan, AutoVocalStyle, Catalog, Clip, ExportResult, ExportStemsResult, F0ModelStatus, Fx, Id, KeysStatus, LibFile, LibraryList, Melody, MelodyChannel, MidiDevice, MidiStatus, MusicAnalysis, Op, OpenResult, PitchAnalysis, PitchTarget, Project, RefTune, SaveResult, Source, StateDto, TransportDto, Vst3Info, Vst3Param,
+  AudioConfig, AudioStatus, LatencyReport, AnyBuiltinKind, AutoVocalPlan, AutoVocalStyle, Catalog, Clip, ExportAudioOptions, ExportResult, ExportStemsOptions, ExportStemsResult, F0ModelStatus, Fx, Id, KeysStatus, LibFile, LibraryList, Melody, MelodyChannel, MidiDevice, MidiStatus, MusicAnalysis, Op, OpenResult, PitchAnalysis, PitchTarget, Project, RefTune, SaveResult, Source, StateDto, TransportDto, Vst3Info, Vst3Param,
 } from './types';
 import { exportRange, exportSeconds, stemInserts, uniqueFileStems } from '../lib/export';
 import { MockUpdates } from './mockUpdates';
@@ -1020,10 +1020,11 @@ export class MockBackend implements Backend {
   }
 
   private exportAbort = false;
-  async exportAudio(opts: { useLoop: boolean; tail: number; sampleRate: number; format?: 'wav' | 'mp3'; mp3Kbps?: number }): Promise<ExportResult> {
+  async exportAudio(opts: ExportAudioOptions): Promise<ExportResult> {
     this.exportAbort = false;
     const { from, to } = exportRange(this.p, opts.useLoop);
-    const secs = exportSeconds(from, to, this.p.bpm, opts.tail);
+    const tail = opts.format !== 'mp3' && opts.wrapTail ? 0 : opts.tail;
+    const secs = exportSeconds(from, to, this.p.bpm, tail);
     // Simulate a short offline bounce so the dialog's busy/cancel path is exercisable.
     const steps = 8;
     for (let i = 0; i < steps; i++) {
@@ -1036,7 +1037,7 @@ export class MockBackend implements Backend {
       out: name,
       fromBeat: from,
       toBeat: to,
-      tail: opts.tail,
+      tail,
       stats: {
         seconds: secs,
         sampleRate: opts.sampleRate,
@@ -1049,10 +1050,11 @@ export class MockBackend implements Backend {
     };
   }
   /** Like the engine: one file per insert with sound (+ Master), the same names, nothing written when cancelled. */
-  async exportStems(opts: { useLoop: boolean; tail: number; sampleRate: number; includeMaster: boolean }): Promise<ExportStemsResult> {
+  async exportStems(opts: ExportStemsOptions): Promise<ExportStemsResult> {
     this.exportAbort = false;
     const { from, to } = exportRange(this.p, opts.useLoop);
-    const secs = exportSeconds(from, to, this.p.bpm, opts.tail);
+    const tail = opts.wrapTail ? 0 : opts.tail;
+    const secs = exportSeconds(from, to, this.p.bpm, tail);
     const jobs = [
       ...(opts.includeMaster ? [{ name: 'Master', master: true }] : []),
       ...stemInserts(this.p).map(m => ({ name: m.name.trim() || `Insert ${m.id}`, master: false })),
@@ -1071,7 +1073,7 @@ export class MockBackend implements Backend {
     }
     this.emit('export-progress', { done: jobs.length, total: jobs.length, name: '' });
     const dir = this.path ? this.path.replace(/[\\/][^\\/]*$/, '') : 'C:\\Users\\michal\\Music';
-    return { dir, fromBeat: from, toBeat: to, tail: opts.tail, format: 'wav', files, skipped: [] };
+    return { dir, fromBeat: from, toBeat: to, tail, format: 'wav', files, skipped: [] };
   }
   async exportCancel() { this.exportAbort = true; }
 

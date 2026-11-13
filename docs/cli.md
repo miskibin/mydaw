@@ -136,16 +136,24 @@ renders offline (independent of the audio device, so it works while the
 musician keeps playing) and prints peak/RMS/crest/clipping so an agent can
 check its work, then listen to the WAV. The same bounce is available in the
 app as **Eksport** (`Ctrl+Shift+R`): song or loop, a 0/2/8 s effect tail, and
-44.1 or 48 kHz, written as a 32-bit float stereo WAV.
+44.1 or 48 kHz. Stereo WAV defaults to 32-bit float. Select 24-bit PCM with
+`--wav-bits 24` and add `--dither` for optional triangular dither. Integer WAV
+clips samples beyond full scale. The export stats report those peaks before conversion.
+
+Select **Wrap** when exporting a WAV loop to carry the effect tail into its
+start. The result is one loop long. In the CLI, use `--wrap-tail` with the
+project loop or specify both `--from` and `--to`. This works for stereo mixes
+and stems.
 
 ### Stems
 
 ```sh
 wave render --stems --out stems/ --from 0 --to 32     # a folder, created if needed
 wave render --stems --out stems/ --no-master          # without Master.wav
+wave render --stems --out stems/ --wav-bits 24 --dither
 ```
 
-writes one 32-bit float stereo WAV per mixer insert that has sound, named after the insert
+writes one stereo WAV per mixer insert that has sound, named after the insert
 (`Drums.wav`, `Bass.wav`; a repeated name becomes `Bass (2).wav`), like FL Studio's *Split mixer
 tracks*. In the app: **Eksport → Wynik: Stemy**, then pick the folder.
 

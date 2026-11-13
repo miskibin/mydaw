@@ -3,7 +3,7 @@
 import { Channel, invoke } from '@tauri-apps/api/core';
 import { listen } from '@tauri-apps/api/event';
 import type {
-  AudioConfig, AudioDevices, AudioHost, AudioStatus, LatencyReport, Catalog, CliStatus, ExportProgress, ExportResult, ExportStemsResult, F0ModelStatus, Id, ImportResult, LibFile,
+  AudioConfig, AudioDevices, AudioHost, AudioStatus, LatencyReport, Catalog, CliStatus, ExportAudioOptions, ExportProgress, ExportResult, ExportStemsOptions, ExportStemsResult, F0ModelStatus, Id, ImportResult, LibFile,
   KeysStatus, LibraryList, LibraryProgress, Melody, MelodyChannel, MidiDevice, MidiNoteEvent, MidiStatus, ModelProgress, AppInfo, UpdateInfo, UpdateProgress, MusicAnalysis, AutoVocalPlan, AutoVocalStyle, Op, OpenResult, PitchAnalysis, PitchTarget, RecoveredProject, RefTune, SaveResult, StateDto, TransportDto, Vst3Info, Vst3Param,
 } from './types';
 
@@ -130,16 +130,16 @@ export interface Backend {
   recoveryRestore(id: string): Promise<{ state: StateDto; warnings: string[] }>;
   /** Deletes a recovered project the user does not want. */
   recoveryDiscard(id: string): Promise<void>;
-  /** Offline bounce of the master mix to a 32-bit float stereo WAV. */
-  exportAudio(opts: { useLoop: boolean; tail: number; sampleRate: number; format?: 'wav' | 'mp3'; mp3Kbps?: number }): Promise<ExportResult>;
+  /** Offline bounce of the master mix to stereo WAV or MP3. */
+  exportAudio(opts: ExportAudioOptions): Promise<ExportResult>;
   /**
-   * Stem export, like FL Studio's "Split mixer tracks": asks for a folder, then writes one 32-bit float
+   * Stem export, like FL Studio's "Split mixer tracks": asks for a folder, then writes one
    * WAV per mixer insert that has sound (named after the insert, after its effects and fader, before the
    * master), plus `Master.wav` (the mix with master effects) when `includeMaster`. Muted inserts and
    * inserts with nothing routed into them get no file; solo is ignored. All files have the same length.
    * Progress: `export-progress`. No file is left behind when aborted.
    */
-  exportStems(opts: { useLoop: boolean; tail: number; sampleRate: number; includeMaster: boolean }): Promise<ExportStemsResult>;
+  exportStems(opts: ExportStemsOptions): Promise<ExportStemsResult>;
   /** Abort an in-flight `exportAudio` / `exportStems` before a file is written. */
   exportCancel(): Promise<void>;
   vst3Scan(rescan: boolean): Promise<Vst3Info[]>;
@@ -275,8 +275,8 @@ export function tauriBackend(): Backend {
     recoveryList: () => invoke('recovery_list'),
     recoveryRestore: id => invoke('recovery_restore', { id }),
     recoveryDiscard: id => invoke('recovery_discard', { id }),
-    exportAudio: opts => invoke('export_audio', { useLoop: opts.useLoop, tail: opts.tail, sampleRate: opts.sampleRate, format: opts.format, mp3Kbps: opts.mp3Kbps }),
-    exportStems: opts => invoke('export_stems', { useLoop: opts.useLoop, tail: opts.tail, sampleRate: opts.sampleRate, includeMaster: opts.includeMaster }),
+    exportAudio: opts => invoke('export_audio', { ...opts }),
+    exportStems: opts => invoke('export_stems', { ...opts }),
     exportCancel: () => invoke('export_cancel'),
     vst3Scan: rescan => invoke('vst3_scan', { rescan }),
     vst3Editor: (fxId, open) => invoke('vst3_editor', { fxId, open }),

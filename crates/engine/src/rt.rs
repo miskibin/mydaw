@@ -2,7 +2,10 @@
 //! no allocation, no blocking locks, no I/O. Structures arrive pre-built through [`Cmd`] and
 //! leave through [`Garbage`] so they are freed elsewhere.
 
-use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, Ordering::Relaxed};
+use std::sync::atomic::{
+    AtomicBool, AtomicU32, AtomicU64,
+    Ordering::{Acquire, Relaxed, Release},
+};
 use std::sync::Arc;
 use std::time::Instant;
 
@@ -25,6 +28,8 @@ pub struct Shared {
     heard: AtomicU64,
     pub playing: AtomicBool,
     pub recording: AtomicBool,
+    /// The input ring may still receive the delayed end of a take after Stop or punch-out.
+    pub(crate) finishing_take: AtomicBool,
     pub stopped_at_end: AtomicBool,
     in_level: AtomicU32,
     cpu: AtomicU32,
@@ -66,6 +71,7 @@ impl Shared {
             heard: AtomicU64::new(0f64.to_bits()),
             playing: AtomicBool::new(false),
             recording: AtomicBool::new(false),
+            finishing_take: AtomicBool::new(false),
             stopped_at_end: AtomicBool::new(false),
             in_level: AtomicU32::new(0),
             cpu: AtomicU32::new(0),
@@ -603,8 +609,14 @@ pub enum Cmd {
         rec: bool,
         rec_loop: bool,
     },
-    /// Stops capturing input but keeps the transport running.
-    PunchOut,
+    /// Ends the take at this transport position, then captures its delayed input.
+    EndTake {
+        stop: bool,
+        fallback_skip: usize,
+        pdc: usize,
+    },
+    /// Start another offline loop pass while keeping voices and effects running.
+    LoopTo(f64),
     /// Starts capturing input at the current beat while playing. `rec_loop`: wrap at the
     /// loop end in passes (one take per pass), like loop recording.
     PunchIn {
@@ -698,6 +710,7 @@ pub struct Rt {
     rec: bool,
     rec_loop: bool,
     rec_start: f64,
+    rec_drain: usize,
     count_end: f64,
     /// Where this playback run began (count-in included) and the loop it last wrapped
     /// around: the heard position is clamped to / wrapped by them.
@@ -781,6 +794,7 @@ impl Rt {
             rec: false,
             rec_loop: false,
             rec_start: 0.0,
+            rec_drain: 0,
             count_end: f64::NEG_INFINITY,
             run_start: 0.0,
             wrapped: None,
@@ -1001,6 +1015,7 @@ impl Rt {
                     }
                 }
                 Cmd::Play { from, count_in, rec, rec_loop } => {
+                    self.rec_drain = 0;
                     self.voices.clear();
                     self.synths.stop_all();
                     // the song and the pattern preview are exclusive (FL's SONG / PAT)
@@ -1020,17 +1035,14 @@ impl Rt {
                     self.shared.stopped_at_end.store(false, Relaxed);
                     self.jump();
                 }
-                Cmd::PunchOut => {
-                    // `rec` stays set so the run keeps its open-ended extent instead of
-                    // wrapping at a song end that the new take has not extended yet
-                    self.rec_start = f64::INFINITY;
-                    self.shared.recording.store(false, Relaxed);
-                }
+                Cmd::EndTake { stop, fallback_skip, pdc } => self.end_take(stop, fallback_skip, pdc),
+                Cmd::LoopTo(from) => self.beat = from,
                 Cmd::PunchIn { rec_loop } => {
                     if self.playing {
                         self.rec = true;
                         self.rec_loop = rec_loop;
                         self.rec_start = self.beat;
+                        self.rec_drain = 0;
                         self.shared.set_rec_start(self.beat);
                     }
                 }
@@ -1186,6 +1198,33 @@ impl Rt {
         // tails of instruments keep ringing; effect tails too
     }
 
+    fn end_take(&mut self, stop: bool, fallback_skip: usize, pdc: usize) {
+        if self.shared.recording.swap(false, Relaxed) {
+            self.rec_drain = self.shared.take_latency().map_or(fallback_skip, |io| io as usize + pdc);
+        }
+        // While playing after punch-out, keep the run's extent until the take has landed.
+        self.rec_start = f64::INFINITY;
+        if stop {
+            self.stop(false);
+        }
+        if self.rec_drain == 0 {
+            self.shared.finishing_take.store(false, Release);
+        }
+    }
+
+    fn capture_input(&mut self, input: Option<(&[f32], &[f32])>, start: usize, end: usize) {
+        if let Some((left, right)) = input {
+            for (&l, &r) in left.iter().zip(right).take(end).skip(start) {
+                if self.record.slots() < 2 {
+                    break;
+                }
+                // NaN is the pass marker: never let it in from the device.
+                let _ = self.record.push(if l.is_finite() { l } else { 0.0 });
+                let _ = self.record.push(if r.is_finite() { r } else { 0.0 });
+            }
+        }
+    }
+
     /// Renders `out_l.len()` frames. `input` is the device input for the same period, if any.
     pub fn process(&mut self, out_l: &mut [f32], out_r: &mut [f32], input: Option<(&[f32], &[f32])>) {
         let t0 = Instant::now();
@@ -1276,6 +1315,19 @@ impl Rt {
         let bps = 1.0 / (spb * sr as f64); // beats per sample
         let block_beat = self.beat;
 
+        if self.rec_drain > 0 && !ahead {
+            if self.shared.finishing_take.load(Acquire) {
+                let frames = self.rec_drain.min(n);
+                self.capture_input(input, 0, frames);
+                self.rec_drain -= frames;
+            } else {
+                self.rec_drain = 0;
+            }
+            if self.rec_drain == 0 {
+                self.shared.finishing_take.store(false, Release);
+            }
+        }
+
         // ---- schedule & render the timeline
         if self.playing {
             let mut p = 0usize;
@@ -1300,18 +1352,13 @@ impl Rt {
                 // here as well as at the loop start
                 self.schedule(b0, b1.min(le), p, seg, bps, spb);
                 // record input
-                if self.rec && b1 > self.rec_start {
-                    self.shared.recording.store(true, Relaxed);
-                    if let Some((il, ir)) = input {
-                        let first = if b0 >= self.rec_start { 0 } else { (((self.rec_start - b0) / bps).ceil() as usize).min(seg) };
-                        for i in p + first..(p + seg).min(il.len()) {
-                            if self.record.slots() >= 2 {
-                                // NaN is the pass marker (below): never let it in from the device
-                                let fin = |x: f32| if x.is_finite() { x } else { 0.0 };
-                                let _ = self.record.push(fin(il[i]));
-                                let _ = self.record.push(fin(ir[i]));
-                            }
-                        }
+                if self.rec && b1 > self.rec_start && input.is_some() {
+                    let first = if b0 >= self.rec_start { 0 } else { (((self.rec_start - b0) / bps).ceil() as usize).min(seg) };
+                    if first < seg {
+                        // The punch-in beat only gates the first pass (and the count-in).
+                        self.rec_start = f64::NEG_INFINITY;
+                        self.shared.recording.store(true, Relaxed);
+                        self.capture_input(input, p + first, p + seg);
                     }
                 }
                 self.beat = b1;
@@ -1323,7 +1370,7 @@ impl Rt {
                         self.beat = ls;
                         self.wrapped = Some((ls, le));
                         // loop recording: a NaN frame tells the engine a new pass (take) begins
-                        if self.rec && self.rec_start.is_finite() && self.record.slots() >= 2 {
+                        if self.shared.recording.load(Relaxed) && self.record.slots() >= 2 {
                             let _ = self.record.push(f32::NAN);
                             let _ = self.record.push(f32::NAN);
                         }
@@ -1453,8 +1500,8 @@ impl Rt {
                     }
                 });
             } else {
-                for k in 1..count {
-                    process_insert(&mut g.inserts[k], k, n, &ctx, enabled, watch, &mut self.taps, &self.shared);
+                for (k, insert) in g.inserts.iter_mut().enumerate().skip(1) {
+                    process_insert(insert, k, n, &ctx, enabled, watch, &mut self.taps, &self.shared);
                 }
             }
             let (head, tail) = g.inserts.split_at_mut(1);

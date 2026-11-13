@@ -392,7 +392,7 @@ fn hb_design(n: usize, tbw: f64) -> HbCoefs {
     let e4 = e2 * e2;
     let q = e * (1.0 + e4 * (2.0 + e4 * (15.0 + 150.0 * e4)));
     let mut out = HbCoefs { n, ..Default::default() };
-    for i in 0..n {
+    for (i, coeff) in out.c[..n].iter_mut().enumerate() {
         let c = (i + 1) as f64;
         let mut num = 0.0;
         let mut j = 1.0;
@@ -423,7 +423,7 @@ fn hb_design(n: usize, tbw: f64) -> HbCoefs {
         let ww = num / den;
         let wwsq = ww * ww;
         let x = ((1.0 - wwsq * k) * (1.0 - wwsq / k)).sqrt() / (1.0 + wwsq);
-        out.c[i] = ((1.0 - x) / (1.0 + x)) as f32;
+        *coeff = ((1.0 - x) / (1.0 + x)) as f32;
     }
     out
 }

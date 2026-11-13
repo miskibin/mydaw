@@ -633,12 +633,13 @@ async fn recovery_discard(app: St<'_>, id: String) -> R<()> {
     app.recovery.discard(&id)
 }
 
-/// Bounce the master mix to a 32-bit float stereo WAV, or a CBR MP3 (`format: "mp3"`,
+/// Bounce the master mix to a 32-bit float or 24-bit PCM stereo WAV, or a CBR MP3 (`format: "mp3"`,
 /// `mp3_kbps` 128/192/256/320, default 320), song or loop + tail.
 ///
 /// Opens a native save dialog first. The render runs off the UI thread so playback
 /// keeps going; call `export_cancel` to abort before a file is written.
 #[tauri::command]
+#[allow(clippy::too_many_arguments)]
 async fn export_audio(
     app: St<'_>,
     handle: AppHandle,
@@ -647,8 +648,15 @@ async fn export_audio(
     sample_rate: u32,
     format: Option<String>,
     mp3_kbps: Option<u32>,
+    wav_bits: Option<u32>,
+    dither: Option<bool>,
+    wrap_tail: Option<bool>,
 ) -> R<Value> {
-    let fmt = actions::ExportFormat::parse(format.as_deref(), mp3_kbps)?;
+    let fmt = actions::ExportFormat::parse(format.as_deref(), mp3_kbps, wav_bits, dither.unwrap_or(false))?;
+    let wrap = wrap_tail.unwrap_or(false);
+    if wrap && !matches!(fmt, actions::ExportFormat::Wav(_)) {
+        return Err("wrap tail requires WAV export".into());
+    }
     let ext = fmt.extension();
     if !(sample_rate == 44_100 || sample_rate == 48_000) {
         return Err("sample rate must be 44100 or 48000".into());
@@ -657,7 +665,11 @@ async fn export_audio(
         return Err("tail must be 0, 2 or 8 seconds".into());
     }
     let st = app.engine.state();
+    if wrap && (!use_loop || st.project.loop_range.is_none_or(|l| l.b <= l.a)) {
+        return Err("select a loop to wrap its tail".into());
+    }
     let (from, to) = Engine::export_range(&st.project, use_loop);
+    let bounce = actions::Bounce { from, to, tail, rate: sample_rate, wrap };
     let suggested = st
         .path
         .as_deref()
@@ -680,9 +692,7 @@ async fn export_audio(
     let a = app.inner().clone();
     let out = path.clone();
     let result =
-        tauri::async_runtime::spawn_blocking(move || actions::render_to_file(&a, &out, from, to, tail, sample_rate, &a.export_cancel, fmt))
-            .await
-            .map_err(es)?;
+        tauri::async_runtime::spawn_blocking(move || actions::render_to_file(&a, &out, bounce, &a.export_cancel, fmt)).await.map_err(es)?;
     match result {
         Ok(v) => Ok(v),
         Err(e) if e == "cancelled" => Ok(json!({ "cancelled": true })),
@@ -690,21 +700,39 @@ async fn export_audio(
     }
 }
 
-/// Stem export (FL Studio's *Split mixer tracks*): one 32-bit float WAV per mixer insert that has
+/// Stem export (FL Studio's *Split mixer tracks*): one WAV per mixer insert that has
 /// sound, named after the insert, plus `Master.wav` when `include_master`. Opens a native folder
 /// dialog first and writes the files straight into the chosen folder.
 ///
 /// Progress goes out as `export-progress` events `{ done, total, name }`; call `export_cancel` to
 /// abort (no file is left behind, see `actions::render_stems_to_dir`).
 #[tauri::command]
-async fn export_stems(app: St<'_>, handle: AppHandle, use_loop: bool, tail: f64, sample_rate: u32, include_master: bool) -> R<Value> {
+#[allow(clippy::too_many_arguments)]
+async fn export_stems(
+    app: St<'_>,
+    handle: AppHandle,
+    use_loop: bool,
+    tail: f64,
+    sample_rate: u32,
+    include_master: bool,
+    wav_bits: Option<u32>,
+    dither: Option<bool>,
+    wrap_tail: Option<bool>,
+) -> R<Value> {
+    let encoding = actions::WavEncoding::parse(wav_bits, dither.unwrap_or(false))?;
+    let wrap = wrap_tail.unwrap_or(false);
     if !(sample_rate == 44_100 || sample_rate == 48_000) {
         return Err("sample rate must be 44100 or 48000".into());
     }
     if !(tail == 0.0 || tail == 2.0 || tail == 8.0) {
         return Err("tail must be 0, 2 or 8 seconds".into());
     }
-    let (from, to) = Engine::export_range(&app.engine.state().project, use_loop);
+    let project = app.engine.project();
+    if wrap && (!use_loop || project.loop_range.is_none_or(|l| l.b <= l.a)) {
+        return Err("select a loop to wrap its tail".into());
+    }
+    let (from, to) = Engine::export_range(&project, use_loop);
+    let bounce = actions::Bounce { from, to, tail, rate: sample_rate, wrap };
     let Some(dir) = handle.dialog().file().blocking_pick_folder().and_then(|p| p.into_path().ok()) else {
         return Ok(json!({ "cancelled": true }));
     };
@@ -717,7 +745,7 @@ async fn export_stems(app: St<'_>, handle: AppHandle, use_loop: bool, tail: f64,
         };
         // a stem export must not start while the piano is still loading (its stems would be silent)
         keys::wait(&a);
-        actions::render_stems_to_dir(&a.engine, &dir, from, to, tail, sample_rate, &a.export_cancel, include_master, &progress)
+        actions::render_stems_to_dir(&a.engine, &dir, bounce, &a.export_cancel, include_master, encoding, &progress)
     })
     .await
     .map_err(es)?;

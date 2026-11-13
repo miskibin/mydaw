@@ -195,10 +195,7 @@ impl Denoise {
         let w = 1 + (self.smooth * 3.0) as usize;
         for k in 0..bins {
             let (a, b) = (k.saturating_sub(w), (k + w).min(bins - 1));
-            let mut s = 0f32;
-            for j in a..=b {
-                s += self.graw[j];
-            }
+            let s: f32 = self.graw[a..=b].iter().sum();
             let g = (s / (b - a + 1) as f32).max(self.graw[k]).min(1.0);
             // … and over time: open fast (attacks stay intact), close a bit slower
             let kk = if g > self.gain[k] { 0.9 } else { 0.7 - 0.4 * self.smooth };
@@ -280,9 +277,9 @@ impl Processor for Denoise {
         let hop_s = self.hop as f32 / sr;
         self.rise = 10f32.powf(0.3 * hop_s);
         self.learn_frames = (0.5 / hop_s) as u32;
-        for b in 0..=BANDS {
+        for (b, edge) in self.edges.iter_mut().enumerate() {
             let f = 50.0 * (16000.0f32 / 50.0).powf(b as f32 / BANDS as f32);
-            self.edges[b] = ((f / sr * n as f32).round() as usize).min(bins);
+            *edge = ((f / sr * n as f32).round() as usize).min(bins);
         }
         self.rover = self.lat;
         self.frames = 0;
