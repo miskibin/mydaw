@@ -633,12 +633,13 @@ async fn recovery_discard(app: St<'_>, id: String) -> R<()> {
     app.recovery.discard(&id)
 }
 
-/// Bounce the master mix to a 32-bit float stereo WAV, or a CBR MP3 (`format: "mp3"`,
+/// Bounce the master mix to a 32-bit float or 24-bit PCM stereo WAV, or a CBR MP3 (`format: "mp3"`,
 /// `mp3_kbps` 128/192/256/320, default 320), song or loop + tail.
 ///
 /// Opens a native save dialog first. The render runs off the UI thread so playback
 /// keeps going; call `export_cancel` to abort before a file is written.
 #[tauri::command]
+#[allow(clippy::too_many_arguments)]
 async fn export_audio(
     app: St<'_>,
     handle: AppHandle,
@@ -647,8 +648,10 @@ async fn export_audio(
     sample_rate: u32,
     format: Option<String>,
     mp3_kbps: Option<u32>,
+    wav_bits: Option<u32>,
+    dither: Option<bool>,
 ) -> R<Value> {
-    let fmt = actions::ExportFormat::parse(format.as_deref(), mp3_kbps)?;
+    let fmt = actions::ExportFormat::parse(format.as_deref(), mp3_kbps, wav_bits, dither.unwrap_or(false))?;
     let ext = fmt.extension();
     if !(sample_rate == 44_100 || sample_rate == 48_000) {
         return Err("sample rate must be 44100 or 48000".into());
@@ -690,14 +693,25 @@ async fn export_audio(
     }
 }
 
-/// Stem export (FL Studio's *Split mixer tracks*): one 32-bit float WAV per mixer insert that has
+/// Stem export (FL Studio's *Split mixer tracks*): one WAV per mixer insert that has
 /// sound, named after the insert, plus `Master.wav` when `include_master`. Opens a native folder
 /// dialog first and writes the files straight into the chosen folder.
 ///
 /// Progress goes out as `export-progress` events `{ done, total, name }`; call `export_cancel` to
 /// abort (no file is left behind, see `actions::render_stems_to_dir`).
 #[tauri::command]
-async fn export_stems(app: St<'_>, handle: AppHandle, use_loop: bool, tail: f64, sample_rate: u32, include_master: bool) -> R<Value> {
+#[allow(clippy::too_many_arguments)]
+async fn export_stems(
+    app: St<'_>,
+    handle: AppHandle,
+    use_loop: bool,
+    tail: f64,
+    sample_rate: u32,
+    include_master: bool,
+    wav_bits: Option<u32>,
+    dither: Option<bool>,
+) -> R<Value> {
+    let encoding = actions::WavEncoding::parse(wav_bits, dither.unwrap_or(false))?;
     if !(sample_rate == 44_100 || sample_rate == 48_000) {
         return Err("sample rate must be 44100 or 48000".into());
     }
@@ -717,7 +731,7 @@ async fn export_stems(app: St<'_>, handle: AppHandle, use_loop: bool, tail: f64,
         };
         // a stem export must not start while the piano is still loading (its stems would be silent)
         keys::wait(&a);
-        actions::render_stems_to_dir(&a.engine, &dir, from, to, tail, sample_rate, &a.export_cancel, include_master, &progress)
+        actions::render_stems_to_dir(&a.engine, &dir, from, to, tail, sample_rate, &a.export_cancel, include_master, encoding, &progress)
     })
     .await
     .map_err(es)?;

@@ -463,6 +463,14 @@ export interface LibraryList { kits: Kit[]; folders: string[] }
 export interface LibFile { name: string; path: string; group: string; root?: number; pitched?: boolean }
 export interface LibraryProgress { id: string; done: number; total: number; error?: string }
 
+export interface WavExportOptions { wavBits?: 24 | 32; dither?: boolean }
+export interface ExportRangeOptions { useLoop: boolean; tail: number; sampleRate: number }
+export type ExportAudioOptions = ExportRangeOptions & (
+  | ({ format?: 'wav' } & WavExportOptions)
+  | { format: 'mp3'; mp3Kbps?: number }
+);
+export type ExportStemsOptions = ExportRangeOptions & WavExportOptions & { includeMaster: boolean };
+
 /** Level stats returned by an offline master bounce. */
 export interface ExportStats {
   seconds: number; sampleRate: number; peakDbfs: number; rmsDbfs: number;

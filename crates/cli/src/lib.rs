@@ -63,6 +63,7 @@ FILES
                                            bounce offline (mp3 chosen by .mp3 extension); prints level stats
   render --stems --out FOLDER [--no-master] [--from B --to B --tail SEC --rate HZ]
                                            one WAV per mixer insert with sound (named after it) + Master.wav
+  WAV options: --wav-bits 24|32 (default 32-bit float); --dither (24-bit PCM only)
   save [--path FILE] | open <FILE>
 
 PITCH  (Tune to Reference: pull a vocal take onto another performance of the same melody)
@@ -375,10 +376,30 @@ fn run(cmd: &str, a: &Args) -> Result<Value, Fail> {
         "render" => {
             let out = a.need("out").map_err(u)?;
             let out = std::path::absolute(out).map(|p| p.display().to_string()).unwrap_or_else(|_| out.to_string());
+            let wav_bits = if a.has("wav-bits") {
+                let bits = a.need("wav-bits").map_err(u)?;
+                Some(match bits {
+                    "24" => 24,
+                    "32" => 32,
+                    _ => return Err(u("--wav-bits must be 24 or 32".into())),
+                })
+            } else {
+                None
+            };
+            if a.get("dither").is_some() {
+                return Err(u("--dither takes no value".into()));
+            }
             send(
                 a,
                 "render",
-                json!({"out": out, "from": a.num("from").map_err(u)?, "to": a.num("to").map_err(u)?, "tail": a.num("tail").map_err(u)?, "rate": a.num("rate").map_err(u)?, "format": a.get("format"), "mp3Kbps": a.num("kbps").map_err(u)?, "stems": a.has("stems"), "master": !a.has("no-master")}),
+                json!({
+                    "out": out,
+                    "from": a.num("from").map_err(u)?, "to": a.num("to").map_err(u)?,
+                    "tail": a.num("tail").map_err(u)?, "rate": a.num("rate").map_err(u)?,
+                    "format": a.get("format"), "mp3Kbps": a.num("kbps").map_err(u)?,
+                    "wavBits": wav_bits, "dither": a.has("dither"),
+                    "stems": a.has("stems"), "master": !a.has("no-master"),
+                }),
             )
         }
         "save" => send(

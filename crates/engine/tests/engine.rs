@@ -439,6 +439,49 @@ fn export_writes_wav_that_round_trips() {
 }
 
 #[test]
+fn pcm24_export_round_trips_signed_samples_and_clamps_full_scale() {
+    let dir = std::env::temp_dir().join(format!("wave-pcm24-{}", std::process::id()));
+    let path = dir.join("mix.wav");
+    let lsb = 1.0 / 8_388_608.0;
+    let input = [0.25, -0.5, 1.25, -1.25, 1.0, -1.0, 0.49 * lsb, -0.75 * lsb, f32::NAN, f32::INFINITY];
+    wave_engine::sources::write_wav_pcm24(&path, &input, 44_100, false).unwrap();
+    let mut reader = hound::WavReader::open(&path).unwrap();
+    let spec = reader.spec();
+    assert_eq!((spec.channels, spec.sample_rate, spec.bits_per_sample), (2, 44_100, 24));
+    assert_eq!(spec.sample_format, hound::SampleFormat::Int);
+    assert_eq!(reader.duration(), 5);
+    assert_eq!(
+        reader.samples::<i32>().collect::<Result<Vec<_>, _>>().unwrap(),
+        [2_097_152, -4_194_304, 8_388_607, -8_388_608, 8_388_607, -8_388_608, 0, -1, 0, 0]
+    );
+    drop(reader);
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
+#[test]
+fn pcm24_dither_is_optional_and_limited_to_the_last_bit_on_silence() {
+    let dir = std::env::temp_dir().join(format!("wave-pcm24-dither-{}", std::process::id()));
+    let input = [0.0; 8192];
+    for dither in [false, true] {
+        let path = dir.join(format!("dither-{dither}.wav"));
+        wave_engine::sources::write_wav_pcm24(&path, &input, 48_000, dither).unwrap();
+        let mut reader = hound::WavReader::open(path).unwrap();
+        let samples: Vec<i32> = reader.samples().map(Result::unwrap).collect();
+        assert_eq!(samples.len(), input.len());
+        if dither {
+            assert_eq!(samples.iter().min(), Some(&-1));
+            assert_eq!(samples.iter().max(), Some(&1));
+            let nonzero = samples.iter().filter(|&&x| x != 0).count();
+            assert!((1600..2500).contains(&nonzero), "{nonzero} nonzero samples");
+            assert!(samples.iter().sum::<i32>().abs() < 220);
+        } else {
+            assert!(samples.iter().all(|&x| x == 0));
+        }
+    }
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
+#[test]
 fn export_tail_extends_length_and_cancel_aborts() {
     let e = Engine::new(Project::sketch(), Arc::new(NoPlugins));
     let no_tail = e.render(0.0, 4.0, 0.0, 48000).unwrap();
@@ -635,8 +678,24 @@ fn a_loop_does_not_play_the_downbeat_after_its_end() {
     p.patterns[0].notes = vec![Note::new(kick, 16.0, 1.0, None)];
     p.patterns[0].len = 8.0;
     p.clips = vec![Clip {
-        id: 50, track: 0, start: 0.0, len: 8.0, offset: 0.0, kind: ClipKind::Pat, source: p.patterns[0].id, muted: false, gain: 0.0,
-        fade_in: 0.0, fade_out: 0.0, pan: 0.0, norm: false, rev: false, tune: None, stretch: 1.0, resample: false, pitch: 0.0,
+        id: 50,
+        track: 0,
+        start: 0.0,
+        len: 8.0,
+        offset: 0.0,
+        kind: ClipKind::Pat,
+        source: p.patterns[0].id,
+        muted: false,
+        gain: 0.0,
+        fade_in: 0.0,
+        fade_out: 0.0,
+        pan: 0.0,
+        norm: false,
+        rev: false,
+        tune: None,
+        stretch: 1.0,
+        resample: false,
+        pitch: 0.0,
     }];
     // at 44.1 kHz 4 beats are not a whole number of samples: the block that reaches the loop
     // end runs past it by a fraction of a sample

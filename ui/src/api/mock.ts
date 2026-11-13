@@ -20,7 +20,7 @@ import { collectMelody, melodyFit, melodyTarget } from '../lib/melody';
 import { newFx } from '../lib/presets';
 import { synthVocal, vocalAt, vocalPeaks, type VocalSample } from './mockVocal';
 import type {
-  AudioConfig, AudioStatus, LatencyReport, AnyBuiltinKind, AutoVocalPlan, AutoVocalStyle, Catalog, Clip, ExportResult, ExportStemsResult, F0ModelStatus, Fx, Id, KeysStatus, LibFile, LibraryList, Melody, MelodyChannel, MidiDevice, MidiStatus, MusicAnalysis, Op, OpenResult, PitchAnalysis, PitchTarget, Project, RefTune, SaveResult, Source, StateDto, TransportDto, Vst3Info, Vst3Param,
+  AudioConfig, AudioStatus, LatencyReport, AnyBuiltinKind, AutoVocalPlan, AutoVocalStyle, Catalog, Clip, ExportAudioOptions, ExportResult, ExportStemsOptions, ExportStemsResult, F0ModelStatus, Fx, Id, KeysStatus, LibFile, LibraryList, Melody, MelodyChannel, MidiDevice, MidiStatus, MusicAnalysis, Op, OpenResult, PitchAnalysis, PitchTarget, Project, RefTune, SaveResult, Source, StateDto, TransportDto, Vst3Info, Vst3Param,
 } from './types';
 import { exportRange, exportSeconds, stemInserts, uniqueFileStems } from '../lib/export';
 import { MockUpdates } from './mockUpdates';
@@ -1020,7 +1020,7 @@ export class MockBackend implements Backend {
   }
 
   private exportAbort = false;
-  async exportAudio(opts: { useLoop: boolean; tail: number; sampleRate: number; format?: 'wav' | 'mp3'; mp3Kbps?: number }): Promise<ExportResult> {
+  async exportAudio(opts: ExportAudioOptions): Promise<ExportResult> {
     this.exportAbort = false;
     const { from, to } = exportRange(this.p, opts.useLoop);
     const secs = exportSeconds(from, to, this.p.bpm, opts.tail);
@@ -1049,7 +1049,7 @@ export class MockBackend implements Backend {
     };
   }
   /** Like the engine: one file per insert with sound (+ Master), the same names, nothing written when cancelled. */
-  async exportStems(opts: { useLoop: boolean; tail: number; sampleRate: number; includeMaster: boolean }): Promise<ExportStemsResult> {
+  async exportStems(opts: ExportStemsOptions): Promise<ExportStemsResult> {
     this.exportAbort = false;
     const { from, to } = exportRange(this.p, opts.useLoop);
     const secs = exportSeconds(from, to, this.p.bpm, opts.tail);

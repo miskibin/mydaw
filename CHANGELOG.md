@@ -7,6 +7,7 @@ shown in the app after an update and is published as the release notes (see
 ## Unreleased
 
 ### Added
+- **Export 24-bit PCM WAV.** Choose it for the mix or stems and enable dithering if needed. WAV defaults to 32-bit float.
 - **Open `.wave` projects from Windows File Explorer.** Projects have a document icon and open on double-click. If WAVE is already running, it brings the window forward and asks about unsaved changes before switching projects.
 - **Tune a vocal to the melody you played in the piano roll.** Play a melody, sing along to it,
   then in the Piano roll press **♪ Vocal reference** (only the selected notes, or the whole
