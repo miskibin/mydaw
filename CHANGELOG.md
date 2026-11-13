@@ -4,7 +4,7 @@ What changed in each release of WAVE. The newest version comes first; its sectio
 shown in the app after an update and is published as the release notes (see
 `docs/releasing.md`). Write for musicians: what you can do now, not how it works inside.
 
-## Unreleased
+## 0.9.14 — 2026-11-13
 
 ### Added
 - **Edit and render projects from the command line without opening WAVE.** `wave new song.wave`
@@ -41,7 +41,37 @@ shown in the app after an update and is published as the release notes (see
 - **Main volume knob next to Play and Stop**, like FL Studio: it is the Master fader (drag, scroll,
   double-click for 0 dB, right-click to automate).
 
+- **Reshape and generate notes in the Piano roll.** A *Tools* strip in the header humanizes,
+  quantizes (optionally to the project's key), strums, fills a Euclidean rhythm, builds a drum
+  groove or writes a melody in the key. Every tool has a *seed*: the same seed always gives the
+  same notes, so you can try a few, keep the favourite and come back to it. The same tools are on
+  the command line (`wave notes …`, `wave key`).
+- **Copy sung notes to the Piano roll.** In the pitch editor, Ctrl+C or *Copy notes* puts the
+  selected notes (or all) on the note clipboard; Ctrl+V pastes them into any pattern in time.
+- **Full-screen Piano roll**, which remembers where you moved or resized it.
+
+### Changed
+- A more compact toolbar and pitch editor header. Playlist lanes show their mixer channel only
+  when you routed them to one, and *Make unique* no longer creates a mixer insert.
+
 ### Fixed
+- VST3 presets restore correctly on systems whose language writes decimals with a comma
+  (German, Polish, Danish, French…): settings no longer jump to rounded values.
+- Melody, Euclid fill and Drum generators replace the channel's notes: applying again (with a
+  new seed or with notes selected) no longer stacks a second melody or doubles hits.
+- Humanize and Strum leave very quiet notes alone, and scale-aware quantize no longer fails on
+  the highest and lowest MIDI notes.
+- The Piano roll's key and scale follow the project after undo or opening another project.
+- Double-clicking the project that is already open in File Explorer no longer asks to discard its
+  changes; WAVE no longer opens another project while recording; crash recovery is offered also
+  when WAVE starts by opening a file.
+- Closing WAVE, starting a new project or restarting for an update while a project is still
+  opening now says why it waits.
+- Pitch editor: *Update* melody appears and disappears correctly after Apply, Update and undo, and
+  Space or Delete in its Key, Scale or Reference list no longer starts playback or resets notes.
+- Command line: `wave bpm 90 --dry-run -p song.wave` edits the file, not the project open in the
+  app (switches no longer swallow the word after them); `save --path` inside a script is refused
+  instead of silently writing nothing; `wave new --force` never replaces a project the app has open.
 - Loop takes keep their recorded ending when you stop on the boundary. Starting partway through a loop also keeps the start of every following pass.
 - The pitch editor's preview now plays your pitch edits (it used to play the original recording).
 - The reference list no longer offers drum hits and one-shots: only recordings in the playlist or
