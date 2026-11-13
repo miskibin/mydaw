@@ -306,6 +306,51 @@ pub fn derive(v: &[f32; crate::processor::MAX_PARAMS]) -> Derived {
     }
 }
 
+/// What the UI draws a space from (`ui/src/api/reverbSpaces.json`, checked by
+/// `tests/reverb_spaces.rs`): its delay lines at scale 1, the decay at scale 1 and its early
+/// reflections.
+#[derive(Clone, Debug, PartialEq, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SpaceInfo {
+    pub name: &'static str,
+    /// The 16 network lines at scale 1 (ms).
+    pub line_ms: Vec<f32>,
+    pub t_ref: f32,
+    pub er_ms: f32,
+    pub er_gain: f32,
+    pub late_gain: f32,
+}
+
+pub const SPACE_NAMES: [&str; 4] = ["Plate", "Room", "Hall", "Ambience"];
+/// Network scale limits (the size stops following the decay past them).
+pub const SCALE_LIMITS: (f32, f32) = (MIN_SCALE, MAX_SCALE);
+
+pub fn space_info() -> Vec<SpaceInfo> {
+    SPACES
+        .iter()
+        .zip(SPACE_NAMES)
+        .map(|(sp, name)| SpaceInfo {
+            name,
+            line_ms: (0..N).map(|k| ReverbV2::line_ms(sp, k)).collect(),
+            t_ref: sp.t_ref,
+            er_ms: sp.er_ms,
+            er_gain: sp.er_gain,
+            late_gain: sp.late_gain,
+        })
+        .collect()
+}
+
+/// The size of a room whose echoes recur as often as the network's (m): the mean line delay is
+/// the mean free path, `4V/S`, which for a cube of side `L` is `2L/3`. A plate has no room; the
+/// number still compares spaces with each other.
+pub fn equivalent_room_m(v: &[f32; crate::processor::MAX_PARAMS]) -> f32 {
+    const SOUND_M_PER_S: f32 = 343.0;
+    let d = derive(v);
+    let sp = &SPACES[d.space];
+    let mean_ms = (0..N).map(|k| ReverbV2::line_ms(sp, k)).sum::<f32>() / N as f32;
+    1.5 * mean_ms * d.scale / 1000.0 * SOUND_M_PER_S
+}
+
 /// How long the effect keeps sounding after its input goes silent (s): down to −140 dB
 /// (2.33 × the longest band RT60, rounded up) plus pre-delay, early reflections, diffusers
 /// and the ducking release.

@@ -1,177 +1,212 @@
-// Reverb 3D decay waterfall. X = frequency (log), Z = time after the hit (front = now), Y = level.
-// Amber ridges = what the settings do (model: RT60, pre-delay, HF damping, low cut) — projected once
-// per (params, view, size). Teal ridges = the live wet spectrum (`specOut`), one row per time step.
+// Reverb display: the space and its decay.
+// Left: the room the network sounds like, drawn to scale (equivalent size from the space's delay lines
+// and the decay, lib/reverbSpace.ts) with the source, the listener and the first reflections off its
+// walls; a Plate is drawn as a plate. Right: the impulse response's outline — pre-delay, early
+// reflections in their real span, the late tail per band (bass / mid / treble) down to −60 dB — with
+// the live output after the last hit traced over it. PRE and the mid tail's end are drag handles
+// (FxWindow `verbDown`); everything static is cached per (params, size, hover) — `Layer` adds DPR, fonts and theme.
 import type { Fx } from '../../api/types';
 import type { FxFrame } from '../../api/telemetry';
 import { clamp } from '../../lib/format';
-import { Layer } from '../../ui/frameLoop';
 import { t as tr } from '../../lib/i18n';
-import { MONO10, MONO11, rgba, T, type Viz } from './common';
-const REVERB_LIVE = '#4fb8cc';
+import { envelope, PLATE, roomDims, roomM, timeSpan } from '../../lib/reverbSpace';
+import { Layer } from '../../ui/frameLoop';
+import { MONO10, MONO11, MONO9, rgba, T, type Viz } from './common';
 
-const NS = 30, K = 72;
-const FK = Float32Array.from({ length: K }, (_, k) => 20 * Math.pow(1000, k / (K - 1)));
-const XK = Float32Array.from({ length: K }, (_, k) => k / (K - 1) * 2 - 1);
-/** For each of the 72 bins, the range of the 128 telemetry bands it covers. */
-const KB = Array.from({ length: K }, (_, k) => {
-  const idx = (f: number) => Math.log(f / 20) / Math.log(1000) * 127;
-  const f1 = k < K - 1 ? FK[k + 1] : 20000;
-  let a = Math.ceil(idx(FK[k])), b = Math.floor(idx(f1));
-  if (b < a) a = b = clamp(Math.round(idx(FK[k])), 0, 127);
-  return [clamp(a, 0, 127), clamp(b, 0, 127)];
-});
+const LIVE = '#4fb8cc', BASS = '#7c8cf8', TREBLE = '#69c3d6';
+const DB_MIN = -66;
+/** Rooms are drawn on one scale, so a hall is visibly bigger than a room: px ∝ (m / M_FULL)^0.7. */
+const M_FULL = 45;
 
-export interface View3D { yaw: number; pitch: number }
-export const views3d = new Map<number, View3D>();
-export const defaultView = (): View3D => ({ yaw: -0.5, pitch: 0.55 });
+export type VerbHandle = 'pre' | 'tail';
+
+/** Where things are on a canvas of W × H (shared with the window's hit testing). */
+export function verbLayout(W: number, H: number, fx: Fx) {
+  const p = fx.params, e = envelope(p), span = timeSpan(p);
+  const roomW = Math.round(clamp(W * 0.4, 180, 300));
+  const ex0 = roomW + 34, ex1 = W - 14, ey0 = 30, ey1 = H - 24;
+  const tx = (t: number) => ex0 + clamp(t / span, 0, 1) * (ex1 - ex0);
+  const xt = (x: number) => (x - ex0) / (ex1 - ex0) * span;
+  const ydb = (db: number) => ey0 + clamp(-db / -DB_MIN, 0, 1) * (ey1 - ey0);
+  return { e, span, roomW, ex0, ex1, ey0, ey1, tx, xt, ydb, preX: tx(e.pre), tailX: tx(e.onset + e.tMid), tailY: ydb(e.lateDb - 60) };
+}
+
+/** The handle under (x, y), if any. */
+export function verbHit(fx: Fx, x: number, y: number, W: number, H: number): VerbHandle | null {
+  const L = verbLayout(W, H, fx);
+  if (Math.hypot(x - L.tailX, y - L.tailY) < 10) return 'tail';
+  if (Math.abs(x - L.preX) < 6 && y >= L.ey0 - 14 && y <= L.ey1) return 'pre';
+  return null;
+}
 
 export class ReverbViz implements Viz {
-  cursor = 'grab';
-  private floor = new Layer();
-  private frames: Float32Array[] = [];
-  private last = 0;
-  private zeroRows = NS;
-  /** 0..1: how far the waterfall has scrolled toward the next row (smooth 60 fps motion). */
-  private phase = 0;
-  /** Freshest spectrum, drawn as the front edge every frame. */
-  private live = new Float32Array(K);
-  private modelKey = '';
-  private model: { pts: Float32Array; n: number }[] = [];
-  private proj: ((x: number, y: number, z: number) => [number, number]) | null = null;
-  private projKey = '';
-  /** Bumped by the window when the orbit changes. */
-  viewVersion = 0;
-  private drawnView = -1;
+  cursor = 'default';
+  hover: VerbHandle | null = null;
+  /** The handle being dragged (drawn highlighted). */
+  drag: VerbHandle | null = null;
+  private stat = new Layer();
+  /** Output level (dB) per analysis frame since the last hit: [seconds after it, dB]. */
+  private trace: [number, number][] = [];
+  private hitAt = -1;
+  private floorDb = -120;
+  private lastT = 0;
 
-  constructor(private fxId: number) {
-    for (let i = 0; i < NS; i++) this.frames.push(new Float32Array(K));
-  }
-
-  private view(): View3D { let v = views3d.get(this.fxId); if (!v) { v = defaultView(); views3d.set(this.fxId, v); } return v; }
-
-  update(fx: Fx, a: FxFrame | null, now: number): boolean {
-    const p = fx.params, Tmax = Math.max(0.6, ((p.pre ?? 0) / 1000 + (p.size ?? 2)) * 1.05);
-    const t = now / 1000, step = Tmax / (NS - 1);
-    let changed = this.drawnView !== this.viewVersion;
-    // the freshest spectrum, every frame
-    let any = false;
-    if (a && a.outPeak > 1e-6) {
-      for (let k = 0; k < K; k++) {
-        const [b0, b1] = KB[k];
-        let m = -200;
-        for (let b = b0; b <= b1; b++) if (a.specOut[b] > m) m = a.specOut[b];
-        const v = clamp((m + 4.5 * Math.log2(FK[k] / 1000) + 105) / 75, 0, 1);
-        // light smoothing so 30 Hz analysis frames don't flicker at 60 fps
-        this.live[k] += (v - this.live[k]) * 0.5;
-        if (this.live[k] > 0.002) any = true;
-      }
-    } else {
-      for (let k = 0; k < K; k++) this.live[k] *= 0.6;
-    }
-    if (t - this.last >= step || t < this.last) {
-      this.last = t < this.last ? t : this.last + step * Math.floor((t - this.last) / step);
-      const row = this.frames.pop()!;
-      row.set(this.live);
-      this.frames.unshift(row);
-      this.zeroRows = any ? 0 : this.zeroRows + 1;
-    }
-    this.phase = clamp((t - this.last) / step, 0, 1);
-    // keep animating while anything is still visible in the waterfall
-    if (any || this.zeroRows <= NS + 1) changed = true;
-    return changed;
+  update(_fx: Fx, a: FxFrame | null, now: number): boolean {
+    const t = now / 1000;
+    const db = a && a.outPeak > 1e-6 ? 20 * Math.log10(a.outPeak) : -120;
+    // a hit: the level jumps well above where it was (and is audible); the trace restarts there
+    if (db > -50 && db > this.floorDb + 15 && (this.hitAt < 0 || t - this.hitAt > 0.15)) { this.hitAt = t; this.trace = []; }
+    this.floorDb = Math.min(db, this.floorDb + (t - this.lastT) * 40); // the floor follows the level down at once, up slowly
+    this.lastT = t;
+    if (this.hitAt < 0) return false;
+    const since = t - this.hitAt;
+    if (since > 10) { this.hitAt = -1; this.trace = []; return true; }
+    if (!this.trace.length || since - this.trace[this.trace.length - 1][0] > 0.012) this.trace.push([since, db]);
+    return true;
   }
 
   draw(g: CanvasRenderingContext2D, W: number, H: number, fx: Fx) {
-    const p = fx.params, v = this.view();
-    this.drawnView = this.viewVersion;
-    const pre = (p.pre ?? 0) / 1000, size = p.size ?? 2.2, lo = p.lo ?? 120, hi = p.hi ?? 8000;
-    const Tmax = Math.max(0.6, (pre + size) * 1.05);
-    // camera: yaw/pitch orbit + mild perspective, auto-fit to the canvas
-    const pk = v.yaw.toFixed(4) + v.pitch.toFixed(4) + W + 'x' + H;
-    if (pk !== this.projKey || !this.proj) {
-      this.projKey = pk;
-      const cy = Math.cos(v.yaw), sy = Math.sin(v.yaw), cp = Math.cos(v.pitch), sp = Math.sin(v.pitch);
-      const raw = (x: number, y: number, z: number): [number, number] => {
-        const X = x * 1.25, Y = y * 0.62, Z = (z - 0.5) * 1.5, x1 = X * cy + Z * sy, z1 = -X * sy + Z * cy, y2 = Y * cp + z1 * sp, z2 = -Y * sp + z1 * cp, k = 4 / (4 + z2);
-        return [x1 * k, -y2 * k];
-      };
-      let mnx = 1e9, mxx = -1e9, mny = 1e9, mxy = -1e9;
-      for (const x of [-1, 1]) for (const y of [0, 1]) for (const z of [0, 1]) { const q = raw(x, y, z); mnx = Math.min(mnx, q[0]); mxx = Math.max(mxx, q[0]); mny = Math.min(mny, q[1]); mxy = Math.max(mxy, q[1]); }
-      const sc = Math.min((W - 70) / (mxx - mnx), (H - 46) / (mxy - mny)), ox = W / 2 - (mnx + mxx) / 2 * sc, oy = 24 + (H - 46) / 2 - (mny + mxy) / 2 * sc;
-      this.proj = (x, y, z) => { const q = raw(x, y, z); return [ox + q[0] * sc, oy + q[1] * sc]; };
-      this.modelKey = '';
+    const p = fx.params, key = [W, H, fx.bypass, this.hover, this.drag, ...['size', 'pre', 'space', 'tone', 'bass', 'early'].map(k => p[k])].join('|');
+    g.drawImage(this.stat.get(W, H, key, c => drawStatic(c, W, H, fx, this.hover ?? this.drag)) as CanvasImageSource, 0, 0, W, H);
+    // the live output after the last hit, peak-normalised to the tail's start
+    const L = verbLayout(W, H, fx);
+    if (this.trace.length > 1) {
+      const peak = Math.max(...this.trace.map(q => q[1])), off = L.e.lateDb - peak;
+      g.save(); g.beginPath(); g.rect(L.ex0, L.ey0, L.ex1 - L.ex0, L.ey1 - L.ey0); g.clip();
+      g.beginPath();
+      this.trace.forEach(([s, db], i) => { const x = L.tx(L.e.pre + s), y = L.ydb(db + off); if (i) g.lineTo(x, y); else g.moveTo(x, y); });
+      g.strokeStyle = rgba(LIVE, 0.85); g.lineWidth = 1.4; g.stroke();
+      g.restore();
+      g.font = MONO10; g.fillStyle = LIVE; g.textAlign = 'right'; g.fillText(tr('c.verb.lastHit'), L.ex1, L.ey0 - 4);
     }
-    const P = this.proj!;
-    // model ridges, projected once per params/view
-    const mk = pk + '|' + pre + '|' + size + '|' + lo + '|' + hi;
-    if (mk !== this.modelKey) {
-      this.modelKey = mk;
-      const model = (hz: number, t: number) => {
-        if (t < pre) return -1;
-        const tt = t - pre, fc = Math.max(200, hi * Math.pow(0.3, tt / size)), r = (hz / lo) * (hz / lo);
-        return clamp((-60 * tt / size - 10 * Math.log10(1 + (hz / fc) * (hz / fc)) + 20 * Math.log10(r / Math.sqrt(1 + r * r)) + 60) / 60, 0, 1);
-      };
-      this.model = [];
-      for (let i = 0; i < NS; i++) {
-        const z = i / (NS - 1), t = z * Tmax, pts = new Float32Array(K * 2);
-        let n = 0;
-        for (let k = 0; k < K; k++) { const y = model(FK[k], t); if (y < 0) break; const q = P(XK[k], y, z); pts[2 * n] = q[0]; pts[2 * n + 1] = q[1]; n++; }
-        this.model.push({ pts, n });
-      }
-    }
-    // static floor (grid, labels, pre-delay gate)
-    g.fillStyle = T.viz; g.fillRect(0, 0, W, H);
-    g.drawImage(this.floor.get(W, H, mk + fx.bypass, c => drawFloor(c, P, Tmax, pre)) as CanvasImageSource, 0, 0, W, H);
-    g.globalAlpha = fx.bypass ? 0.45 : 1;
-    g.lineWidth = 1;
-    // rows glide back continuously; the oldest one slides off the far edge
-    for (let i = NS; i >= 0; i--) {
-      const zRow = i === 0 ? 0 : (i - 1 + this.phase) / (NS - 1);
-      if (zRow > 1) continue;
-      const z = zRow, fr = 1 - z, row = i === 0 ? this.live : this.frames[i - 1];
-      // live ridge (filled, occludes what is behind)
-      g.beginPath(); let q = P(-1, 0, z); g.moveTo(q[0], q[1]);
-      for (let k = 0; k < K; k++) { q = P(XK[k], row[k], z); g.lineTo(q[0], q[1]); }
-      q = P(1, 0, z); g.lineTo(q[0], q[1]); g.closePath();
-      g.fillStyle = rgba(T.viz, 0.9); g.fill(); g.fillStyle = rgba(REVERB_LIVE, +((0.03 + 0.12 * fr) * T.tint).toFixed(2)); g.fill();
-      g.strokeStyle = rgba(REVERB_LIVE, +(0.18 + 0.75 * fr).toFixed(2)); g.lineWidth = i === 0 ? 1.6 : 1; g.stroke();
-      // model ridge (time after the hit is fixed, so it does not scroll)
-      const m = i < NS ? this.model[i] : undefined;
-      if (m && m.n > 0) {
-        g.beginPath(); g.moveTo(m.pts[0], m.pts[1]);
-        for (let k = 1; k < m.n; k++) g.lineTo(m.pts[2 * k], m.pts[2 * k + 1]);
-        g.strokeStyle = rgba(T.amber, +(0.16 + 0.55 * fr).toFixed(2)); g.lineWidth = 1; g.stroke();
-      }
-    }
-    g.globalAlpha = 1;
-    g.font = MONO11; g.fillStyle = T.ink; g.textAlign = 'left'; g.fillText('RT60 ' + size.toFixed(2) + ' s', 10, 16);
-    g.fillStyle = T.fg4; g.fillText('PRE ' + Math.round(p.pre ?? 0) + ' ms', 110, 16);
-    g.font = MONO10; g.textAlign = 'right';
-    g.fillStyle = T.amber; g.fillText(tr('c.viz.settings'), W - 112, 16); g.fillStyle = REVERB_LIVE; g.fillText(tr('c.viz.liveSignal'), W - 8, 16);
-    g.textAlign = 'left';
   }
 }
 
-function drawFloor(g: CanvasRenderingContext2D, P: (x: number, y: number, z: number) => [number, number], Tmax: number, pre: number) {
-  const seg = (a: [number, number], b: [number, number], col: string) => { g.strokeStyle = col; g.beginPath(); g.moveTo(a[0], a[1]); g.lineTo(b[0], b[1]); g.stroke(); };
-  g.lineWidth = 1; g.font = MONO10;
-  const fl = [P(-1, 0, 0), P(1, 0, 0), P(1, 0, 1), P(-1, 0, 1)];
-  g.beginPath(); fl.forEach((q, i) => i ? g.lineTo(q[0], q[1]) : g.moveTo(q[0], q[1])); g.closePath(); g.fillStyle = T.vizPanel; g.fill();
-  [0.5, 1].forEach(y => seg(P(-1, y, 1), P(1, y, 1), T.vizGrid));
-  seg(P(-1, 0, 1), P(-1, 1, 1), T.vizGrid2); seg(P(1, 0, 1), P(1, 1, 1), T.vizGrid2);
-  const xOf = (hz: number) => Math.log(hz / 20) / Math.log(1000) * 2 - 1;
-  [50, 100, 200, 500, 1000, 2000, 5000, 10000].forEach(hz => seg(P(xOf(hz), 0, 0), P(xOf(hz), 0, 1), hz === 100 || hz === 1000 || hz === 10000 ? T.vizGrid2 : T.vizGrid));
-  const step = Tmax > 4 ? 1 : Tmax > 1.6 ? 0.5 : 0.25;
-  g.fillStyle = T.vizLabel; g.textAlign = 'left';
-  for (let t = 0; t <= Tmax + 1e-6; t += step) {
-    const z = t / Tmax; seg(P(-1, 0, z), P(1, 0, z), T.vizGrid);
-    const q = P(1.05, 0, z); g.fillText((step < 1 ? t.toFixed(t % 1 ? 2 : 0) : t) + ' s', q[0] + 2, q[1] + 3);
+function drawStatic(g: CanvasRenderingContext2D, W: number, H: number, fx: Fx, hot: VerbHandle | null) {
+  const L = verbLayout(W, H, fx), e = L.e;
+  g.fillStyle = T.viz; g.fillRect(0, 0, W, H);
+  g.globalAlpha = fx.bypass ? 0.45 : 1;
+  drawRoom(g, 0, 0, L.roomW, H, fx);
+  // ---- envelope
+  const { ex0, ex1, ey0, ey1, tx, ydb } = L;
+  g.fillStyle = T.vizPanel; g.fillRect(ex0, ey0, ex1 - ex0, ey1 - ey0);
+  g.lineWidth = 1; g.font = MONO9; g.fillStyle = T.vizLabel; g.textAlign = 'right';
+  for (let db = 0; db >= -60; db -= 12) {
+    const y = Math.round(ydb(db)) + 0.5;
+    g.strokeStyle = db === -60 ? T.vizGrid2 : T.vizGrid; g.beginPath(); g.moveTo(ex0, y); g.lineTo(ex1, y); g.stroke();
+    g.fillText(String(db), ex0 - 4, y + 3);
   }
+  const step = L.span > 4 ? 1 : L.span > 1.6 ? 0.5 : L.span > 0.8 ? 0.25 : 0.1;
   g.textAlign = 'center';
-  ([[100, '100'], [1000, '1k'], [10000, '10k']] as [number, string][]).forEach(([hz, l]) => { const q = P(xOf(hz), 0, -0.07); g.fillText(l, q[0], q[1] + 8); });
-  g.textAlign = 'left';
-  if (pre > 0.002) {
-    const z = pre / Tmax, a = [P(-1, 0, 0), P(1, 0, 0), P(1, 0, z), P(-1, 0, z)];
-    g.beginPath(); a.forEach((q, i) => i ? g.lineTo(q[0], q[1]) : g.moveTo(q[0], q[1])); g.closePath(); g.fillStyle = rgba(T.amber, 0.07); g.fill();
+  for (let t = 0; t <= L.span + 1e-6; t += step) {
+    const x = Math.round(tx(t)) + 0.5;
+    g.strokeStyle = T.vizGrid; g.beginPath(); g.moveTo(x, ey0); g.lineTo(x, ey1); g.stroke();
+    g.fillText((Math.round(t * 100) / 100) + ' s', x, ey1 + 13);
   }
+  // pre-delay: nothing comes back yet
+  if (e.pre > 0) { g.fillStyle = rgba(T.amber, 0.08); g.fillRect(ex0, ey0, L.preX - ex0, ey1 - ey0); }
+  // early reflections
+  g.strokeStyle = rgba(T.ink, 0.45); g.lineWidth = 1;
+  for (const r of e.early) { const x = Math.round(tx(r.t)) + 0.5; g.beginPath(); g.moveTo(x, ey1); g.lineTo(x, ydb(r.db)); g.stroke(); }
+  // late tail per band: fade in over the reflections, then −60 dB in that band's decay
+  const tail = (t60: number, col: string, w: number, dash: number[]) => {
+    g.beginPath(); g.moveTo(L.preX, ey1);
+    g.lineTo(tx(e.onset), ydb(e.lateDb));
+    const tEnd = e.onset + t60 * (e.lateDb - DB_MIN) / 60;
+    g.lineTo(tx(tEnd), ydb(DB_MIN));
+    g.strokeStyle = col; g.lineWidth = w; g.setLineDash(dash); g.stroke(); g.setLineDash([]);
+  };
+  tail(e.tLow, rgba(BASS, 0.8), 1.2, [4, 3]);
+  tail(e.tHigh, rgba(TREBLE, 0.8), 1.2, [2, 3]);
+  // mid: filled under, the main line
+  g.beginPath(); g.moveTo(L.preX, ey1); g.lineTo(tx(e.onset), ydb(e.lateDb)); g.lineTo(tx(e.onset + e.tMid * (e.lateDb - DB_MIN) / 60), ey1); g.closePath();
+  g.fillStyle = rgba(T.amber, 0.1); g.fill();
+  tail(e.tMid, T.amber, 1.8, []);
+  // handles: PRE (vertical line with a tab) and the mid tail at −60 dB
+  const preHot = hot === 'pre', tailHot = hot === 'tail';
+  g.strokeStyle = preHot ? T.ink : rgba(T.amber, 0.9); g.lineWidth = preHot ? 2 : 1.2;
+  g.beginPath(); g.moveTo(Math.round(L.preX) + 0.5, ey0 - 10); g.lineTo(Math.round(L.preX) + 0.5, ey1); g.stroke();
+  g.font = MONO10; g.textAlign = L.preX > ex1 - 70 ? 'right' : 'left'; g.fillStyle = preHot ? T.ink : T.amber;
+  g.fillText('PRE ' + Math.round(e.pre * 1000) + ' ms', L.preX + (g.textAlign === 'right' ? -4 : 4), ey0 - 4);
+  g.beginPath(); g.arc(L.tailX, L.tailY, tailHot ? 6 : 4.5, 0, Math.PI * 2);
+  g.fillStyle = tailHot ? T.ink : T.amber; g.fill(); g.strokeStyle = T.viz; g.lineWidth = 1.5; g.stroke();
+  // decay readouts: mid at the handle, bass and treble in the legend
+  g.font = MONO11; g.fillStyle = tailHot ? T.ink : T.amber; g.textAlign = L.tailX > ex1 - 60 ? 'right' : 'left';
+  g.fillText(e.tMid.toFixed(2) + ' s', L.tailX + (g.textAlign === 'right' ? -9 : 9), L.tailY - 7);
+  g.font = MONO10; g.textAlign = 'left';
+  let lx = ex0;
+  for (const [lab, col] of [[tr('c.verb.bass', { s: e.tLow.toFixed(2) }), BASS], [tr('c.verb.mid', { s: e.tMid.toFixed(2) }), T.amber], [tr('c.verb.treble', { s: e.tHigh.toFixed(2) }), TREBLE]] as [string, string][]) {
+    g.fillStyle = col; g.fillRect(lx, 9, 8, 2); g.fillStyle = T.fg4; g.fillText(lab, lx + 11, 13); lx += g.measureText(lab).width + 24;
+  }
+  g.globalAlpha = 1;
+}
+
+/** The space: an isometric room to scale with source, listener and first reflections, or a plate. */
+function drawRoom(g: CanvasRenderingContext2D, x0: number, y0: number, w: number, h: number, fx: Fx) {
+  const p = fx.params, e = envelope(p), m = roomM(p);
+  g.fillStyle = T.vizPanel; g.fillRect(x0 + 8, y0 + 8, w - 16, h - 16);
+  const name = e.sp.name; // the Space selector's own (engine) names
+  g.font = MONO11; g.fillStyle = T.ink; g.textAlign = 'left';
+  g.fillText(name, x0 + 16, y0 + 25);
+  const cx = x0 + w / 2, cy = y0 + h / 2 + 10, aw = w - 40, ah = h - 84;
+  /** On-screen share of the panel: the biggest room fills it, smaller ones shrink (∝ size^0.7, so a small room stays readable). */
+  const share = Math.pow(Math.min(1, m / M_FULL), 0.7);
+  const c30 = Math.cos(Math.PI / 6), s30 = 0.5;
+  if (e.space === PLATE) {
+    // a steel plate on its edge in a frame: its size follows the decay like the network's
+    const pw = Math.min(aw / c30, (ah - 10) * 1.2) * Math.max(0.45, share), ph = pw * 0.5;
+    const P = (u: number, v: number): [number, number] => [cx + (u - 0.5) * pw * c30, cy + (u - 0.5) * pw * s30 - (v - 0.5) * ph];
+    g.beginPath(); [[0, 0], [1, 0], [1, 1], [0, 1]].forEach(([u, v], i) => { const q = P(u, v); if (i) g.lineTo(q[0], q[1]); else g.moveTo(q[0], q[1]); }); g.closePath();
+    g.fillStyle = rgba(T.amber, 0.12); g.fill(); g.strokeStyle = rgba(T.amber, 0.8); g.lineWidth = 1.4; g.stroke();
+    g.strokeStyle = rgba(T.ink, 0.35); g.lineWidth = 1;
+    for (const u of [0.3, 0.7]) { const a = P(u, 0.45), b = P(u, 0.55); g.beginPath(); g.arc((a[0] + b[0]) / 2, (a[1] + b[1]) / 2, 3, 0, Math.PI * 2); g.stroke(); }
+    g.font = MONO10; g.fillStyle = T.fg4; g.fillText(tr('c.verb.plateNote'), x0 + 16, y0 + 40, w - 32);
+    return;
+  }
+  const [Lm, Wm, Hm] = roomDims(p);
+  // px per metre: fit the box's projection into the panel, then shrink by the room's share
+  const bw = (Lm + Wm) * c30, bh = (Lm + Wm) * s30 + Hm;
+  const k = Math.min(aw / bw, ah / bh) * share;
+  // isometric: length to the lower right, width to the lower left, height up; centred on the floor's middle
+  const P = (x: number, y: number, z: number): [number, number] => [cx + (x - y) * c30 * k, cy + (x + y - (Lm + Wm) / 2) * s30 * k - z * k + Hm * k * 0.35];
+  const poly = (pts: [number, number, number][], fill: string | null, stroke: string | null) => {
+    g.beginPath(); pts.forEach((q, i) => { const s = P(...q); if (i) g.lineTo(s[0], s[1]); else g.moveTo(s[0], s[1]); }); g.closePath();
+    if (fill) { g.fillStyle = fill; g.fill(); } if (stroke) { g.strokeStyle = stroke; g.stroke(); }
+  };
+  g.lineWidth = 1;
+  // back walls and floor (the near walls are left open so the inside shows)
+  poly([[0, 0, 0], [Lm, 0, 0], [Lm, 0, Hm], [0, 0, Hm]], rgba(T.ink, 0.04), rgba(T.ink, 0.35));
+  poly([[0, 0, 0], [0, Wm, 0], [0, Wm, Hm], [0, 0, Hm]], rgba(T.ink, 0.06), rgba(T.ink, 0.35));
+  poly([[0, 0, 0], [Lm, 0, 0], [Lm, Wm, 0], [0, Wm, 0]], rgba(T.amber, 0.06), rgba(T.amber, 0.6));
+  // near edges, dashed
+  g.setLineDash([3, 3]); g.strokeStyle = rgba(T.ink, 0.25);
+  for (const [a, b] of [[[Lm, Wm, 0], [Lm, Wm, Hm]], [[Lm, 0, Hm], [Lm, Wm, Hm]], [[0, Wm, Hm], [Lm, Wm, Hm]]] as [number, number, number][][]) {
+    const s = P(...a), t = P(...b); g.beginPath(); g.moveTo(s[0], s[1]); g.lineTo(t[0], t[1]); g.stroke();
+  }
+  g.setLineDash([]);
+  // source and listener, the direct path and the six first reflections (image sources), brighter with Early
+  const S: [number, number, number] = [Lm * 0.28, Wm * 0.5, Math.min(1.6, Hm * 0.4)], R: [number, number, number] = [Lm * 0.72, Wm * 0.42, Math.min(1.6, Hm * 0.4)];
+  const erA = clamp(e.sp.erGain * (p.early ?? 50) / 50, 0, 1.5) / 1.5;
+  // reflections off the surfaces that are drawn: the two back walls, the floor and the ceiling
+  const walls: [number, number][] = [[0, 0], [1, 0], [2, 0], [2, Hm]];
+  if (erA > 0) {
+    g.strokeStyle = rgba(T.ink, +(0.12 + 0.5 * erA).toFixed(2)); g.lineWidth = 1;
+    for (const [ax, at] of walls) {
+      const img = [...R] as [number, number, number]; img[ax] = 2 * at - R[ax];
+      const u = (at - S[ax]) / (img[ax] - S[ax]);
+      const hit: [number, number, number] = [S[0] + (img[0] - S[0]) * u, S[1] + (img[1] - S[1]) * u, S[2] + (img[2] - S[2]) * u];
+      const a = P(...S), b = P(...hit), c = P(...R);
+      g.beginPath(); g.moveTo(a[0], a[1]); g.lineTo(b[0], b[1]); g.lineTo(c[0], c[1]); g.stroke();
+    }
+  }
+  const a = P(...S), b = P(...R);
+  g.strokeStyle = rgba(T.ink, 0.5); g.setLineDash([2, 3]); g.beginPath(); g.moveTo(a[0], a[1]); g.lineTo(b[0], b[1]); g.stroke(); g.setLineDash([]);
+  g.fillStyle = T.amber; g.beginPath(); g.arc(a[0], a[1], 3.5, 0, Math.PI * 2); g.fill();
+  g.fillStyle = LIVE; g.beginPath(); g.arc(b[0], b[1], 3.5, 0, Math.PI * 2); g.fill();
+  // dimensions and a scale bar
+  g.font = MONO10; g.fillStyle = T.fg4; g.textAlign = 'left';
+  g.fillText('≈ ' + Math.round(Lm) + ' × ' + Math.round(Wm) + ' × ' + Math.round(Hm) + ' m', x0 + 16, y0 + 40);
+  const bar = m > 20 ? 10 : 5, bx = x0 + 16, by = y0 + h - 18;
+  g.strokeStyle = T.fg4; g.beginPath(); g.moveTo(bx, by); g.lineTo(bx + bar * k, by); g.moveTo(bx, by - 3); g.lineTo(bx, by + 3); g.moveTo(bx + bar * k, by - 3); g.lineTo(bx + bar * k, by + 3); g.stroke();
+  g.fillText(bar + ' m', bx + bar * k + 5, by + 3);
 }
