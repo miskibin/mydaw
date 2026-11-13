@@ -127,7 +127,9 @@ function PitchBody(props: { clipId: number }) {
   const melodies = () => { const all = melAll(), fit = all.filter(m => m.fit >= 0.1); return fit.length ? fit : all; };
   const [melStale, setMelStale] = createSignal<Melody | null>(null);
   const melKey = () => JSON.stringify([S.project.patterns.map(pt => [pt.id, pt.len, pt.swing, pt.notes]), S.project.clips.filter(x => x.kind === 'pat').map(x => [x.ref, x.start, x.len, x.offset, x.muted]),
-    c().start, c().len, c().offset, c().stretch, S.project.bpm, (S.project.channels ?? []).map(ch => [ch.id, ch.root, ch.name])]);
+    c().start, c().len, c().offset, c().stretch, S.project.bpm, (S.project.channels ?? []).map(ch => [ch.id, ch.root, ch.name]),
+    // the stored melody too: Apply, Update and undo change it without touching the piano roll
+    applied()?.melody ?? null]);
   let melTimer = 0;
   createEffect(on(melKey, () => {
     clearTimeout(melTimer);
@@ -555,7 +557,8 @@ function PitchBody(props: { clipId: number }) {
     bumpView();
   };
   const onKey = (e: KeyboardEvent) => {
-    if ((e.target as HTMLElement).tagName === 'INPUT' || isTypingKey(e)) return;
+    // any form control: Space opens a focused Key/Scale/Reference select, it must not start playback
+    if ((e.target as HTMLElement).closest?.('input, select, textarea, [contenteditable]') || isTypingKey(e)) return;
     const k = e.key.toLowerCase(), m = e.ctrlKey || e.metaKey;
     const tl = TOOLS.find(x => x.key === e.key);
     if (tl && !m) { e.stopPropagation(); setTool(tl.id); say(t('d.pitch.say.tool', { name: t(tl.label) })); return; }

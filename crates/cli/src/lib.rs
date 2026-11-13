@@ -140,6 +140,29 @@ pub trait Doc {
     fn save(&self, path: &Path) -> Result<(), String>;
 }
 
+/// Options that are only present or absent; they never take the word after them as a value.
+const SWITCHES: &[&str] = &[
+    "clear",
+    "dither",
+    "dry-run",
+    "flatten",
+    "force",
+    "full",
+    "help",
+    "keys",
+    "new",
+    "no-master",
+    "off",
+    "play",
+    "pretty",
+    "remove-unused",
+    "rescan",
+    "stems",
+    "stop",
+    "wrap-tail",
+    "yin",
+];
+
 #[derive(Clone)]
 struct Args {
     pos: Vec<String>,
@@ -157,8 +180,11 @@ impl Args {
                 _ => a.strip_prefix("--"),
             };
             if let Some(k) = key {
+                // a switch never takes the next word: `--dry-run -p f.wave` or `-p f --dry-run bpm 90`
+                // would otherwise turn the file or the command into its value
+                let is_opt = |n: &str| (n.starts_with("--") || n == "-p") && n.parse::<f64>().is_err();
                 let v = match it.peek() {
-                    Some(n) if !n.starts_with("--") || n.parse::<f64>().is_ok() => it.next(),
+                    Some(n) if !SWITCHES.contains(&k) && !is_opt(n) => it.next(),
                     _ => None,
                 };
                 opts.push((k.to_string(), v));
@@ -274,18 +300,22 @@ fn not_open_in_app(path: &Path, a: &Args) -> Result<(), Fail> {
     if a.has("force") {
         return Ok(());
     }
-    for ep in ws::sessions() {
-        let Ok(rep) = ws::call(&ep, "status", json!({}), None, None) else { continue };
-        let open = rep.data.get("path").and_then(Value::as_str).map(PathBuf::from);
-        if open.as_deref().is_some_and(|o| same_file(o, path)) {
-            return Err(Fail::App(format!(
-                "FILE_OPEN: {} is open in WAVE (session {}). Edit it there (drop --project; the edit joins the app's undo history), close it in the app first, or add --force (the app overwrites the file on its next save)",
-                path.display(),
-                &ep.session_id[..ep.session_id.len().min(8)]
-            )));
-        }
+    match open_in_session(path) {
+        Some(id) => Err(Fail::App(format!(
+            "FILE_OPEN: {} is open in WAVE (session {id}). Edit it there (drop --project; the edit joins the app's undo history), close it in the app first, or add --force (the app overwrites the file on its next save)",
+            path.display(),
+        ))),
+        None => Ok(()),
     }
-    Ok(())
+}
+
+/// The (short) id of a running app that has `path` open.
+fn open_in_session(path: &Path) -> Option<String> {
+    ws::sessions().into_iter().find_map(|ep| {
+        let rep = ws::call(&ep, "status", json!({}), None, None).ok()?;
+        let open = rep.data.get("path").and_then(Value::as_str).map(PathBuf::from)?;
+        same_file(&open, path).then(|| ep.session_id[..ep.session_id.len().min(8)].to_string())
+    })
 }
 
 /// `wave --project FILE <command>`: load, run, save if it changed.
@@ -351,7 +381,11 @@ fn new_file(files: Option<&dyn Files>, a: &Args) -> Result<Value, Fail> {
     if let Some(dir) = path.parent() {
         std::fs::create_dir_all(dir).map_err(|e| Fail::App(format!("SAVE_FAILED: {}: {e}", dir.display())))?;
     }
-    not_open_in_app(&path, a)?;
+    // `--force` here only means "replace an existing file": a project the app has open is never replaced
+    // behind its back (its next save would write the old project over the new one)
+    if let Some(id) = open_in_session(&path) {
+        return Err(Fail::App(format!("FILE_OPEN: {} is open in WAVE (session {id}); close it in the app first", path.display())));
+    }
     doc.save(&path).map_err(|e| Fail::App(format!("SAVE_FAILED: {}: {e}", path.display())))?;
     let ctx = doc.call("context", &json!({}), None).map_err(|e| Fail::App(app_error(e)))?;
     Ok(
@@ -475,6 +509,12 @@ fn script(cx: &Cx, a: &Args) -> Result<Value, Fail> {
         }
         if let Some((k, _)) = la.opts.iter().find(|(k, _)| OUTER_ONLY.contains(&k.as_str())) {
             return Err(u(format!("line {n}: --{k} belongs to the whole script: `wave --{k} … script FILE`")));
+        }
+        // on a file, where the project is written is decided once, after the script: a copy made here would be dropped
+        if cx.doc.is_some() && cmd == "save" && la.has("path") {
+            return Err(u(format!(
+                "line {n}: `save --path` cannot write a copy from a script; use `wave --project … --save-as FILE script …`"
+            )));
         }
         if let Some(s) = a.get("session") {
             la.opts.push(("session".into(), Some(s.into())));
@@ -685,11 +725,6 @@ fn run(cx: &Cx, cmd: &str, a: &Args) -> Result<Value, Fail> {
             } else {
                 None
             };
-            for flag in ["dither", "wrap-tail"] {
-                if a.get(flag).is_some() {
-                    return Err(u(format!("--{flag} takes no value")));
-                }
-            }
             send(
                 cx,
                 a,
@@ -1097,6 +1132,22 @@ mod tests {
     }
 
     #[test]
+    fn switches_never_swallow_the_next_word() {
+        let a = args(&["bpm", "90", "--dry-run", "-p", "song.wave"]);
+        assert_eq!(a.get("project"), Some("song.wave"));
+        assert!(a.has("dry-run"));
+        assert_eq!(a.pos, ["bpm", "90"]);
+        let a = args(&["-p", "song.wave", "--dry-run", "bpm", "90"]);
+        assert_eq!(a.get("project"), Some("song.wave"));
+        assert_eq!(a.pos, ["bpm", "90"]);
+        let a = args(&["render", "--stems", "--out", "x.wav", "--dither", "mix"]);
+        assert_eq!(a.get("out"), Some("x.wav"));
+        assert_eq!(a.pos, ["render", "mix"]);
+        let a = args(&["fx", "--pan", "-0.5", "--value", "-3"]);
+        assert_eq!((a.get("pan"), a.get("value")), (Some("-0.5"), Some("-3")));
+    }
+
+    #[test]
     fn refusals_keep_the_apps_error_codes() {
         assert_eq!(app_error("BAD_OPS: x".into()), "BAD_OPS: x");
         assert_eq!(app_error("no effect 5".into()), "REFUSED: no effect 5");
@@ -1188,9 +1239,12 @@ mod tests {
         assert_eq!(f.saves().len(), 1);
         assert_eq!(std::fs::read_to_string(&p).unwrap(), "bpm 101");
 
-        for (body, why) in
-            [("script x.txt\n", "cannot run inside"), ("bpm 90 --project o.wave\n", "--project belongs"), ("bpm '90\n", "unclosed")]
-        {
+        for (body, why) in [
+            ("script x.txt\n", "cannot run inside"),
+            ("bpm 90 --project o.wave\n", "--project belongs"),
+            ("bpm '90\n", "unclosed"),
+            ("save --path copy.wave\n", "--save-as"),
+        ] {
             std::fs::write(&bad, body).unwrap();
             match file(&f, &["script", &bad.display().to_string(), "--project", &p]) {
                 Err(Fail::Usage(m)) => assert!(m.contains(why), "{m}"),
