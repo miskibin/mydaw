@@ -507,16 +507,36 @@ pub fn apply(p: &mut Project, op: &Op) -> Result<Dirty, OpError> {
             let ks = p.key.map(|k| (k, p.scale));
             let roots: Vec<(Id, u8)> = p.channels.iter().map(|c| (c.id, c.root)).collect();
             let chan_ok = |id: Id| roots.iter().any(|(cid, _)| *cid == id);
+            // generator sizes are bounded before anything allocates: a CLI or UI typo
+            // ("--n 4000000000") must fail as a validation error, not as an OOM
+            const MAX_SLOTS: u32 = 512;
+            const MAX_BARS: u32 = 32;
             match verb {
-                crate::transform::TransformVerb::EuclidFill { ch, .. }
-                | crate::transform::TransformVerb::Melody { ch, .. } => {
+                crate::transform::TransformVerb::EuclidFill { ch, k, n, .. } => {
                     if !chan_ok(*ch) {
                         return Err(OpError::Missing { what: "channel", id: *ch });
                     }
+                    if !(1..=MAX_SLOTS).contains(n) || *k == 0 || *k > MAX_SLOTS {
+                        return Err(OpError::Invalid(format!("euclidFill k/n must be 1..={MAX_SLOTS}")));
+                    }
                 }
-                crate::transform::TransformVerb::EuclidDrums { voices, .. } => {
+                crate::transform::TransformVerb::Melody { ch, bars, .. } => {
+                    if !chan_ok(*ch) {
+                        return Err(OpError::Missing { what: "channel", id: *ch });
+                    }
+                    if !(1..=MAX_BARS).contains(bars) {
+                        return Err(OpError::Invalid(format!("melody bars must be 1..={MAX_BARS}")));
+                    }
+                }
+                crate::transform::TransformVerb::EuclidDrums { voices, bars } => {
                     if let Some(v) = voices.iter().find(|v| !chan_ok(v.ch)) {
                         return Err(OpError::Missing { what: "channel", id: v.ch });
+                    }
+                    if !(1..=MAX_BARS).contains(bars) {
+                        return Err(OpError::Invalid(format!("drums bars must be 1..={MAX_BARS}")));
+                    }
+                    if voices.iter().any(|v| v.k == 0 || v.k > MAX_SLOTS || v.n == 0 || v.n > MAX_SLOTS) {
+                        return Err(OpError::Invalid(format!("drums voice k/n must be 1..={MAX_SLOTS}")));
                     }
                 }
                 crate::transform::TransformVerb::Humanize { .. }
@@ -571,8 +591,35 @@ pub fn apply(p: &mut Project, op: &Op) -> Result<Dirty, OpError> {
                     crate::transform::melody(&mut target, *ch, (ks.map(|(k, _)| k).unwrap_or(0), p.scale), *bars, *density, *repeat, seed.unwrap_or(0));
                 }
             }
-            // the transformed notes must satisfy the same sanity as a putPattern
-            for n in &target {
+            // positional verbs (humanize/quantize/strum) map every selected note 1:1;
+            // generators change cardinality, so they merge: everything that was not
+            // selected stays, and the full generator output takes the selection's place
+            let generative = matches!(
+                verb,
+                crate::transform::TransformVerb::EuclidFill { .. }
+                    | crate::transform::TransformVerb::EuclidDrums { .. }
+                    | crate::transform::TransformVerb::Melody { .. }
+            );
+            let new_notes = if all_notes {
+                target
+            } else if generative {
+                let selected: std::collections::HashSet<usize> = idx.iter().copied().collect();
+                let mut merged: Vec<Note> = notes
+                    .iter()
+                    .enumerate()
+                    .filter(|(i, _)| !selected.contains(i))
+                    .map(|(_, n)| n.clone())
+                    .collect();
+                merged.extend(target);
+                merged
+            } else {
+                for (slot, i) in idx.iter().enumerate() {
+                    notes[*i] = target[slot].clone();
+                }
+                notes
+            };
+            // the final note set must satisfy the same sanity as a putPattern
+            for n in &new_notes {
                 if !(n.step.is_finite() && n.step >= 0.0 && n.len.is_finite() && n.len > 0.0) {
                     return Err(OpError::Invalid(format!("pattern {}: a note has an invalid step/len", pid)));
                 }
@@ -589,15 +636,16 @@ pub fn apply(p: &mut Project, op: &Op) -> Result<Dirty, OpError> {
                     return Err(OpError::Missing { what: "channel", id: n.ch });
                 }
             }
-            if all_notes {
-                p.patterns[pi].notes = target;
-            } else {
-                for (slot, i) in idx.iter().enumerate() {
-                    notes[*i] = target[slot].clone();
-                }
-                p.patterns[pi].notes = notes;
-            }
+            let old_len = p.patterns[pi].len;
+            p.patterns[pi].notes = new_notes;
+            // a generator can push notes past the pattern's end: grow the pattern like
+            // putPattern does, so whole-pass clips follow
             p.patterns[pi].fit_len();
+            let new_len = p.patterns[pi].len;
+            if (old_len - new_len).abs() > 1e-9 {
+                follow_pattern_length(p, *pid, old_len, new_len);
+                d.timeline = true;
+            }
             bump(p, *pid);
             d.timeline = true;
         }
@@ -867,6 +915,66 @@ mod transform_tests {
         // the C# snaps to C, the E and C are already in scale
         let keys: Vec<u8> = p.patterns[0].notes.iter().map(|n| n.p.unwrap()).collect();
         assert_eq!(keys, vec![60, 64, 60]);
+    }
+
+    #[test]
+    fn a_generator_with_a_selection_merges_instead_of_panicking() {
+        let mut p = project_with_notes();
+        p.channels.push(crate::model::Channel { id: 1002, ..p.channels[0].clone() });
+        p.patterns[0].notes[1].ch = 1002; // an unselected note on another channel must survive
+        crate::ops::apply_all(
+            &mut p,
+            &[Op::TransformNotes {
+                pattern: 1,
+                verb: crate::transform::TransformVerb::EuclidFill { ch: 1001, k: 3, n: 8, rotate: 0, vel: 0.7 },
+                seed: None,
+                select: Some(crate::ops::TransformSelect::Indices { indices: vec![0, 2] }),
+            }],
+        )
+        .unwrap();
+        // both selected ch-1001 notes are replaced by the 3 generated onsets; the
+        // unselected ch-1002 note survives untouched
+        let notes = &p.patterns[0].notes;
+        assert_eq!(notes.iter().filter(|n| n.ch == 1001).count(), 3);
+        assert_eq!(notes.iter().filter(|n| n.ch == 1002).count(), 1);
+        assert_eq!(notes.len(), 4);
+    }
+
+    #[test]
+    fn generator_sizes_are_bounded_before_allocating() {
+        let mut p = project_with_notes();
+        let err = crate::ops::apply_all(
+            &mut p,
+            &[Op::TransformNotes {
+                pattern: 1,
+                verb: crate::transform::TransformVerb::EuclidFill { ch: 1001, k: 1, n: 4_000_000_000, rotate: 0, vel: 0.7 },
+                seed: None,
+                select: None,
+            }],
+        )
+        .unwrap_err();
+        assert!(err.to_string().contains("1..=512"), "{err}");
+        // and the pattern is untouched by the rejected op
+        assert_eq!(p.patterns[0].notes.len(), 3);
+    }
+
+    #[test]
+    fn a_melody_past_the_pattern_end_grows_the_pattern_and_whole_pass_clips() {
+        let mut p = project_with_notes();
+        crate::ops::apply_all(&mut p, &[Op::SetKey { key: Some(9), scale: 2 }]).unwrap();
+        crate::ops::apply_all(
+            &mut p,
+            &[Op::TransformNotes {
+                pattern: 1,
+                verb: crate::transform::TransformVerb::Melody { ch: 1001, bars: 2, density: 0.55, repeat: 1 },
+                seed: Some(7),
+                select: None,
+            }],
+        )
+        .unwrap();
+        // the melody's last note ends at step 33 = 8.25 beats: content length ceils to
+        // whole bars, so the 1-bar pattern grew to 3 bars
+        assert_eq!(p.patterns[0].len, 12.0);
     }
 
     #[test]

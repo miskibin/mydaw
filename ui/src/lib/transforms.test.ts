@@ -56,4 +56,50 @@ describe('transformNotes (TS mirror)', () => {
     expect([r2.unit(), r2.unit(), r2.unit()]).toEqual(seq);
     expect(seq).not.toEqual([0, 0, 0]);
   });
+
+  it('a generator with a selection merges instead of overwriting positionally', () => {
+    const a = [note(1, 0, 60, 1), note(2, 2, 70, 1), note(1, 4, 62, 1)];
+    applyTransform(a, { kind: 'euclidFill', ch: 1, k: 3, n: 8, rotate: 0, vel: 0.7 }, 0, { kind: 'indices', indices: [0, 2] }, [{ id: 1, root: 60 }, { id: 2, root: 60 }], null, 1, 16);
+    // both selected ch-1 notes are replaced by the 3 generated onsets; the ch-2 note survives
+    expect(a).toHaveLength(4);
+    expect(a.filter(n => n.ch === 2)).toHaveLength(1);
+    expect(a.filter(n => n.ch === 1)).toHaveLength(3);
+  });
+
+  describe('golden: engine parity (values from the engine golden_fixed_seed_values test)', () => {
+    const f = Math.fround;
+    const noteF = (ch: number, step: number, p: number, v: number): Note => ({ ch, step, len: 1, p, v: f(v) });
+    const roots = [{ id: 1, root: 60 }, { id: 3, root: 57 }];
+
+    it('humanize', () => {
+      const h = [noteF(1, 4, 60, 0.8)];
+      applyTransform(h, { kind: 'humanize', timing: 0.5, velocity: 0.4 }, 41, null, roots, null, 1, 16);
+      expect(h[0].step).toBe(f(4.033452));
+      expect(h[0].v).toBe(f(0.67452526));
+    });
+
+    it('strum', () => {
+      const s = [noteF(1, 4, 60, 0.8), noteF(1, 4, 64, 0.8), noteF(1, 4, 57, 0.8)];
+      applyTransform(s, { kind: 'strum', width: 0.25, ramp: 0.05 }, 0, null, roots, null, 1, 16);
+      const by = (p: number) => s.find(n => n.p === p)!;
+      expect(by(57).step).toBe(4);
+      expect(by(60).step).toBe(f(4.25));
+      expect(by(64).step).toBe(f(4.5));
+      expect(by(64).v).toBe(f(0.90000004));
+    });
+
+    it('euclidFill (accent on every fourth emitted onset)', () => {
+      const e = [note(1, 2, 60, 0.9)];
+      applyTransform(e, { kind: 'euclidFill', ch: 1, k: 5, n: 16, rotate: 0, vel: 0.7 }, 0, null, roots, null, 1, 16);
+      expect(e.map(n => n.step)).toEqual([0, 4, 7, 10, 13]);
+      expect(e.map(n => n.v)).toEqual([1, 0.7, 0.7, 0.7, 1]);
+    });
+
+    it('melody (A minor, seed 7)', () => {
+      const m: Note[] = [];
+      applyTransform(m, { kind: 'melody', ch: 3, bars: 2, density: 0.55, repeat: 1 }, 7, null, [{ id: 3, root: 57 }], 9, 2, 32);
+      expect(m.map(n => n.p)).toEqual([57, 57, 57, 59, 59, 59, 62, 65, 64, 62, 64, 64, 62, 62, 62, 62]);
+      expect(m.map(n => n.step)).toEqual([1, 2, 3, 5, 8, 10, 12, 15, 17, 18, 19, 21, 24, 26, 28, 31]);
+    });
+  });
 });

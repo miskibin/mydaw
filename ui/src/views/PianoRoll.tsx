@@ -807,7 +807,7 @@ function Roll(props: { z: number }) {
         </label>
         <label class="plab">{t('b.pe.lblKey')}
           <span class="row" style={{ gap: '4px' }}>
-            <select class="sel" title={rollKey() == null ? t('b.pe.keyAuto') : t('b.pe.keyScale')} value={String(root())} onChange={e => { setRollKey(+e.currentTarget.value); setRollScale(scaleIdx()); commit([setKeyOp(+e.currentTarget.value, scaleIdx())], t('b.pr.keySet')); backToRoll(e.currentTarget); }}>
+            <select class="sel" title={rollKey() == null ? t('b.pe.keyAuto') : t('b.pe.keyScale')} value={String(root())} onChange={e => { const sc = scaleIdx(); setRollKey(+e.currentTarget.value); setRollScale(sc); commit([setKeyOp(+e.currentTarget.value, sc)], t('b.pr.keySet')); backToRoll(e.currentTarget); }}>
               <For each={NOTE_NAMES}>{(n, i) => <option value={String(i())}>{n}</option>}</For>
             </select>
             <select class="sel" value={String(scaleIdx())} onChange={e => { if (rollKey() == null) setRollKey(root()); setRollScale(+e.currentTarget.value); commit([setKeyOp(rollKey() ?? root(), +e.currentTarget.value)], t('b.pr.keySet')); backToRoll(e.currentTarget); }}>

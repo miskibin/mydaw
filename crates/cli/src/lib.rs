@@ -410,10 +410,15 @@ fn run(cmd: &str, a: &Args) -> Result<Value, Fail> {
                         if parts.len() < 3 {
                             return Err(u(format!("--voice is CH:K:N[:ROT[:VEL]] (voice {i})")));
                         }
-                        let num = |i: usize| parts.get(i).and_then(|x| x.trim().parse::<f64>().ok())
-                            .ok_or_else(|| u(format!("--voice {i}: bad number `{}`", parts.get(i).unwrap_or(&"")).into()));
-                        voices.push(json!({"ch": num(0)? as u64, "k": num(1)? as u32, "n": num(2)? as u32,
-                            "rotate": num(3).unwrap_or(0.0) as i32, "vel": num(4).unwrap_or(0.7)}));
+                        let num = |i: usize, name: &str| match parts.get(i) {
+                            // absent → the caller's default; present-but-malformed → an error
+                            Some(x) => x.trim().parse::<f64>().map(Some).map_err(|_| u(format!("--voice {i}: bad number `{x}` for {name}"))),
+                            None => Ok(None),
+                        };
+                        voices.push(json!({"ch": num(0, "CH")?.ok_or_else(|| u(format!("--voice {i}: missing CH")))? as u64,
+                            "k": num(1, "K")?.ok_or_else(|| u(format!("--voice {i}: missing K")))? as u32,
+                            "n": num(2, "N")?.ok_or_else(|| u(format!("--voice {i}: missing N")))? as u32,
+                            "rotate": num(3, "ROT")?.unwrap_or(0.0) as i32, "vel": num(4, "VEL")?.unwrap_or(0.7)}));
                     }
                     if voices.is_empty() {
                         return Err(u("drums needs at least one --voice CH:K:N".into()));
@@ -427,8 +432,10 @@ fn run(cmd: &str, a: &Args) -> Result<Value, Fail> {
                 // a channel id here is the Channel Rack channel: accepted as-is, validated by the engine
             }
             let mut op = json!({"op": "transformNotes", "pattern": pattern, "verb": verb_json});
-            if let Some(seed) = f("seed").map_err(u)? {
-                op["seed"] = json!(seed as u64);
+            if let Some(seed) = a.get("seed") {
+                // the op seed is u64: parse it directly, an f64 round-trip loses bits above 2^53
+                let s = seed.trim().parse::<u64>().map_err(|_| u(format!("--seed must be an unsigned integer, got `{seed}`")))?;
+                op["seed"] = json!(s);
             }
             if let Some(sel) = a.get("select") {
                 let (from, rest) = sel.split_once(':').ok_or_else(|| u("--select is FROM:TO[@CH]".into()))?;

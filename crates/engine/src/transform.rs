@@ -173,42 +173,43 @@ fn euclidean_onsets(k: u32, n: u32, rotate: i32) -> Vec<bool> {
 
 /// Replace channel `ch`'s notes with `k` onsets over `n` slots across `len_steps`
 /// (the pattern length in 16ths), rotated. Notes are 1 step long, the channel's root,
-/// velocity `vel` (every fourth onset accents to 1.0).
+/// velocity `vel` — every fourth *emitted* onset accents to 1.0, whatever rotation does
+/// to the slot positions.
 pub fn euclidean_fill(notes: &mut Vec<Note>, ch: Id, k: u32, n: u32, rotate: i32, vel: f32, len_steps: u32) {
     notes.retain(|n| n.ch != ch);
     let onsets = euclidean_onsets(k, n, rotate);
     let slot = len_steps as f32 / n.max(1) as f32;
+    let mut hits = 0usize;
     for (i, on) in onsets.iter().enumerate() {
         if *on {
             notes.push(Note {
                 ch,
-                step: (i as f32 * slot).round() * 0.001 + i as f32 * slot,
+                step: i as f32 * slot,
                 len: slot.clamp(0.25, 1.0),
                 p: None,
-                v: if i % 4 == 0 { 1.0 } else { vel },
+                v: if hits.is_multiple_of(4) { 1.0 } else { vel },
             });
+            hits += 1;
         }
     }
 }
 
-/// Spread simultaneous notes (same channel, same start) by pitch, offsetting the i-th
-/// by `width` steps and nudging velocity by `ramp` per note: chords become strums.
+/// Spread simultaneous notes (same channel, same start — wherever they sit in the
+/// array) by pitch, offsetting the i-th by `width` steps and nudging velocity by `ramp`
+/// per note: chords become strums.
 pub fn strum(notes: &mut [Note], width: f32, ramp: f32) {
-    let mut i = 0;
-    while i < notes.len() {
-        let mut j = i;
-        while j < notes.len() && notes[j].step == notes[i].step {
-            j += 1;
+    let mut groups: std::collections::HashMap<(Id, u64), Vec<usize>> = std::collections::HashMap::new();
+    for (i, n) in notes.iter().enumerate() {
+        groups.entry((n.ch, n.step.to_bits() as u64)).or_default().push(i);
+    }
+    let mut groups: Vec<Vec<usize>> = groups.into_values().filter(|g| g.len() > 1).collect();
+    for g in &mut groups {
+        g.sort_by_key(|&i| notes[i].p.unwrap_or(60));
+        for (k, &i) in g.iter().enumerate() {
+            let n = &mut notes[i];
+            n.step += k as f32 * width;
+            n.v = (n.v + k as f32 * ramp).clamp(0.05, 1.0);
         }
-        let group = &mut notes[i..j];
-        if group.len() > 1 {
-            group.sort_by_key(|n| n.p.unwrap_or(60));
-            for (k, n) in group.iter_mut().enumerate() {
-                n.step += k as f32 * width;
-                n.v = (n.v + k as f32 * ramp).clamp(0.05, 1.0);
-            }
-        }
-        i = j;
     }
 }
 
@@ -226,9 +227,11 @@ pub fn melody(notes: &mut Vec<Note>, ch: Id, key_scale: (u8, u32), bars: u32, de
     let mut seq: Vec<(i32, f32)> = Vec::new(); // per-slot (degree index, len); -1 = rest
     let rep = repeat.max(1) as usize;
     for bar in 0..bars.max(1) as usize {
+        // the first `repeat` bars invent the motif; every later bar replays its cycle's
+        // rhythm with the walk nudged ±1 degree, so the melody repeats instead of wandering
+        let build = bar < rep;
         for slot in 0..16usize {
-            let idx = bar * 16 + slot;
-            let (d, len) = if bar % rep == 0 || seq.len() <= idx {
+            let (d, len) = if build {
                 let len = if rng.unit() < 0.3 { 2.0 } else { 1.0 };
                 if rng.unit() < density.clamp(0.05, 1.0) {
                     deg = (deg + [0, -1, 1, 2, -2][rng.below(5)]).clamp(0, n - 1);
@@ -239,7 +242,6 @@ pub fn melody(notes: &mut Vec<Note>, ch: Id, key_scale: (u8, u32), bars: u32, de
                     (-1, len)
                 }
             } else {
-                // repeat cycle: replay this slot's rhythm, nudge the degree
                 let (sd, sl) = seq[(bar % rep) * 16 + slot];
                 if sd < 0 {
                     (-1, sl)
@@ -350,8 +352,15 @@ mod tests {
     fn strum_spreads_a_chord_by_pitch() {
         let notes = &mut vec![note(1, 4.0, 0.8), Note { ch: 1, step: 4.0, len: 1.0, p: Some(64), v: 0.8 }, Note { ch: 1, step: 4.0, len: 1.0, p: Some(57), v: 0.8 }];
         strum(notes, 0.25, 0.05);
-        assert!(notes[0].step < notes[1].step && notes[1].step < notes[2].step); // lowest first
-        assert!((notes[2].step - notes[1].step - 0.25).abs() < 1e-5);
+        // array positions stay, offsets follow pitch rank: lowest starts first
+        let by = |p: u8| notes.iter().find(|n| n.p == Some(p)).unwrap().step;
+        assert_eq!(by(57), 4.0);
+        assert_eq!(by(60), 4.25);
+        assert_eq!(by(64), 4.5);
+        let vof = |p: u8| notes.iter().find(|n| n.p == Some(p)).unwrap().v;
+        assert_eq!(vof(57), 0.8);
+        assert_eq!(vof(60), 0.85);
+        assert_eq!(vof(64), 0.90000004);
     }
 
     #[test]
@@ -365,5 +374,66 @@ mod tests {
         let b = &mut vec![];
         melody(b, 3, (0, 1), 2, 0.5, 1, 77);
         assert_eq!(a, b);
+    }
+
+    #[test]
+    fn melody_repeat_replays_the_motif() {
+        let a = &mut vec![];
+        melody(a, 3, (0, 1), 2, 0.5, 2, 41);
+        let cycle = a.len();
+        assert!(cycle > 0);
+        let b = &mut vec![];
+        melody(b, 3, (0, 1), 4, 0.5, 2, 41);
+        // bars 3–4 replay bars 1–2's rhythm: exactly twice the notes, first half identical
+        assert_eq!(b.len(), cycle * 2);
+        assert_eq!(&b[..cycle], &a[..]);
+        // the replay nudges the walk, so it is not a byte-copy of the cycle
+        let same = a.iter().zip(b[cycle..].iter()).filter(|(x, y)| x.p == y.p).count();
+        assert!(same < cycle, "replayed bars must deviate from the motif");
+    }
+
+    #[test]
+    fn strum_groups_nonadjacent_same_step_notes() {
+        let notes = &mut vec![note(1, 4.0, 0.8), Note { ch: 1, step: 8.0, len: 1.0, p: Some(64), v: 0.8 }, Note { ch: 1, step: 4.0, len: 1.0, p: Some(57), v: 0.8 }];
+        strum(notes, 0.25, 0.0);
+        // the two step-4 notes form one chord (lowest first) even though they are
+        // separated by the step-8 note; the lone step-8 note does not move
+        assert!(notes.iter().any(|n| (n.p == Some(57) && (n.step - 4.0).abs() < 1e-4)));
+        assert!(notes.iter().any(|n| (n.p == Some(60) && (n.step - 4.25).abs() < 1e-4)));
+        assert!(notes.iter().any(|n| (n.p == Some(64) && (n.step - 8.0).abs() < 1e-4)));
+    }
+
+    /// Golden values for one fixed seed per verb; the TS mirror pins the same numbers
+    /// (`ui/src/lib/transforms.test.ts`), so engine and browser mock agree bit for bit.
+    /// Refresh by running with `--nocapture` and copying the H/Q/S/E/M lines.
+    #[test]
+    fn golden_fixed_seed_values() {
+        let h = &mut vec![note(1, 4.0, 0.8)];
+        humanize(h, 0.5, 0.4, &mut SplitMix64::new(41));
+        assert_eq!(h[0].step, 4.033452);
+        assert_eq!(h[0].v, 0.67452526);
+        let q = &mut vec![note(1, 4.3, 0.8)];
+        quantize(q, 1.0, 1.0, None, &[]);
+        assert_eq!(q[0].step, 4.0);
+        let s = &mut vec![note(1, 4.0, 0.8), Note { ch: 1, step: 4.0, len: 1.0, p: Some(64), v: 0.8 }, Note { ch: 1, step: 4.0, len: 1.0, p: Some(57), v: 0.8 }];
+        strum(s, 0.25, 0.05);
+        // array positions stay; the lowest pitch starts first, each next +width
+        let by = |p: u8| s.iter().find(|n| n.p == Some(p)).unwrap();
+        assert_eq!(by(57).step, 4.0);
+        assert_eq!(by(60).step, 4.25);
+        assert_eq!(by(64).step, 4.5);
+        assert_eq!(by(64).v, 0.90000004);
+        let e = &mut vec![note(1, 2.0, 0.9)];
+        euclidean_fill(e, 1, 5, 16, 0, 0.7, 16);
+        let steps: Vec<f32> = e.iter().map(|n| n.step).collect();
+        assert_eq!(steps, [0.0, 4.0, 7.0, 10.0, 13.0]);
+        let vel: Vec<f32> = e.iter().map(|n| n.v).collect();
+        assert_eq!(vel, [1.0, 0.7, 0.7, 0.7, 1.0]);
+        let m = &mut vec![];
+        melody(m, 3, (9, 2), 2, 0.55, 1, 7);
+        let mp: Vec<u8> = m.iter().map(|n| n.p.unwrap()).collect();
+        assert_eq!(mp, [57, 57, 57, 59, 59, 59, 62, 65, 64, 62, 64, 64, 62, 62, 62, 62]);
+        let ms: Vec<f32> = m.iter().map(|n| n.step).collect();
+        assert_eq!(ms, [1.0, 2.0, 3.0, 5.0, 8.0, 10.0, 12.0, 15.0, 17.0, 18.0, 19.0, 21.0, 24.0, 26.0, 28.0, 31.0]);
     }
 }
