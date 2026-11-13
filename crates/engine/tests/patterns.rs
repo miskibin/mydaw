@@ -59,7 +59,7 @@ fn render(p: Project, beats: f64) -> Vec<f32> {
 }
 
 fn left(x: &[f32]) -> Vec<f32> {
-    x.chunks_exact(2).map(|f| f[0]).collect()
+    x.as_chunks::<2>().0.iter().map(|f| f[0]).collect()
 }
 
 /// First frame whose level exceeds `thr`.
@@ -385,7 +385,7 @@ fn channels_mute_solo_route_and_remove() {
     hc.mute = true;
     e.apply(&[Op::PutChannel { channel: kc, index: None }, Op::PutChannel { channel: hc, index: None }], false, None).unwrap();
     let out = e.render(0.0, 4.0, 0.0, SR).unwrap();
-    let r: Vec<f32> = out.chunks_exact(2).map(|f| f[1]).collect();
+    let r: Vec<f32> = out.as_chunks::<2>().0.iter().map(|f| f[1]).collect();
     assert!(rms(&left(&out)) > 0.01 && rms(&r) < 1e-9);
     // removing a channel removes its notes everywhere
     e.apply(&[Op::RemoveChannel { id: k }], false, None).unwrap();

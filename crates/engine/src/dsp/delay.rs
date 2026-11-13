@@ -502,8 +502,8 @@ impl Processor for Delay {
                 let lfo_v = (self.lfo * std::f64::consts::TAU).sin() as f32;
                 if ftype_lp != 0 {
                     let f = self.cutoff.v.exp() * 2f32.powf(3.0 * self.mcut.v * lfo_v);
-                    for c in 0..2 {
-                        self.svf[c].set(f, sr, k_res);
+                    for filter in &mut self.svf {
+                        filter.set(f, sr, k_res);
                     }
                 }
                 let tv = self.tone.v;

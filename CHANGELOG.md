@@ -7,6 +7,7 @@ shown in the app after an update and is published as the release notes (see
 ## Unreleased
 
 ### Added
+- **Wrap effect tails on WAV loops.** Choose *Wrap* to hear the end of the delay and reverb at the start of the exported mix or stems. The file is one loop long.
 - **Export 24-bit PCM WAV.** Choose it for the mix or stems and enable dithering if needed. WAV defaults to 32-bit float.
 - **Open `.wave` projects from Windows File Explorer.** Projects have a document icon and open on double-click. If WAVE is already running, it brings the window forward and asks about unsaved changes before switching projects.
 - **Tune a vocal to the melody you played in the piano roll.** Play a melody, sing along to it,
@@ -34,6 +35,7 @@ shown in the app after an update and is published as the release notes (see
   double-click for 0 dB, right-click to automate).
 
 ### Fixed
+- Loop takes keep their recorded ending when you stop on the boundary. Starting partway through a loop also keeps the start of every following pass.
 - The pitch editor's preview now plays your pitch edits (it used to play the original recording).
 - The reference list no longer offers drum hits and one-shots: only recordings in the playlist or
   a comp, at least a second long.

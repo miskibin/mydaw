@@ -36,7 +36,7 @@ impl Audio {
         // cap at 30 minutes so a stray podcast cannot eat the machine
         let d = wave_audio_file::decode_stereo(path, |sr| Some((sr * 1800.0) as usize)).map_err(|e| e.to_string())?;
         let sr = d.sample_rate.round() as u32;
-        let mono = d.data.chunks_exact(2).all(|f| f[0] == f[1]);
+        let mono = d.data.as_chunks::<2>().0.iter().all(|f| f[0] == f[1]);
         Ok(Self::from_stereo(d.data, sr, if mono { 1 } else { 2 }))
     }
 
@@ -94,7 +94,7 @@ impl Audio {
     pub fn derived(&self, norm: bool, rev: bool) -> Audio {
         let mut c = self.content().to_vec();
         if rev {
-            let frames: Vec<[f32; 2]> = c.chunks_exact(2).rev().map(|f| [f[0], f[1]]).collect();
+            let frames: Vec<[f32; 2]> = c.as_chunks::<2>().0.iter().rev().copied().collect();
             c = frames.into_iter().flatten().collect();
         }
         if norm {
@@ -276,7 +276,7 @@ impl Stretcher {
 
 /// Mono mix of a variant.
 pub fn mono_of(audio: &Audio) -> Vec<f32> {
-    audio.content().chunks_exact(2).map(|f| (f[0] + f[1]) * 0.5).collect()
+    audio.content().as_chunks::<2>().0.iter().map(|f| (f[0] + f[1]) * 0.5).collect()
 }
 
 /// The part of the audio [`SourceStore::clip_audio`] returned that clip `c` plays, in

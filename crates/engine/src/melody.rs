@@ -83,8 +83,7 @@ pub fn fit(take: &PitchAnalysis, region: (f64, f64), notes: &[MelodyNote]) -> f3
     let (f0, f1) = (((region.0 * r) as usize).min(take.curve.len()), ((region.1 * r) as usize).min(take.curve.len()));
     let (mut sung, mut hit) = (0usize, 0usize);
     let mut i0 = 0usize;
-    for f in f0..f1 {
-        let u = take.curve[f];
+    for (f, &u) in take.curve.iter().enumerate().take(f1).skip(f0) {
         if u.is_nan() {
             continue;
         }

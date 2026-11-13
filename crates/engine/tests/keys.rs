@@ -71,7 +71,7 @@ fn render(p: Project, with_bank: bool) -> Vec<f32> {
     if with_bank {
         e.set_keys_bank(Some(bank()));
     }
-    e.render(0.0, 4.0, 0.0, SR).unwrap().chunks_exact(2).map(|f| f[0]).collect()
+    e.render(0.0, 4.0, 0.0, SR).unwrap().as_chunks::<2>().0.iter().map(|f| f[0]).collect()
 }
 
 fn note(step: f32, len: f32, key: u8, v: f32) -> Note {

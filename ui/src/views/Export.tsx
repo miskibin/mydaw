@@ -8,7 +8,8 @@ import { S } from '../state/store';
 import { say, setU, U } from '../state/ui';
 import { Segmented } from '../ui/Knob';
 
-const TAILS = [0, 2, 8] as const;
+const TAILS = [0, 2, 8, 0] as const;
+const WRAP = 3;
 const RATES = [48000, 44100] as const;
 const KBPS = [320, 256, 192, 128] as const;
 const FKEY = 'wave.export.fmt';
@@ -21,7 +22,7 @@ function ExportDialog() {
   const saved = (() => { try { return (JSON.parse(localStorage.getItem(FKEY) ?? '{}') ?? {}) as { mp3?: boolean; kb?: number; stems?: boolean; master?: boolean; wavBits?: number; dither?: boolean }; } catch { return {}; } })();
   const loopOk = () => hasLoop(S.project.loop);
   const [useLoop, setUseLoop] = createSignal(false);
-  const [tailI, setTailI] = createSignal(1); // 2 s
+  const [tailI, setTailI] = createSignal<0 | 1 | 2 | 3>(1); // 2 s
   const [rateI, setRateI] = createSignal(0); // 48 kHz
   const [mp3, setMp3] = createSignal(!!saved.mp3);
   const [kbI, setKbI] = createSignal(Math.max(0, KBPS.indexOf((saved.kb ?? 320) as 320)));
@@ -31,8 +32,11 @@ function ExportDialog() {
   const [dither, setDither] = createSignal(saved.dither === true);
   const remember = () => { try { localStorage.setItem(FKEY, JSON.stringify({ mp3: mp3(), kb: KBPS[kbI()], stems: stems(), master: master(), wavBits: wavBits(), dither: dither() })); } catch { /* ignore */ } };
   const wav = () => stems() || !mp3();
+  const canWrap = () => wav() && useLoop() && loopOk();
+  const tailChoice = () => tailI() === WRAP && !canWrap() ? 1 : tailI();
+  const tailSeconds = () => TAILS[tailChoice()];
   const wavDepth = () => wavBits() === 24 ? '24-bit PCM' : '32-bit float';
-  const wavOptions = () => ({ wavBits: wavBits(), dither: wavBits() === 24 && dither() });
+  const wavOptions = () => ({ wavBits: wavBits(), dither: wavBits() === 24 && dither(), wrapTail: tailChoice() === WRAP });
   const [prog, setProg] = createSignal<ExportProgress | null>(null);
   onMount(() => {
     const un = be().on('export-progress', p => setProg(p));
@@ -44,14 +48,14 @@ function ExportDialog() {
   const [err, setErr] = createSignal<string | null>(null);
 
   const range = () => exportRange(S.project, useLoop() && loopOk());
-  const seconds = () => exportSeconds(range().from, range().to, S.project.bpm, TAILS[tailI()]);
+  const seconds = () => exportSeconds(range().from, range().to, S.project.bpm, tailSeconds());
   const close = () => { if (!busy()) setU('exportOpen', false); };
 
   const start = async () => {
     if (busy()) return;
     setBusy(true); setU('exportBusy', true); setErr(null); setProg(null);
     try {
-      const common = { useLoop: useLoop() && loopOk(), tail: TAILS[tailI()], sampleRate: RATES[rateI()] };
+      const common = { useLoop: useLoop() && loopOk(), tail: tailSeconds(), sampleRate: RATES[rateI()] };
       if (stems()) {
         const r = await be().exportStems({ ...common, includeMaster: master(), ...wavOptions() });
         setU('exportBusy', false);
@@ -100,7 +104,7 @@ function ExportDialog() {
 
   return (
     <div class="overlay" onPointerDown={() => close()}>
-      <div class="dialog" style={{ width: 'min(420px,92vw)' }} onPointerDown={e => e.stopPropagation()} onKeyDown={e => { if (e.key !== 'Escape') e.stopPropagation(); }}>
+      <div class="dialog" role="dialog" aria-modal="true" aria-label={t('a.ex.title')} style={{ width: 'min(420px,92vw)' }} onPointerDown={e => e.stopPropagation()} onKeyDown={e => { if (e.key !== 'Escape') e.stopPropagation(); }}>
         <div class="hd"><span>{t('a.ex.title')}</span><button disabled={busy()} onClick={() => setU('exportOpen', false)}>×</button></div>
         <Show when={!busy()} fallback={
           <div style={{ display: 'flex', 'flex-direction': 'column', gap: '14px' }}>
@@ -132,10 +136,10 @@ function ExportDialog() {
             />
             <label>{t('a.ex.tail')}</label>
             <Segmented
-              options={[t('a.ex.cut'), '2 s', '8 s']}
-              value={() => tailI()}
-              pick={i => setTailI(i as 0 | 1 | 2)}
-              title={t('a.ex.tailTip')}
+              options={canWrap() ? [t('a.ex.cut'), '2 s', '8 s', t('a.ex.wrap')] : [t('a.ex.cut'), '2 s', '8 s']}
+              value={tailChoice}
+              pick={i => setTailI(i as 0 | 1 | 2 | 3)}
+              title={t(canWrap() ? 'a.ex.wrapTip' : 'a.ex.tailTip')}
             />
             <label>{t('a.ex.rate')}</label>
             <Segmented

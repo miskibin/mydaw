@@ -1023,7 +1023,8 @@ export class MockBackend implements Backend {
   async exportAudio(opts: ExportAudioOptions): Promise<ExportResult> {
     this.exportAbort = false;
     const { from, to } = exportRange(this.p, opts.useLoop);
-    const secs = exportSeconds(from, to, this.p.bpm, opts.tail);
+    const tail = opts.format !== 'mp3' && opts.wrapTail ? 0 : opts.tail;
+    const secs = exportSeconds(from, to, this.p.bpm, tail);
     // Simulate a short offline bounce so the dialog's busy/cancel path is exercisable.
     const steps = 8;
     for (let i = 0; i < steps; i++) {
@@ -1036,7 +1037,7 @@ export class MockBackend implements Backend {
       out: name,
       fromBeat: from,
       toBeat: to,
-      tail: opts.tail,
+      tail,
       stats: {
         seconds: secs,
         sampleRate: opts.sampleRate,
@@ -1052,7 +1053,8 @@ export class MockBackend implements Backend {
   async exportStems(opts: ExportStemsOptions): Promise<ExportStemsResult> {
     this.exportAbort = false;
     const { from, to } = exportRange(this.p, opts.useLoop);
-    const secs = exportSeconds(from, to, this.p.bpm, opts.tail);
+    const tail = opts.wrapTail ? 0 : opts.tail;
+    const secs = exportSeconds(from, to, this.p.bpm, tail);
     const jobs = [
       ...(opts.includeMaster ? [{ name: 'Master', master: true }] : []),
       ...stemInserts(this.p).map(m => ({ name: m.name.trim() || `Insert ${m.id}`, master: false })),
@@ -1071,7 +1073,7 @@ export class MockBackend implements Backend {
     }
     this.emit('export-progress', { done: jobs.length, total: jobs.length, name: '' });
     const dir = this.path ? this.path.replace(/[\\/][^\\/]*$/, '') : 'C:\\Users\\michal\\Music';
-    return { dir, fromBeat: from, toBeat: to, tail: opts.tail, format: 'wav', files, skipped: [] };
+    return { dir, fromBeat: from, toBeat: to, tail, format: 'wav', files, skipped: [] };
   }
   async exportCancel() { this.exportAbort = true; }
 

@@ -140,6 +140,11 @@ app as **Eksport** (`Ctrl+Shift+R`): song or loop, a 0/2/8 s effect tail, and
 `--wav-bits 24` and add `--dither` for optional triangular dither. Integer WAV
 clips samples beyond full scale. The export stats report those peaks before conversion.
 
+Select **Wrap** when exporting a WAV loop to carry the effect tail into its
+start. The result is one loop long. In the CLI, use `--wrap-tail` with the
+project loop or specify both `--from` and `--to`. This works for stereo mixes
+and stems.
+
 ### Stems
 
 ```sh

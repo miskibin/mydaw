@@ -719,3 +719,55 @@ fn a_loop_does_not_play_the_downbeat_after_its_end() {
     let peak = loud(&p);
     assert!(peak < 1e-4, "the downbeat after the loop leaked into it: peak {peak}");
 }
+
+#[test]
+fn wrapped_mix_and_stem_keep_exactly_one_pass_with_the_echo_at_its_start() {
+    let mut p = Project::routed();
+    let [kick, ..] = p.add_starter_kit();
+    let insert = p.tracks[0].insert;
+    p.patterns[0].notes = vec![Note::new(kick, 15.0, 1.0, None)];
+    p.patterns[0].len = 8.0;
+    p.clips = vec![Clip {
+        id: 50,
+        track: 0,
+        start: 4.0,
+        len: 8.0,
+        offset: 0.0,
+        kind: ClipKind::Pat,
+        source: p.patterns[0].id,
+        muted: false,
+        gain: 0.0,
+        fade_in: 0.0,
+        fade_out: 0.0,
+        pan: 0.0,
+        norm: false,
+        rev: false,
+        tune: None,
+        stretch: 1.0,
+        resample: false,
+        pitch: 0.0,
+    }];
+    for mixer in &mut p.inserts {
+        mixer.fx.clear();
+    }
+    let mut delay = new_fx(7000, FxKind::Delay, p.bpm);
+    for (key, value) in [("sync", 1.0), ("time", 200.0), ("mix", 100.0), ("fb", 0.0)] {
+        delay.params.insert(key.into(), value);
+    }
+    p.inserts.iter_mut().find(|m| m.id == insert).unwrap().fx.push(delay);
+    let e = Engine::new(p, Arc::new(NoPlugins));
+    let cancel = AtomicBool::new(false);
+    for rate in [44_100, 48_000] {
+        let frames = (1.875 * f64::from(rate)).round() as usize;
+        for target in [None, Some(insert)] {
+            let cut = e.render_export(target, 4.0, 8.0, RenderTail::Seconds(0.0), rate, &cancel).unwrap();
+            let wrap = e.render_export(target, 4.0, 8.0, RenderTail::Wrap, rate, &cancel).unwrap();
+            let first = rate as usize / 4 * 2;
+            assert_eq!(wrap.len(), frames * 2);
+            assert!(rms(&cut[..first]) < 1e-6);
+            assert!(rms(&wrap[..first]) > 1e-3);
+        }
+    }
+    cancel.store(true, std::sync::atomic::Ordering::Relaxed);
+    assert!(matches!(e.render_export(None, 4.0, 8.0, RenderTail::Wrap, 48_000, &cancel), Err(EngineError::Cancelled)));
+}

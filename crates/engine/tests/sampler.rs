@@ -79,7 +79,7 @@ fn engine(name: &str, set: impl Fn(&mut SamplerState), notes: &[(f32, f32, Optio
 
 /// Left channel of the first `beats` beats.
 fn render(e: &Engine, beats: f64) -> Vec<f32> {
-    e.render(0.0, beats, 0.0, SR).unwrap().chunks_exact(2).map(|f| f[0]).collect()
+    e.render(0.0, beats, 0.0, SR).unwrap().as_chunks::<2>().0.iter().map(|f| f[0]).collect()
 }
 
 fn peak(x: &[f32]) -> f32 {

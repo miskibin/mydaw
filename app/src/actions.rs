@@ -185,29 +185,50 @@ impl ExportFormat {
     }
 }
 
+#[derive(Clone, Copy)]
+pub struct Bounce {
+    pub from: f64,
+    pub to: f64,
+    pub tail: f64,
+    pub rate: u32,
+    pub wrap: bool,
+}
+
+impl Bounce {
+    fn render(self, engine: &wave_engine::Engine, insert: Option<u64>, cancel: &std::sync::atomic::AtomicBool) -> R<Vec<f32>> {
+        use wave_engine::RenderTail;
+        let tail = if self.wrap { RenderTail::Wrap } else { RenderTail::Seconds(self.tail) };
+        engine.render_export(insert, self.from, self.to, tail, self.rate, cancel).map_err(|e| e.to_string())
+    }
+
+    fn tail_seconds(self) -> f64 {
+        if self.wrap {
+            0.0
+        } else {
+            self.tail
+        }
+    }
+}
+
 /// Offline bounce shared by the GUI export dialog and `wave render`.
-#[allow(clippy::too_many_arguments)]
 pub fn render_to_file(
     app: &Arc<App>,
     out: &std::path::Path,
-    from: f64,
-    to: f64,
-    tail: f64,
-    rate: u32,
+    bounce: Bounce,
     cancel: &std::sync::atomic::AtomicBool,
     fmt: ExportFormat,
 ) -> R<Value> {
-    if to <= from {
-        return Err("`to` must be after `from`".into());
+    if bounce.wrap && !matches!(fmt, ExportFormat::Wav(_)) {
+        return Err("wrap tail requires WAV export".into());
     }
     // a bounce must not start while the piano is still loading (it would be silent)
     crate::keys::wait(app);
-    let audio = app.engine.render_cancelable(from, to, tail, rate, cancel).map_err(|e| e.to_string())?;
+    let audio = bounce.render(&app.engine, None, cancel)?;
     if cancel.load(std::sync::atomic::Ordering::Relaxed) {
         return Err("cancelled".into());
     }
     match fmt {
-        ExportFormat::Wav(encoding) => encoding.write(out, &audio, rate)?,
+        ExportFormat::Wav(encoding) => encoding.write(out, &audio, bounce.rate)?,
         ExportFormat::Mp3 { kbps } => {
             let title = app
                 .engine
@@ -215,16 +236,17 @@ pub fn render_to_file(
                 .path
                 .as_deref()
                 .and_then(|p| std::path::Path::new(p).file_stem().map(|s| s.to_string_lossy().into_owned()));
-            wave_engine::sources::write_mp3(out, &audio, rate, kbps, title.as_deref())?
+            wave_engine::sources::write_mp3(out, &audio, bounce.rate, kbps, title.as_deref())?
         }
     }
     Ok(json!({
         "out": out.display().to_string(),
-        "fromBeat": from,
-        "toBeat": to,
-        "tail": tail,
+        "fromBeat": bounce.from,
+        "toBeat": bounce.to,
+        "tail": bounce.tail_seconds(),
+        "wrapTail": bounce.wrap,
         "format": fmt.extension(),
-        "stats": stats(&audio, rate),
+        "stats": stats(&audio, bounce.rate),
     }))
 }
 
@@ -277,21 +299,17 @@ pub fn unique_file_stems(names: &[String]) -> Vec<String> {
 ///
 /// Nothing is left behind on cancel or error: files are written as `*.wav.part` and renamed only
 /// once every stem has rendered. `progress(done, total, name)` is called before each file starts.
-#[allow(clippy::too_many_arguments)]
 pub fn render_stems_to_dir(
     engine: &wave_engine::Engine,
     dir: &std::path::Path,
-    from: f64,
-    to: f64,
-    tail: f64,
-    rate: u32,
+    bounce: Bounce,
     cancel: &std::sync::atomic::AtomicBool,
     include_master: bool,
     encoding: WavEncoding,
     progress: &dyn Fn(usize, usize, &str),
 ) -> R<Value> {
     use std::sync::atomic::Ordering::Relaxed;
-    if to <= from {
+    if bounce.to <= bounce.from {
         return Err("`to` must be after `from`".into());
     }
     let project = engine.project();
@@ -315,15 +333,11 @@ pub fn render_stems_to_dir(
     let rendered: R<()> = (|| {
         for (i, (job, name)) in jobs.iter().enumerate() {
             progress(i, total, name);
-            let audio = match job {
-                None => engine.render_cancelable(from, to, tail, rate, cancel),
-                Some(id) => engine.render_stem(*id, from, to, tail, rate, cancel),
-            }
-            .map_err(|e| e.to_string())?;
+            let audio = bounce.render(engine, *job, cancel)?;
             if cancel.load(Relaxed) {
                 return Err("cancelled".to_string());
             }
-            let st = stats(&audio, rate);
+            let st = stats(&audio, bounce.rate);
             // an insert that only looked busy (an empty pattern, an automation clip) gets no file
             if job.is_some() && st["silent"] == json!(true) {
                 skipped.push(name.clone());
@@ -331,7 +345,10 @@ pub fn render_stems_to_dir(
             }
             let file = format!("{}.wav", stems[i]);
             let part = dir.join(format!("{file}.part"));
-            encoding.write(&part, &audio, rate).map_err(|e| format!("cannot write {file}: {e}"))?;
+            if let Err(error) = encoding.write(&part, &audio, bounce.rate) {
+                let _ = std::fs::remove_file(&part);
+                return Err(format!("cannot write {file}: {error}"));
+            }
             parts.push((part, dir.join(&file)));
             files.push(json!({ "name": name, "file": file, "master": job.is_none(), "stats": st }));
         }
@@ -357,9 +374,10 @@ pub fn render_stems_to_dir(
     progress(total, total, "");
     Ok(json!({
         "dir": dir.display().to_string(),
-        "fromBeat": from,
-        "toBeat": to,
-        "tail": tail,
+        "fromBeat": bounce.from,
+        "toBeat": bounce.to,
+        "tail": bounce.tail_seconds(),
+        "wrapTail": bounce.wrap,
         "format": "wav",
         "files": files,
         "skipped": skipped,
@@ -369,10 +387,15 @@ pub fn render_stems_to_dir(
 pub fn render(app: &Arc<App>, a: &Value) -> R<Value> {
     let out = PathBuf::from(need_str(a, "out")?);
     let p = app.engine.project();
-    let from = opt_f64(a, "from").unwrap_or(0.0);
-    let to = opt_f64(a, "to").unwrap_or_else(|| p.loop_range.map(|l| l.b).unwrap_or(p.song_end()));
-    let tail = opt_f64(a, "tail").unwrap_or(2.0);
-    let rate = opt_f64(a, "rate").unwrap_or(48000.0) as u32;
+    let wrap = arg(a, "wrapTail").and_then(Value::as_bool).unwrap_or(false);
+    let from = opt_f64(a, "from");
+    let to = opt_f64(a, "to");
+    let (from, to) = match (wrap, p.loop_range) {
+        (true, Some(l)) if l.b > l.a => (from.unwrap_or(l.a), to.unwrap_or(l.b)),
+        (true, _) => from.zip(to).ok_or("wrap tail requires a project loop or both `from` and `to`")?,
+        (false, range) => (from.unwrap_or(0.0), to.unwrap_or_else(|| range.map_or_else(|| p.song_end(), |l| l.b))),
+    };
+    let bounce = Bounce { from, to, tail: opt_f64(a, "tail").unwrap_or(2.0), rate: opt_f64(a, "rate").unwrap_or(48000.0) as u32, wrap };
     let wav_bits = arg(a, "wavBits")
         .map(|value| match value.as_f64() {
             Some(24.0) => Ok(24),
@@ -394,18 +417,7 @@ pub fn render(app: &Arc<App>, a: &Value) -> R<Value> {
         let master = arg(a, "master").and_then(Value::as_bool).unwrap_or(true);
         // a stem export must not start while the piano is still loading (its stems would be silent)
         crate::keys::wait(app);
-        return render_stems_to_dir(
-            &app.engine,
-            &out,
-            from,
-            to,
-            tail,
-            rate,
-            &std::sync::atomic::AtomicBool::new(false),
-            master,
-            encoding,
-            &|_, _, _| {},
-        );
+        return render_stems_to_dir(&app.engine, &out, bounce, &std::sync::atomic::AtomicBool::new(false), master, encoding, &|_, _, _| {});
     }
     let by_ext = out.extension().and_then(|e| e.to_str()).filter(|e| e.eq_ignore_ascii_case("mp3")).map(|_| "mp3");
     let fmt = ExportFormat::parse(
@@ -414,7 +426,7 @@ pub fn render(app: &Arc<App>, a: &Value) -> R<Value> {
         wav_bits,
         dither,
     )?;
-    render_to_file(app, &out, from, to, tail, rate, &std::sync::atomic::AtomicBool::new(false), fmt)
+    render_to_file(app, &out, bounce, &std::sync::atomic::AtomicBool::new(false), fmt)
 }
 
 pub fn context(app: &App, full: bool) -> Value {
@@ -1179,7 +1191,7 @@ pub fn melody_reference(e: &wave_engine::Engine, clip_id: u64, channel: u64, spa
 
 #[cfg(test)]
 mod tests {
-    use super::{parse_steps, render_stems_to_dir, safe_file_stem, unique_file_stems, ExportFormat, WavEncoding};
+    use super::{parse_steps, render_stems_to_dir, safe_file_stem, unique_file_stems, Bounce, ExportFormat, WavEncoding};
     use std::sync::atomic::AtomicBool;
     use std::sync::Arc;
     use wave_engine::{Engine, NoPlugins, Project};
@@ -1202,6 +1214,10 @@ mod tests {
         Engine::new(Project::sketch(), Arc::new(NoPlugins))
     }
 
+    fn bounce(to: f64) -> Bounce {
+        Bounce { from: 0.0, to, tail: 0.0, rate: 48_000, wrap: false }
+    }
+
     #[test]
     fn wav_format_defaults_and_dither_validation() {
         assert_eq!(ExportFormat::parse(None, None, None, false).unwrap(), ExportFormat::Wav(WavEncoding::Float32));
@@ -1217,7 +1233,7 @@ mod tests {
         let dir = tmp("ok");
         let e = sketch();
         let seen = std::sync::Mutex::new(vec![]);
-        let r = render_stems_to_dir(&e, &dir, 0.0, 16.0, 0.0, 48_000, &AtomicBool::new(false), true, WavEncoding::Float32, &|d, t, n| {
+        let r = render_stems_to_dir(&e, &dir, bounce(16.0), &AtomicBool::new(false), true, WavEncoding::Float32, &|d, t, n| {
             seen.lock().unwrap().push((d, t, n.to_string()))
         })
         .unwrap();
@@ -1242,10 +1258,7 @@ mod tests {
         let r = render_stems_to_dir(
             &sketch(),
             &dir,
-            0.0,
-            16.0,
-            0.0,
-            48_000,
+            bounce(16.0),
             &AtomicBool::new(false),
             false,
             WavEncoding::Pcm24 { dither: false },
@@ -1263,19 +1276,8 @@ mod tests {
     fn a_stem_that_renders_silent_gets_no_file_and_is_reported() {
         // the hats only play from beat 8, so a bounce of beats 0..4 has nothing in them
         let dir = tmp("silent");
-        let r = render_stems_to_dir(
-            &sketch(),
-            &dir,
-            0.0,
-            4.0,
-            0.0,
-            48_000,
-            &AtomicBool::new(false),
-            false,
-            WavEncoding::Float32,
-            &|_, _, _| {},
-        )
-        .unwrap();
+        let r =
+            render_stems_to_dir(&sketch(), &dir, bounce(4.0), &AtomicBool::new(false), false, WavEncoding::Float32, &|_, _, _| {}).unwrap();
         assert_eq!(names(&dir), ["Bass.wav", "Drums.wav"]);
         assert_eq!(r["skipped"], serde_json::json!(["Hats"]));
         std::fs::remove_dir_all(&dir).ok();
@@ -1286,7 +1288,7 @@ mod tests {
         let dir = tmp("cancel");
         let cancel = AtomicBool::new(false);
         // cancel from the progress callback once the second file has started: one file is already on disk as .part
-        let r = render_stems_to_dir(&sketch(), &dir, 0.0, 16.0, 0.0, 48_000, &cancel, true, WavEncoding::Float32, &|d, _, _| {
+        let r = render_stems_to_dir(&sketch(), &dir, bounce(16.0), &cancel, true, WavEncoding::Float32, &|d, _, _| {
             if d == 2 {
                 cancel.store(true, std::sync::atomic::Ordering::Relaxed);
             }
@@ -1304,13 +1306,12 @@ mod tests {
         }
         let dir = tmp("none");
         let e = Engine::new(p, Arc::new(NoPlugins));
-        let err = render_stems_to_dir(&e, &dir, 0.0, 8.0, 0.0, 48_000, &AtomicBool::new(false), false, WavEncoding::Float32, &|_, _, _| {})
-            .unwrap_err();
+        let err =
+            render_stems_to_dir(&e, &dir, bounce(8.0), &AtomicBool::new(false), false, WavEncoding::Float32, &|_, _, _| {}).unwrap_err();
         assert!(err.contains("nothing to export"), "{err}");
         assert!(!dir.exists() || names(&dir).is_empty());
         // with the master asked for, the (silent) mix is still written: it is what the song sounds like
-        let r = render_stems_to_dir(&e, &dir, 0.0, 8.0, 0.0, 48_000, &AtomicBool::new(false), true, WavEncoding::Float32, &|_, _, _| {})
-            .unwrap();
+        let r = render_stems_to_dir(&e, &dir, bounce(8.0), &AtomicBool::new(false), true, WavEncoding::Float32, &|_, _, _| {}).unwrap();
         assert_eq!(names(&dir), ["Master.wav"]);
         assert_eq!(r["files"][0]["stats"]["silent"], true);
         std::fs::remove_dir_all(&dir).ok();
@@ -1323,10 +1324,7 @@ mod tests {
         let err = render_stems_to_dir(
             &sketch(),
             &blocker.join("stems"),
-            0.0,
-            8.0,
-            0.0,
-            48_000,
+            bounce(8.0),
             &AtomicBool::new(false),
             true,
             WavEncoding::Float32,

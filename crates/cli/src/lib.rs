@@ -64,6 +64,7 @@ FILES
   render --stems --out FOLDER [--no-master] [--from B --to B --tail SEC --rate HZ]
                                            one WAV per mixer insert with sound (named after it) + Master.wav
   WAV options: --wav-bits 24|32 (default 32-bit float); --dither (24-bit PCM only)
+               --wrap-tail (carry effects into the start of the loop)
   save [--path FILE] | open <FILE>
 
 PITCH  (Tune to Reference: pull a vocal take onto another performance of the same melody)
@@ -386,8 +387,10 @@ fn run(cmd: &str, a: &Args) -> Result<Value, Fail> {
             } else {
                 None
             };
-            if a.get("dither").is_some() {
-                return Err(u("--dither takes no value".into()));
+            for flag in ["dither", "wrap-tail"] {
+                if a.get(flag).is_some() {
+                    return Err(u(format!("--{flag} takes no value")));
+                }
             }
             send(
                 a,
@@ -397,7 +400,7 @@ fn run(cmd: &str, a: &Args) -> Result<Value, Fail> {
                     "from": a.num("from").map_err(u)?, "to": a.num("to").map_err(u)?,
                     "tail": a.num("tail").map_err(u)?, "rate": a.num("rate").map_err(u)?,
                     "format": a.get("format"), "mp3Kbps": a.num("kbps").map_err(u)?,
-                    "wavBits": wav_bits, "dither": a.has("dither"),
+                    "wavBits": wav_bits, "dither": a.has("dither"), "wrapTail": a.has("wrap-tail"),
                     "stems": a.has("stems"), "master": !a.has("no-master"),
                 }),
             )

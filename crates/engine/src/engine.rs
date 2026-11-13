@@ -100,6 +100,13 @@ pub enum EngineError {
     Cancelled,
 }
 
+#[derive(Clone, Copy, Debug)]
+pub enum RenderTail {
+    Seconds(f64),
+    /// Let one full pass initialize effects, then keep a second pass of the same length.
+    Wrap,
+}
+
 impl From<String> for EngineError {
     fn from(s: String) -> Self {
         EngineError::Msg(s)
@@ -277,6 +284,8 @@ pub struct Engine {
     skip_silent: std::sync::atomic::AtomicBool,
     midi_fast: MidiFast,
     midi_take: Mutex<MidiTake>,
+    /// Serializes transport changes while the callback drains a stopped take.
+    transport_control: Mutex<()>,
     /// Threads an offline render may use for the insert chains.
     render_workers: std::sync::atomic::AtomicUsize,
 }
@@ -325,6 +334,7 @@ impl Engine {
                 tx: Mutex::new(None),
             },
             midi_take: Mutex::new(MidiTake::default()),
+            transport_control: Mutex::new(()),
             render_workers: std::sync::atomic::AtomicUsize::new(
                 std::thread::available_parallelism().map(|n| n.get().saturating_sub(2).clamp(1, 8)).unwrap_or(1),
             ),
@@ -596,6 +606,7 @@ impl Engine {
     // ------------------------------------------------------------ transport
 
     pub fn play(&self, from: f64) {
+        let control = self.transport_control.lock();
         let mut c = self.core.lock();
         if c.take.is_some() || self.midi_take.lock().rec.is_some() {
             return;
@@ -622,19 +633,26 @@ impl Engine {
         c.transport.start_beat = from;
         c.transport.playing = true;
         send(&mut c, Cmd::Play { from, count_in, rec: rec_track.is_some(), rec_loop: lap.is_some() });
+        drop(control);
         self.changed(c);
     }
 
     pub fn stop(&self) {
+        let control = self.transport_control.lock();
         let mut c = self.core.lock();
-        send(&mut c, Cmd::Stop);
+        let drain = self.end_take(&mut c, true);
+        if drain.is_none() {
+            send(&mut c, Cmd::Stop);
+        }
         c.transport.playing = false;
         drop(c);
-        // give the callback a moment to flush the last input
-        thread::sleep(Duration::from_millis(30));
+        if let Some((shared, timeout)) = drain {
+            wait_for_take_input(&shared, timeout);
+        }
         self.finish_take();
         self.finish_midi_take();
         let c = self.core.lock();
+        drop(control);
         self.changed(c);
     }
 
@@ -645,6 +663,7 @@ impl Engine {
     }
 
     pub fn set_transport(&self, metro: Option<bool>, count_in: Option<bool>, rec: Option<bool>, monitor: Option<bool>) -> TransportDto {
+        let control = self.transport_control.lock();
         let mut c = self.core.lock();
         if let Some(v) = metro {
             c.transport.metro = v;
@@ -659,9 +678,7 @@ impl Engine {
             c.transport.monitor = v;
         }
         let punch_out = !c.transport.rec && (c.take.is_some() || self.midi_take.lock().rec.is_some());
-        if punch_out {
-            send(&mut c, Cmd::PunchOut);
-        }
+        let drain = if punch_out { self.end_take(&mut c, false) } else { None };
         // arming while the song plays punches in right away (on the first armed track)
         if c.transport.rec && c.transport.playing && c.take.is_none() {
             if let Some(track) = c.project.tracks.iter().position(|t| t.arm) {
@@ -684,14 +701,30 @@ impl Engine {
         let t = c.transport.clone();
         if punch_out {
             drop(c);
-            thread::sleep(Duration::from_millis(30));
+            if let Some((shared, timeout)) = drain {
+                wait_for_take_input(&shared, timeout);
+            }
             self.finish_take();
             self.finish_midi_take();
-            self.changed(self.core.lock());
+            let c = self.core.lock();
+            drop(control);
+            self.changed(c);
         } else {
+            drop(control);
             self.changed(c);
         }
         t
+    }
+
+    fn end_take(&self, c: &mut Core, stop: bool) -> Option<(Arc<Shared>, Duration)> {
+        let take = c.take.as_ref()?;
+        let shared = self.shared();
+        let frames = take.skip.max(shared.take_latency().unwrap_or_else(|| shared.io_latency()) as usize + take.pdc);
+        let timeout = Duration::from_millis(100) + Duration::from_secs_f64((frames as f64 / f64::from(take.sr)).min(2.0));
+        let cmd = Cmd::EndTake { stop, fallback_skip: take.skip, pdc: take.pdc };
+        shared.finishing_take.store(true, Release);
+        send(c, cmd);
+        Some((shared, timeout))
     }
 
     /// An empty take buffer for the live device (`None` without one). Its start is `start`
@@ -1617,7 +1650,7 @@ impl Engine {
     /// `cancel` is set. Checked between DSP blocks so a long bounce can stop without
     /// waiting for the whole file.
     pub fn render_cancelable(&self, from: f64, to: f64, tail: f64, sample_rate: u32, cancel: &AtomicBool) -> Result<Vec<f32>, EngineError> {
-        self.render_inner(None, from, to, tail, sample_rate, cancel)
+        self.render_export(None, from, to, RenderTail::Seconds(tail), sample_rate, cancel)
     }
 
     /// The mixer inserts a stem export writes a file for, in mixer order: every insert except the
@@ -1656,20 +1689,21 @@ impl Engine {
         sample_rate: u32,
         cancel: &AtomicBool,
     ) -> Result<Vec<f32>, EngineError> {
-        self.render_inner(Some(insert), from, to, tail, sample_rate, cancel)
+        self.render_export(Some(insert), from, to, RenderTail::Seconds(tail), sample_rate, cancel)
     }
 
-    fn render_inner(
+    /// Render a mix or stem, optionally keeping the effect state from a previous loop pass.
+    pub fn render_export(
         &self,
         stem: Option<Id>,
         from: f64,
         to: f64,
-        tail: f64,
+        tail: RenderTail,
         sample_rate: u32,
         cancel: &AtomicBool,
     ) -> Result<Vec<f32>, EngineError> {
-        if to <= from {
-            return Err(EngineError::Msg("`to` must be after `from`".into()));
+        if !from.is_finite() || !to.is_finite() || to <= from {
+            return Err(EngineError::Msg("render range must be finite and `to` must be after `from`".into()));
         }
         if sample_rate < 8000 {
             return Err(EngineError::Msg("sample rate must be at least 8000 Hz".into()));
@@ -1744,7 +1778,8 @@ impl Engine {
         let mut errs = HashMap::new();
         let graph = build_graph(&project, &HashSet::new(), sr, block, &*self.factory, false, &mut errs);
         let mut tl = build_timeline(&project, &mut |clip| store_snapshot.get(&clip.id).cloned(), &takes, &HashMap::new(), keys.as_ref());
-        tl.loop_range = None;
+        let wrap = matches!(tail, RenderTail::Wrap);
+        tl.loop_range = wrap.then_some((from, to));
         tl.song_end = TOTAL_BEATS;
         let _ = cmd_tx.push(Cmd::Graph(Box::new(graph)));
         for ch in &project.channels {
@@ -1755,20 +1790,33 @@ impl Engine {
         let _ = cmd_tx.push(Cmd::Timeline(Box::new(tl)));
         let _ = cmd_tx.push(Cmd::Play { from, count_in: 0.0, rec: false, rec_loop: false });
         let spb = 60.0 / project.bpm;
-        let frames = (((to - from).max(0.0) * spb + tail.max(0.0)) * sample_rate as f64) as usize;
-        let play_frames = ((to - from).max(0.0) * spb * sample_rate as f64) as usize;
+        let duration = (to - from) * spb;
+        let play_frames = (duration * f64::from(sample_rate)) as usize;
+        let (frames, warmup) = match tail {
+            RenderTail::Seconds(tail) => (((duration + tail.max(0.0)) * f64::from(sample_rate)) as usize, 0),
+            RenderTail::Wrap => {
+                let period = (duration * f64::from(sample_rate)).round() as usize;
+                if period == 0 {
+                    return Err(EngineError::Msg("loop is shorter than one sample".into()));
+                }
+                (period, period)
+            }
+        };
         // plugin delay compensation delays everything by `pdc` frames: render that much
         // longer and drop it from the front, so the file starts on `from` and the last
         // `pdc` frames of the song are not cut off
         let pdc = playback_latency(&project, sr);
-        let total = frames + pdc;
-        let mut out = Vec::with_capacity(frames * 2);
+        let too_long = || EngineError::Msg("render is too long".into());
+        let discard = warmup.checked_add(pdc).ok_or_else(too_long)?;
+        let total = frames.checked_add(discard).ok_or_else(too_long)?;
+        let mut out = Vec::new();
+        out.try_reserve_exact(frames.checked_mul(2).ok_or_else(too_long)?).map_err(|_| too_long())?;
         let mut l = vec![0f32; block];
         let mut r = vec![0f32; block];
         let mut done = 0;
         let mut stopped = false;
         let keep = |out: &mut Vec<f32>, at: usize, l: &[f32], r: &[f32]| {
-            for i in at.max(pdc).saturating_sub(at)..l.len() {
+            for i in discard.saturating_sub(at)..l.len() {
                 out.push(l[i]);
                 out.push(r[i]);
             }
@@ -1777,8 +1825,14 @@ impl Engine {
             if cancel.load(Relaxed) {
                 return Err(EngineError::Cancelled);
             }
-            let n = block.min(total - done);
-            if !stopped && done + n > play_frames {
+            let mut n = block.min(total - done);
+            if wrap {
+                let pos = done % frames;
+                if done != 0 && pos == 0 {
+                    let _ = cmd_tx.push(Cmd::LoopTo(from));
+                }
+                n = n.min(frames - pos);
+            } else if !stopped && done + n > play_frames {
                 // stop exactly at `to`: render up to it, then let tails ring
                 let k = play_frames.saturating_sub(done);
                 if k > 0 {
@@ -1993,18 +2047,27 @@ impl Engine {
         let total = data.len() / 2;
         // one pass per loop cycle; a last pass cut off within a beat of the wrap is not a take
         let mut bounds = vec![0];
-        bounds.extend(take.marks.iter().copied().filter(|&m| m < total));
-        bounds.push(total);
-        let mut passes: Vec<(f64, &[f32])> = vec![];
+        bounds.extend(take.marks.iter().copied().take_while(|&m| m <= total));
+        let complete = bounds.len() - 1;
+        if bounds.last() != Some(&total) {
+            bounds.push(total);
+        }
+        let mut passes = vec![];
         for k in 0..bounds.len() - 1 {
             let (f0, f1) = (bounds[k], bounds[k + 1]);
             let secs = f1.saturating_sub(f0) as f64 / sr;
-            let cut_short = k > 0 && k == bounds.len() - 2;
+            let cut_short = k > 0 && k >= complete;
             if secs < if cut_short { spb } else { 0.05 } {
                 continue;
             }
             let start = if k == 0 { take.start } else { take.lap.map(|l| l.0).unwrap_or(take.start) };
-            passes.push((start, &data[f0 * 2..f1 * 2]));
+            let full_len = take.lap.filter(|_| k < complete).map(|(_, end)| end - start);
+            // Each loop boundary is rounded to a device frame. Normalize that rounding only;
+            // a tempo or range edit during recording can change the actual pass length.
+            let exact = full_len
+                .map(|beats| (beats, (beats * spb * sr).round() as usize))
+                .filter(|(_, frames)| *frames > 0 && frames.abs_diff(f1 - f0) <= 1);
+            passes.push((start, exact, &data[f0 * 2..f1 * 2]));
         }
         if passes.is_empty() {
             return;
@@ -2012,16 +2075,20 @@ impl Engine {
         let before = c.project.clone();
         let dir = audio_dir(c);
         let mut landed = vec![];
-        for (start, data) in passes {
+        for (start, exact, data) in passes {
+            let mut data = data.to_vec();
+            if let Some((_, frames)) = exact {
+                data.resize(frames * 2, 0.0);
+            }
             let secs = data.len() as f64 / 2.0 / sr;
             let id = c.project.alloc_id();
             let n = c.project.sources.iter().filter(|s| s.name.starts_with("Take")).count() + 1;
             let name = format!("Take {n}");
             let path = fresh_path(&dir, &format!("{} {}", name, id));
-            if let Err(e) = write_wav(&path, data, take.sr) {
+            if let Err(e) = write_wav(&path, &data, take.sr) {
                 log::error!("could not write recording: {e}");
             }
-            let audio = Audio::from_stereo(data.to_vec(), take.sr, 1);
+            let audio = Audio::from_stereo(data, take.sr, 1);
             c.project.sources.push(Source {
                 id,
                 name,
@@ -2033,7 +2100,7 @@ impl Engine {
                 peak_db: crate::dsp::gain_to_db(audio.peak()),
             });
             c.sources.insert(id, Arc::new(audio));
-            landed.push((id, start, (secs / spb).min(TOTAL_BEATS - start)));
+            landed.push((id, start, exact.map_or(secs / spb, |(beats, _)| beats).min(TOTAL_BEATS - start)));
         }
         crate::comp::land_takes(&mut c.project, take.track as u32, &landed);
         push_undo(c, before);
@@ -2383,6 +2450,18 @@ fn send(c: &mut Core, cmd: Cmd) {
         if w.cmds.push(cmd).is_err() {
             log::warn!("audio command queue full; dropping a command");
         }
+    }
+}
+
+fn wait_for_take_input(shared: &Shared, timeout: Duration) {
+    let start = std::time::Instant::now();
+    while shared.finishing_take.load(Acquire) {
+        if start.elapsed() >= timeout {
+            // A disconnected or stalled device must not prevent Stop from completing.
+            shared.finishing_take.store(false, Release);
+            return;
+        }
+        thread::sleep(Duration::from_millis(1));
     }
 }
 

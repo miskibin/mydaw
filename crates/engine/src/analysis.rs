@@ -112,8 +112,8 @@ impl Analyzer {
         let mut out = [0f32; BANDS];
         for (k, &(b0, b1)) in self.bands.iter().enumerate() {
             let mut m = 0f32;
-            for b in b0..=b1.min(self.spec.len() - 1) {
-                m = m.max(self.spec[b].norm());
+            for bin in self.spec.iter().take(b1 + 1).skip(b0) {
+                m = m.max(bin.norm());
             }
             let db = 20.0 * (m * norm).max(1e-7).log10();
             // fast attack, slow-ish fall, like a real analyser

@@ -136,15 +136,8 @@ documentation.
 
 ## Commits and Pull Requests
 
-The repository owner is the author of every commit and pull request.
-
-- Commit with the repository's configured git identity. Do not set Claude (or any
-  AI tool) as author or committer.
-- Do not add `Co-Authored-By`, `Claude-Session`, "Generated with Claude Code" or
-  any other AI attribution to commit messages, pull request titles, bodies or
-  comments, and do not mention Claude in them.
-- Describe the change itself: what changed for the user, why, and how it was
-  verified.
+Describe the change itself: what changed for the user, why, and how it was
+verified.
 
 ## Verification and Definition of Done
 
