@@ -142,6 +142,9 @@ pub struct NoteStats {
     /// `[rate Hz, depth cents]` when there is a clear vibrato.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub vibrato: Option<[f32; 2]>,
+    /// Median pitch of the note's second half minus its first half (central 80 %), cents: a
+    /// step here is two pitches sung as one note (legato), which one shift cannot correct.
+    pub step_cents: f32,
 }
 
 /// Per-note statistics of `notes` over the analysis `a`, with `out` the curve the render will
@@ -181,6 +184,12 @@ pub fn note_stats(a: &PitchAnalysis, notes: &[NoteEdit], out: &[f32]) -> Vec<Not
             // vibrato over the held part (from 150 ms in, to 50 ms before the end)
             let (va, vb) = (f0 + (0.15 * rate) as usize, f1.saturating_sub((0.05 * rate) as usize));
             let vib = if vb > va { vibrato(&a.curve[va..vb], rate) } else { None };
+            let (s0, s1) = (f0 + len / 10, f1 - len / 10);
+            let mid = (s0 + s1) / 2;
+            let step = match (median(a.curve[s0..mid].to_vec()), median(a.curve[mid..s1.max(mid)].to_vec())) {
+                (Some(x), Some(y)) => (y - x) * 100.0,
+                _ => 0.0,
+            };
             let dur = n.end - n.start;
             let kind = if dur < 0.08 {
                 NoteKind::Short
@@ -213,6 +222,7 @@ pub fn note_stats(a: &PitchAnalysis, notes: &[NoteEdit], out: &[f32]) -> Vec<Not
                 slope_cents: r1(slope),
                 spread_cents: r1(spread),
                 vibrato: vib.map(|v| [r2(v.0), r1(v.1)]),
+                step_cents: r1(step),
             }
         })
         .collect()
@@ -832,6 +842,9 @@ pub fn suggest(stats: &[NoteStats], base_centers: &[Option<f32>], cmp: Option<&C
                 NoteKind::Glide => return keep(format!("a slide ({:+.0} ct across the note): left as sung", s.slope_cents), 0.0),
                 _ => {}
             }
+            if s.kind != NoteKind::Vibrato && s.step_cents.abs() >= 25.0 {
+                return keep(format!("two pitches in one note (a {:+.0} ct step): split it first to correct either", s.step_cents), 0.0);
+            }
             let det = s.confidence.clamp(0.0, 1.0);
             // 1. the reference, where it confidently says which note this is
             let m = reference
@@ -959,6 +972,7 @@ mod tests {
             slope_cents: 0.0,
             spread_cents: 0.0,
             vibrato: None,
+            step_cents: 0.0,
         };
         // a take 48 cents sharp throughout reads as +48, not as a mix of +48 and −52
         let t = tuning(&[mk(48.0), mk(-49.0), mk(46.0), mk(50.0), mk(-47.0)]);

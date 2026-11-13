@@ -331,7 +331,7 @@ any edit, else the analysis' (`segmentation`: `edits` / `analysis`).
   "notes": [ { "i": 2, "start": 1.015, "end": 1.835, "beats": [2.03, 3.67], "kind": "vibrato",
                "sung": 74.21, "nearest": "D5", "cents": 21.4, "out": 74.21,
                "shift": 0, "drift": 0, "formant": 0, "gain": 0, "confidence": 0.92, "voiced": 1,
-               "levelDb": -18.9, "slopeCents": 22.7, "spreadCents": 44.5, "vibrato": [3.2, 37.5] } ],
+               "levelDb": -18.9, "slopeCents": 22.7, "spreadCents": 44.5, "stepCents": 4.0, "vibrato": [3.2, 37.5] } ],
   "frames": { "rate": 200, "start": 10.0, "f0": [69.02, null, …], "confidence": […], "out": […] }  // --full
 }
 ```
@@ -340,7 +340,8 @@ any edit, else the analysis' (`segmentation`: `edits` / `analysis`).
 (a slide through the note's held middle), `short` (< 80 ms: ornament or transition), `unsure`
 (breathy, mostly unvoiced or low detector confidence). `sung` is the recording; `out` what it
 sounds like with the current edits (and Tune to Reference). `slopeCents` is the pitch change
-across the note's central 60 %, `spreadCents` the movement around it.
+across the note's central 60 %, `spreadCents` the movement around it, `stepCents` the difference
+between the medians of its second and first half (two pitches sung legato as one note: split it).
 
 ### `pitch compare`
 
@@ -365,7 +366,7 @@ and reports, without deciding anything:
 ### `pitch suggest`
 
 A conservative proposal, with a decision and a reason for every note; it changes nothing.
-Rules: short, unsure and sliding notes are kept; an unrelated reference changes nothing at all;
+Rules: short, unsure and sliding notes, and notes holding two pitches (`stepCents` ≥ 25), are kept; an unrelated reference changes nothing at all;
 with a related reference the intended pitch is the reference's note in the take's register,
 unless the take is further than `--max-cents` (default 60) from it — a semitone or more off yet
 itself in tune is what a deliberate variation looks like, so it is kept; without a reference,
