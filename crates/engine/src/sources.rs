@@ -26,9 +26,9 @@ impl Audio {
         let frames = interleaved.len() / 2;
         let peaks = peaks_of(&interleaved, sr);
         let mut data = Vec::with_capacity((frames + wave_audio_file::PAD_LEAD + wave_audio_file::PAD_TRAIL) * 2);
-        data.extend(std::iter::repeat(0.0).take(wave_audio_file::PAD_LEAD * 2));
+        data.extend(std::iter::repeat_n(0.0, wave_audio_file::PAD_LEAD * 2));
         data.extend_from_slice(&interleaved);
-        data.extend(std::iter::repeat(0.0).take(wave_audio_file::PAD_TRAIL * 2));
+        data.extend(std::iter::repeat_n(0.0, wave_audio_file::PAD_TRAIL * 2));
         Self { data, frames, sr, channels, peaks }
     }
 
@@ -36,7 +36,7 @@ impl Audio {
         // cap at 30 minutes so a stray podcast cannot eat the machine
         let d = wave_audio_file::decode_stereo(path, |sr| Some((sr * 1800.0) as usize)).map_err(|e| e.to_string())?;
         let sr = d.sample_rate.round() as u32;
-        let mono = d.data.chunks_exact(2).all(|f| f[0] == f[1]);
+        let mono = d.data.as_chunks::<2>().0.iter().all(|f| f[0] == f[1]);
         Ok(Self::from_stereo(d.data, sr, if mono { 1 } else { 2 }))
     }
 
@@ -94,7 +94,7 @@ impl Audio {
     pub fn derived(&self, norm: bool, rev: bool) -> Audio {
         let mut c = self.content().to_vec();
         if rev {
-            let frames: Vec<[f32; 2]> = c.chunks_exact(2).rev().map(|f| [f[0], f[1]]).collect();
+            let frames: Vec<[f32; 2]> = c.as_chunks::<2>().0.iter().rev().copied().collect();
             c = frames.into_iter().flatten().collect();
         }
         if norm {
@@ -152,22 +152,46 @@ pub struct SourceStore {
     estimator: Option<Arc<dyn F0Estimator>>,
 }
 
-/// (source id, identity of the audio before stretching, `Clip::stretch` bits)
-pub type StretchKey = (u64, u64, u64);
+/// (source id, identity of the audio before stretching, render ratio bits, `Clip::pitch` bits)
+pub type StretchKey = (u64, u64, u64, u32);
 type StretchDone = (StretchKey, Result<Arc<Audio>, String>);
 /// Stretched audio kept, in bytes (least recently played dropped first).
 const STRETCH_CACHE_BYTES: usize = 1 << 30;
 
-/// A time-stretch to render.
+/// A time-stretch and/or transposition to render.
 pub struct StretchJob {
     pub key: StretchKey,
     pub audio: Arc<Audio>,
+    /// Output length / input length.
     pub ratio: f64,
+    /// Transposition, semitones.
+    pub semis: f32,
+    /// The rate the clip reads the render at (`Clip::rendered_rate`), and the one it reads
+    /// `audio` at when there is no render (resampled, at its own pitch).
+    pub rate: f64,
+    pub fallback_rate: f64,
+}
+
+impl StretchJob {
+    fn of(c: &crate::model::Clip, ident: u64, audio: Arc<Audio>) -> Self {
+        StretchJob {
+            key: stretch_key(c, ident),
+            audio,
+            ratio: c.render_ratio(),
+            semis: c.pitch,
+            rate: c.rendered_rate(),
+            fallback_rate: 1.0 / c.stretch,
+        }
+    }
+}
+
+fn stretch_key(c: &crate::model::Clip, ident: u64) -> StretchKey {
+    (c.source, ident, c.render_ratio().to_bits(), c.pitch.to_bits())
 }
 
 /// Renders a stretch job (slow: run it off the engine lock).
 pub fn render_stretch(j: &StretchJob) -> Result<Arc<Audio>, String> {
-    let out = wave_stretch::stretch_stereo(j.audio.content(), j.audio.sr, j.ratio)?;
+    let out = wave_stretch::stretch_shift_stereo(j.audio.content(), j.audio.sr, j.ratio, j.semis)?;
     Ok(Arc::new(Audio::from_stereo(out, j.audio.sr, j.audio.channels)))
 }
 
@@ -252,7 +276,7 @@ impl Stretcher {
 
 /// Mono mix of a variant.
 pub fn mono_of(audio: &Audio) -> Vec<f32> {
-    audio.content().chunks_exact(2).map(|f| (f[0] + f[1]) * 0.5).collect()
+    audio.content().as_chunks::<2>().0.iter().map(|f| (f[0] + f[1]) * 0.5).collect()
 }
 
 /// The part of the audio [`SourceStore::clip_audio`] returned that clip `c` plays, in
@@ -369,6 +393,12 @@ impl SourceStore {
     pub fn pitch_target(&mut self, c: &crate::model::Clip, bpm: f64, params: &crate::model::RefTune) -> Option<Arc<PitchTarget>> {
         let key = self.align_key(c, bpm, params.source)?;
         let take = self.analysis(c.source, c.norm, c.rev)?;
+        if let Some(m) = &params.melody {
+            // the timeline places the melody: nothing to align, nothing worth caching
+            let r = crate::pitch::ANALYSIS_RATE as f64;
+            let al = crate::melody::alignment(&take, (key.2 as f64 / r, key.3 as f64 / r), &note_spans(c, &take), &m.notes);
+            return Some(Arc::new(crate::reference::target(&take, &note_spans(c, &take), &al, params)));
+        }
         let al = match self.cached_alignment(&key) {
             Some(a) => a,
             None => {
@@ -423,23 +453,23 @@ impl SourceStore {
     /// drag is in progress) and the clip plays resampled meanwhile.
     pub fn clip_play(&mut self, c: &crate::model::Clip, allow_stale: bool, bpm: f64) -> Option<(Arc<Audio>, f64)> {
         let (pre, ident) = self.pre_stretch(c, allow_stale, bpm)?;
-        if c.kind != crate::model::ClipKind::Audio || c.stretch == 1.0 {
+        if c.kind != crate::model::ClipKind::Audio {
             self.stretch.waiting.remove(&c.id);
             return Some((pre, 1.0));
         }
         let rate = 1.0 / c.stretch;
-        if c.resample {
+        if !c.needs_stretch() {
             self.stretch.waiting.remove(&c.id);
             return Some((pre, rate));
         }
-        let key = (c.source, ident, c.stretch.to_bits());
+        let key = stretch_key(c, ident);
         if let Some(a) = self.stretch.get(&key) {
             self.stretch.waiting.remove(&c.id);
-            return Some((a, 1.0));
+            return Some((a, c.rendered_rate()));
         }
         self.stretch.waiting.insert(c.id, key);
         if !allow_stale && !self.stretch.pending.contains(&key) && !self.stretch.failed.contains_key(&key) {
-            self.stretch.submit(StretchJob { key, audio: pre.clone(), ratio: c.stretch });
+            self.stretch.submit(StretchJob::of(c, ident, pre.clone()));
         }
         Some((pre, rate))
     }
@@ -456,7 +486,7 @@ impl SourceStore {
                 if ok {
                     self.clip_play(c, allow_stale, bpm)
                 } else {
-                    Some((job.audio, 1.0 / job.ratio))
+                    Some((job.audio, job.fallback_rate))
                 }
             }
         }
@@ -464,19 +494,24 @@ impl SourceStore {
 
     /// What [`Self::clip_audio`] returns if it is ready, else the stretch to render (outside
     /// any lock) and hand back through [`Self::put_stretch`].
-    pub fn stretch_request(&mut self, c: &crate::model::Clip, allow_stale: bool, bpm: f64) -> Option<Result<(Arc<Audio>, f64), StretchJob>> {
+    pub fn stretch_request(
+        &mut self,
+        c: &crate::model::Clip,
+        allow_stale: bool,
+        bpm: f64,
+    ) -> Option<Result<(Arc<Audio>, f64), StretchJob>> {
         let (pre, ident) = self.pre_stretch(c, allow_stale, bpm)?;
         if !c.needs_stretch() {
             return Some(Ok((pre, if c.kind == crate::model::ClipKind::Audio { 1.0 / c.stretch } else { 1.0 })));
         }
-        let key = (c.source, ident, c.stretch.to_bits());
+        let key = stretch_key(c, ident);
         if let Some(a) = self.stretch.get(&key) {
-            return Some(Ok((a, 1.0)));
+            return Some(Ok((a, c.rendered_rate())));
         }
         if self.stretch.failed.contains_key(&key) {
             return Some(Ok((pre, 1.0 / c.stretch)));
         }
-        Some(Err(StretchJob { key, audio: pre, ratio: c.stretch }))
+        Some(Err(StretchJob::of(c, ident, pre)))
     }
 
     /// Stores a finished (or failed) stretch render.
@@ -512,7 +547,7 @@ impl SourceStore {
         let mut failed = HashMap::new();
         for c in clips.iter().filter(|c| c.needs_stretch()) {
             let Some(k) = self.stretch.waiting.get(&c.id) else { continue };
-            if k.2 != c.stretch.to_bits() || k.0 != c.source {
+            if k.2 != c.render_ratio().to_bits() || k.3 != c.pitch.to_bits() || k.0 != c.source {
                 continue;
             }
             if let Some(e) = self.stretch.failed.get(k) {
@@ -527,7 +562,7 @@ impl SourceStore {
     /// Source variant plus pitch edits (cached per clip).
     fn tuned_audio(&mut self, c: &crate::model::Clip, base: Arc<Audio>, allow_stale: bool, bpm: f64) -> Option<Arc<Audio>> {
         let tune = c.tune.as_ref()?;
-        let region = tune.reference.and_then(|r| self.align_key(c, bpm, r.source)).map(|k| (k.2, k.3));
+        let region = tune.reference.as_ref().and_then(|r| self.align_key(c, bpm, r.source)).map(|k| (k.2, k.3));
         let hash = {
             use std::hash::{Hash, Hasher};
             let mut h = std::collections::hash_map::DefaultHasher::new();
@@ -541,7 +576,7 @@ impl SourceStore {
             }
         }
         let an = self.analysis(c.source, c.norm, c.rev)?;
-        let target = tune.reference.and_then(|r| self.pitch_target(c, bpm, &r));
+        let target = tune.reference.as_ref().and_then(|r| self.pitch_target(c, bpm, r));
         let out = Arc::new(crate::tune_render::render(&base, &an, tune, target.as_deref()));
         self.tuned.insert(c.id, (hash, out.clone()));
         Some(out)
@@ -551,11 +586,15 @@ impl SourceStore {
 /// The target for clip `c` from a ready alignment. The note spans are the editor's
 /// segmentation when the clip has one, else the analysis'.
 pub fn target_for(c: &crate::model::Clip, take: &PitchAnalysis, al: &Alignment, params: &crate::model::RefTune) -> PitchTarget {
-    let spans: Vec<(f64, f64)> = match c.tune.as_ref().filter(|t| !t.notes.is_empty()) {
+    crate::reference::target(take, &note_spans(c, take), al, params)
+}
+
+/// The take's notes (seconds of the source): the editor's segmentation, else the analysis'.
+pub fn note_spans(c: &crate::model::Clip, take: &PitchAnalysis) -> Vec<(f64, f64)> {
+    match c.tune.as_ref().filter(|t| !t.notes.is_empty()) {
         Some(t) => t.notes.iter().map(|n| (n.start, n.end)).collect(),
         None => take.notes.iter().map(|n| (n.start, n.end)).collect(),
-    };
-    crate::reference::target(take, &spans, al, params)
+    }
 }
 
 /// Writes interleaved stereo float to a 32-bit float WAV.
@@ -571,20 +610,48 @@ pub fn write_wav(path: &Path, interleaved: &[f32], sr: u32) -> Result<(), String
     w.finalize().map_err(|e| e.to_string())
 }
 
-/// Float stereo → 16-bit with TPDF dither (±1 LSB triangular) and hard clip protection.
-pub fn to_i16_dithered(interleaved: &[f32]) -> Vec<i16> {
-    let mut state: u32 = 0x9E37_79B9;
-    let mut next = move || {
+/// Quantizes interleaved stereo to signed 24-bit PCM. TPDF is applied once, just before rounding.
+pub fn write_wav_pcm24(path: &Path, interleaved: &[f32], sr: u32, dither: bool) -> Result<(), String> {
+    use std::hash::{BuildHasher, RandomState};
+
+    if !interleaved.len().is_multiple_of(2) {
+        return Err("stereo WAV needs complete frames".into());
+    }
+    if let Some(dir) = path.parent() {
+        std::fs::create_dir_all(dir).map_err(|e| e.to_string())?;
+    }
+    let spec = hound::WavSpec { channels: 2, sample_rate: sr, bits_per_sample: 24, sample_format: hound::SampleFormat::Int };
+    let mut writer = hound::WavWriter::create(path, spec).map_err(|e| e.to_string())?;
+    // Give each file its own sequence so stems don't sum correlated dither noise.
+    let mut noise = tpdf((RandomState::new().hash_one(path) as u32).max(1));
+    const SCALE: f64 = 8_388_608.0;
+    for &x in interleaved {
+        let sample = if x.is_finite() { f64::from(x) } else { 0.0 };
+        let d = if dither { f64::from(noise()) } else { 0.0 };
+        let pcm = (sample * SCALE + d).round().clamp(-SCALE, SCALE - 1.0) as i32;
+        writer.write_sample(pcm).map_err(|e| e.to_string())?;
+    }
+    writer.finalize().map_err(|e| e.to_string())
+}
+
+fn tpdf(mut state: u32) -> impl FnMut() -> f32 {
+    let mut uniform = move || {
         state ^= state << 13;
         state ^= state >> 17;
         state ^= state << 5;
         state as f32 / u32::MAX as f32
     };
+    move || uniform() - uniform()
+}
+
+/// Float stereo → 16-bit with TPDF dither (±1 LSB triangular) and hard clip protection.
+pub fn to_i16_dithered(interleaved: &[f32]) -> Vec<i16> {
+    let mut noise = tpdf(0x9E37_79B9);
     interleaved
         .iter()
         .map(|&x| {
             let x = if x.is_finite() { x.clamp(-1.0, 1.0) } else { 0.0 };
-            let d = next() - next();
+            let d = noise();
             (x * 32767.0 + d).round().clamp(-32768.0, 32767.0) as i16
         })
         .collect()

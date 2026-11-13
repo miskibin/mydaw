@@ -7,9 +7,7 @@
 use std::time::Instant;
 
 use realfft::RealFftPlanner;
-use wave_engine::dsp::saturator::{
-    latency_exact, latency_samples, pink_noise, Core, Settings, STYLES,
-};
+use wave_engine::dsp::saturator::{latency_exact, latency_samples, pink_noise, Core, Settings, STYLES};
 
 const SR: f32 = 48000.0;
 
@@ -38,9 +36,7 @@ fn spectrum(y: &[f32]) -> Vec<f32> {
 }
 
 fn sine(f: f32, amp: f32, n: usize) -> Vec<f32> {
-    (0..n)
-        .map(|i| (std::f64::consts::TAU * f as f64 * i as f64 / SR as f64).sin() as f32 * amp)
-        .collect()
+    (0..n).map(|i| (std::f64::consts::TAU * f as f64 * i as f64 / SR as f64).sin() as f32 * amp).collect()
 }
 
 fn db(x: f32) -> f32 {
@@ -59,16 +55,7 @@ fn main() {
     let x = sine(1000.0, 0.25, 96000);
     for (s, name) in STYLES.iter().enumerate() {
         for d in [0.25f32, 0.5, 1.0] {
-            let y = run(
-                Settings {
-                    style: s,
-                    drive: d,
-                    ..Default::default()
-                },
-                &x,
-                None,
-                true,
-            );
+            let y = run(Settings { style: s, drive: d, ..Default::default() }, &x, None, true);
             let sp = spectrum(&y[48000..96000]);
             let h = |k: usize| sp[1000 * k];
             let thd = (2..=20).map(|k| h(k).powi(2)).sum::<f32>().sqrt() / h(1);
@@ -92,18 +79,8 @@ fn main() {
     let x = sine(5000.0, 0.5, 96000);
     for (s, name) in STYLES.iter().enumerate() {
         let mut row = format!("| {name} |");
-        for (os, adaa) in [
-            (Some(1), false),
-            (Some(1), true),
-            (None, true),
-            (Some(4), true),
-        ] {
-            let set = Settings {
-                style: s,
-                drive: 1.0,
-                hq: os == Some(4),
-                ..Default::default()
-            };
+        for (os, adaa) in [(Some(1), false), (Some(1), true), (None, true), (Some(4), true)] {
+            let set = Settings { style: s, drive: 1.0, hq: os == Some(4), ..Default::default() };
             let y = run(set, &x, os, adaa);
             let sp = spectrum(&y[48000..96000]);
             let (mut on, mut off) = (0f64, 0f64);
@@ -134,18 +111,9 @@ fn main() {
             let mut worst = 0f32;
             for d in 0..=11 {
                 let set = if d == 11 {
-                    Settings {
-                        style: s,
-                        drive: 1.0,
-                        punish: true,
-                        ..Default::default()
-                    }
+                    Settings { style: s, drive: 1.0, punish: true, ..Default::default() }
                 } else {
-                    Settings {
-                        style: s,
-                        drive: d as f32 / 10.0,
-                        ..Default::default()
-                    }
+                    Settings { style: s, drive: d as f32 / 10.0, ..Default::default() }
                 };
                 let y = run(set, &x, None, true);
                 let v = db(rms(&y[24000..]) / rin);
@@ -162,7 +130,12 @@ fn main() {
     // ---------------------------------------------------------------- latency
     println!("## Latency\n");
     for (hq, name) in [(false, "2x (normal)"), (true, "4x (HQ)")] {
-        println!("- {name}: {:.2} samples group delay near DC at the base rate, reported {} ({:.3} ms at 48 kHz)", latency_exact(hq), latency_samples(hq), latency_samples(hq) as f32 / 48.0);
+        println!(
+            "- {name}: {:.2} samples group delay near DC at the base rate, reported {} ({:.3} ms at 48 kHz)",
+            latency_exact(hq),
+            latency_samples(hq),
+            latency_samples(hq) as f32 / 48.0
+        );
     }
 
     // ---------------------------------------------------------------- CPU
@@ -174,15 +147,7 @@ fn main() {
     for (s, name) in STYLES.iter().enumerate() {
         let mut row = format!("| {name} |");
         for hq in [false, true] {
-            let set = Settings {
-                style: s,
-                drive: 0.6,
-                hq,
-                lowcut: 60.0,
-                tone: 0.2,
-                highcut: 12000.0,
-                ..Default::default()
-            };
+            let set = Settings { style: s, drive: 0.6, hq, lowcut: 60.0, tone: 0.2, highcut: 12000.0, ..Default::default() };
             let mut c = Core::default();
             c.set(&set);
             c.prepare(SR, 2);

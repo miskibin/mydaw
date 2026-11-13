@@ -178,7 +178,7 @@ impl Smooth {
 /// Samples for a one-pole decay with per-sample coefficient `k` to fall `taus` time constants.
 pub(crate) fn decay_samples(k: f32, taus: f32) -> usize {
     if k > 0.0 && k < 1.0 {
-        (taus * -1.0 / k.ln()) as usize + 1
+        (-taus / k.ln()) as usize + 1
     } else if k >= 1.0 {
         usize::MAX / 4
     } else {
@@ -221,7 +221,18 @@ pub struct Eq {
 
 impl Default for Eq {
     fn default() -> Self {
-        Self { sr: 0.0, bands: [BandState::default(); EQ_BANDS], p: [Default::default(); EQ_BANDS], n_on: 0, out: 1.0, gain: Smooth::default(), last: None, att: 0.0, rel: 0.0, tick: 0 }
+        Self {
+            sr: 0.0,
+            bands: [BandState::default(); EQ_BANDS],
+            p: [Default::default(); EQ_BANDS],
+            n_on: 0,
+            out: 1.0,
+            gain: Smooth::default(),
+            last: None,
+            att: 0.0,
+            rel: 0.0,
+            tick: 0,
+        }
     }
 }
 
@@ -391,8 +402,8 @@ impl Processor for Eq {
         self.gain.v = self.out;
     }
     fn meters(&self, out: &mut [f32; crate::processor::METERS]) {
-        for k in 0..EQ_BANDS {
-            out[k] = self.bands[k].dyn_g;
+        for (o, b) in out[..EQ_BANDS].iter_mut().zip(&self.bands[..EQ_BANDS]) {
+            *o = b.dyn_g;
         }
     }
 }
@@ -417,7 +428,20 @@ pub struct Comp {
 }
 impl Default for Comp {
     fn default() -> Self {
-        Self { sr: 48000.0, thr: -18.0, ratio: 4.0, att: 0.0, rel: 0.0, makeup: 1.0, env_db: 0.0, gr: 0.0, knee: 6.0, rms: false, ms: 0.0, k_ms: 0.0 }
+        Self {
+            sr: 48000.0,
+            thr: -18.0,
+            ratio: 4.0,
+            att: 0.0,
+            rel: 0.0,
+            makeup: 1.0,
+            env_db: 0.0,
+            gr: 0.0,
+            knee: 6.0,
+            rms: false,
+            ms: 0.0,
+            k_ms: 0.0,
+        }
     }
 }
 impl Comp {
@@ -621,10 +645,10 @@ impl Processor for Reverb {
             }
             // FDN
             let mut o = [0f32; FDN];
-            for k in 0..FDN {
+            for (k, ok) in o.iter_mut().enumerate() {
                 let y = self.lines[k].read();
                 self.lp[k] = flush(y * (1.0 - self.damp[k]) + self.lp[k] * self.damp[k]);
-                o[k] = self.lp[k] * self.g[k];
+                *ok = self.lp[k] * self.g[k];
             }
             // fast Walsh–Hadamard (orthogonal mixing)
             let mut h = 1;
@@ -640,8 +664,8 @@ impl Processor for Reverb {
                 }
                 h *= 2;
             }
-            for k in 0..FDN {
-                self.lines[k].write(flush(o[k] * s + d));
+            for (line, &ok) in self.lines[..FDN].iter_mut().zip(&o) {
+                line.write(flush(ok * s + d));
             }
             let wl = self.lines[0].read() + self.lines[2].read() + self.lines[4].read() + self.lines[6].read();
             let wr = self.lines[1].read() + self.lines[3].read() + self.lines[5].read() + self.lines[7].read();
@@ -823,7 +847,16 @@ mod tests {
     #[test]
     fn dynamic_band_only_acts_when_loud() {
         use crate::model::{BandType, DynBand, EqBand, Placement};
-        let band = EqBand { on: true, kind: BandType::Peak, f: 1000.0, g: 0.0, q: 1.0, slope: 12, place: Placement::Stereo, dynamic: Some(DynBand { range: -12.0, thr: -30.0 }) };
+        let band = EqBand {
+            on: true,
+            kind: BandType::Peak,
+            f: 1000.0,
+            g: 0.0,
+            q: 1.0,
+            slope: 12,
+            place: Placement::Stereo,
+            dynamic: Some(DynBand { range: -12.0, thr: -30.0 }),
+        };
         let sine = |a: f32| move |i: usize| (i as f32 * 1000.0 * std::f32::consts::TAU / 48000.0).sin() * a;
         let mut p = eq_with(vec![band]);
         let (loud, _) = rms_after(&mut p, sine(0.5), sine(0.5));

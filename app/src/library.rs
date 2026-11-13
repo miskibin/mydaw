@@ -58,6 +58,10 @@ pub struct FileInfo {
     /// (a sampler channel made from the file is rooted there, so it plays in tune).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub root: Option<u8>,
+    /// The file plays a note at `root` (false for drums and noises, whose root is only where
+    /// the keyboard plays them unchanged).
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    pub pitched: bool,
 }
 
 fn manifest() -> Manifest {
@@ -83,19 +87,36 @@ pub fn kits() -> Vec<KitInfo> {
     let standard = KitInfo {
         id: wave_engine::factory::KIT.into(),
         name: "Standard library".into(),
-        description: "Drums, percussion and tonal one-shots that ship with WAVE".into(),
+        description: "Drums, percussion, orchestra, tonal one-shots and effects that ship with WAVE".into(),
         bytes: f.iter().map(|x| x.bytes.len() as u64).sum(),
         count: f.len(),
         installed: true,
     };
-    let downloads = manifest().instruments.into_iter().map(|k| KitInfo { installed: installed(&k), bytes: k.samples.iter().map(|s| s.bytes).sum(), count: k.samples.len(), id: k.id, name: k.name, description: k.description });
+    let downloads = manifest().instruments.into_iter().map(|k| KitInfo {
+        installed: installed(&k),
+        bytes: k.samples.iter().map(|s| s.bytes).sum(),
+        count: k.samples.len(),
+        id: k.id,
+        name: k.name,
+        description: k.description,
+    });
     std::iter::once(standard).chain(downloads).collect()
 }
 
 /// The standard library's files, written into the library folder if they are not there yet.
 fn standard_files() -> Result<Vec<FileInfo>, String> {
-    let dir = wave_engine::factory::install().map_err(|e| format!("could not write the standard library to {}: {e}", library_dir().display()))?;
-    Ok(wave_engine::factory::files().iter().map(|f| FileInfo { name: f.name.into(), path: dir.join(f.file).display().to_string(), group: f.group.into(), root: Some(f.root) }).collect())
+    let dir =
+        wave_engine::factory::install().map_err(|e| format!("could not write the standard library to {}: {e}", library_dir().display()))?;
+    Ok(wave_engine::factory::files()
+        .iter()
+        .map(|f| FileInfo {
+            name: f.name.into(),
+            path: dir.join(f.file).display().to_string(),
+            group: f.group.into(),
+            root: Some(f.root),
+            pitched: f.pitched,
+        })
+        .collect())
 }
 
 /// Downloads every missing file of a kit, verifying checksums. Blocking.
@@ -148,7 +169,13 @@ pub fn kit_files(id: &str) -> Result<Vec<FileInfo>, String> {
         .map(|s| {
             let note = s.note.clone().unwrap_or_default();
             let group = note.split([',', ' ']).next().filter(|g| !g.is_empty()).unwrap_or(&kit.name).to_string();
-            FileInfo { name: if note.is_empty() { s.file.clone() } else { note }, path: dir.join(&s.file).display().to_string(), group, root: None }
+            FileInfo {
+                name: if note.is_empty() { s.file.clone() } else { note },
+                path: dir.join(&s.file).display().to_string(),
+                group,
+                root: None,
+                pitched: false,
+            }
         })
         .collect())
 }
@@ -166,8 +193,19 @@ pub fn folder_files(root: &Path) -> Vec<FileInfo> {
             if p.is_dir() {
                 stack.push(p);
             } else if p.extension().and_then(|x| x.to_str()).is_some_and(|x| AUDIO_EXT.contains(&x.to_ascii_lowercase().as_str())) {
-                let group = p.parent().and_then(|q| q.strip_prefix(root).ok()).map(|q| q.display().to_string()).filter(|g| !g.is_empty()).unwrap_or_else(|| root.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default());
-                out.push(FileInfo { name: p.file_stem().map(|s| s.to_string_lossy().into_owned()).unwrap_or_default(), path: p.display().to_string(), group, root: None });
+                let group = p
+                    .parent()
+                    .and_then(|q| q.strip_prefix(root).ok())
+                    .map(|q| q.display().to_string())
+                    .filter(|g| !g.is_empty())
+                    .unwrap_or_else(|| root.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default());
+                out.push(FileInfo {
+                    name: p.file_stem().map(|s| s.to_string_lossy().into_owned()).unwrap_or_default(),
+                    path: p.display().to_string(),
+                    group,
+                    root: None,
+                    pitched: false,
+                });
                 if out.len() >= 5000 {
                     return out;
                 }
@@ -186,6 +224,6 @@ mod tests {
         assert!(k.iter().all(|k| k.count > 0 && k.bytes > 0));
         // the standard library leads the list and needs no download
         assert_eq!(k[0].id, wave_engine::factory::KIT);
-        assert!(k[0].installed && k[0].count >= 40);
+        assert!(k[0].installed && k[0].count >= 140);
     }
 }

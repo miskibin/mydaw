@@ -97,6 +97,7 @@ wave add-fx --insert 6 --type reverb --preset 3          # → {"fxId":1203,…}
 wave set-param --fx 1203 --param mix --value 30
 wave preset --fx 1203 --index 4
 wave import kick.wav loop.wav --track 3 --beat 16
+wave make-unique --clip 5012                           # own copy of the sample on a new track (same routing)
 wave apply --file edit.json --label "Busier hats"
 wave undo
 ```
@@ -115,7 +116,8 @@ Every note names its channel with `ch` (see `wave channels`).
 
 Units: playlist time in **beats**; pattern `step`/`len` in **sixteenths**;
 fades in seconds; track/insert `vol` is a fader position (0.7937 = 0 dB);
-clip `gain` in dB; pan −1..1. New ids: start at `context.nextId`.
+clip `gain` in dB; audio clip `pitch` in semitones (±12, cents as the fraction; the
+length stays) and `stretch` 0.25–4; pan −1..1. New ids: start at `context.nextId`.
 
 ## Patterns and channels
 
@@ -191,16 +193,24 @@ renders offline (independent of the audio device, so it works while the
 musician keeps playing) and prints peak/RMS/crest/clipping so an agent can
 check its work, then listen to the WAV. The same bounce is available in the
 app as **Eksport** (`Ctrl+Shift+R`): song or loop, a 0/2/8 s effect tail, and
-44.1 or 48 kHz, written as a 32-bit float stereo WAV.
+44.1 or 48 kHz. Stereo WAV defaults to 32-bit float. Select 24-bit PCM with
+`--wav-bits 24` and add `--dither` for optional triangular dither. Integer WAV
+clips samples beyond full scale. The export stats report those peaks before conversion.
+
+Select **Wrap** when exporting a WAV loop to carry the effect tail into its
+start. The result is one loop long. In the CLI, use `--wrap-tail` with the
+project loop or specify both `--from` and `--to`. This works for stereo mixes
+and stems.
 
 ### Stems
 
 ```sh
 wave render --stems --out stems/ --from 0 --to 32     # a folder, created if needed
 wave render --stems --out stems/ --no-master          # without Master.wav
+wave render --stems --out stems/ --wav-bits 24 --dither
 ```
 
-writes one 32-bit float stereo WAV per mixer insert that has sound, named after the insert
+writes one stereo WAV per mixer insert that has sound, named after the insert
 (`Drums.wav`, `Bass.wav`; a repeated name becomes `Bass (2).wav`), like FL Studio's *Split mixer
 tracks*. In the app: **Eksport → Wynik: Stemy**, then pick the folder.
 
@@ -235,6 +245,20 @@ wave pitch-target --clip 412 --full     # plus every curve (source, reference, t
 wave tune-ref --clip 412 --off          # back to manual pitch edits
 wave f0-model                           # which pitch detector runs (RMVPE or YIN) and its install state
 ```
+
+A melody you played in the piano roll can be the reference instead: the notes a
+channel plays over the clip in the playlist (a copy, so changing the piano roll
+later does not change the vocal; `--melody` again takes them again). The take
+keeps its own timing; the octave nearest the voice is used unless `--octave`
+says otherwise; stretches nothing is played under stay as sung.
+
+```sh
+wave melody-channels --clip 412         # [{channel, name, notes, fit}] — fit = share of the singing it matches
+wave tune-ref --clip 412 --melody 1003 --speed 40      # follow the Piano channel, 40 ms to reach each note
+```
+
+`--speed` is the retune speed in ms: how long the voice takes to reach each
+target note (95 %); 0 or absent = at once.
 
 `--correction` (how far toward the target), `--vibrato` (how much of the
 singer's own movement is kept) and `--influence` (100 = the reference's note
@@ -275,6 +299,26 @@ wave auto-add --fx 1210 --param 42 --points "0:0.2,8:0.8" --name "Reverb decay"
                 # automate a hosted plugin parameter: an envelope plus the
                 # playlist clip that plays it; ids come from context.nextId
 ```
+
+## Notes (deterministic transforms and generators)
+
+Every verb is one undo step and deterministic in `--seed`: the same command on the same
+pattern produces identical notes, so agents can generate variants, render each and keep
+a favourite.
+
+```sh
+wave notes humanize --pattern 1 --timing 0.3 --velocity 0.2
+wave notes quantize --pattern 1 --grid 1 --amount 1 --scale      # --scale: into the project key
+wave notes euclid --pattern 1 --ch 1001 --k 5 --n 16 --rotate 2  # E(k,n) fill for one channel
+wave notes strum --pattern 1 --width 0.5 --ramp 0.05
+wave notes drums --pattern 2 --bars 2 --seed 42 --voice "1001:4:16:0" --voice "1002:2:16:8"
+wave notes melody --pattern 3 --ch 1003 --bars 2 --seed 7 --density 0.5
+wave notes humanize --pattern 1 --select "0:16"                  # limit to a step range
+wave key C minor                                                  # project key for --scale
+wave key --off
+```
+
+`--select "0:16@1001"` also filters one channel; `--indices "1,2,5"` selects exact notes.
 
 ## Several apps open
 

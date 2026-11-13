@@ -23,6 +23,8 @@ pub struct FactoryFile {
     pub group: &'static str,
     /// MIDI key at which the recording sounds at its own pitch (60 for unpitched drums).
     pub root: u8,
+    /// It plays a note (the browser shows its key); false for drums, noises and swells.
+    pub pitched: bool,
     /// Seconds.
     pub dur: f64,
     pub ch: u16,
@@ -100,7 +102,7 @@ pub fn install() -> std::io::Result<PathBuf> {
     Ok(dir)
 }
 
-const COLORS: [(&str, &str); 8] = [
+const COLORS: [(&str, &str); 10] = [
     ("Kicks", "#4f8ef7"),
     ("Snares", "#d9678f"),
     ("Claps", "#d9678f"),
@@ -109,6 +111,8 @@ const COLORS: [(&str, &str); 8] = [
     ("Toms", "#5aa9e6"),
     ("Percussion", "#5fbf8a"),
     ("Tonal", "#7c8cf8"),
+    ("Orchestra", "#c98a5a"),
+    ("FX", "#b07cf0"),
 ];
 
 pub fn color(f: &FactoryFile) -> &'static str {
@@ -134,14 +138,91 @@ mod tests {
 
     #[test]
     fn every_file_decodes_and_matches_its_table_entry() {
-        assert!(files().len() >= 40);
+        assert!(files().len() >= 140);
+        let mut names = std::collections::HashSet::new();
         for f in files() {
+            assert!(names.insert(f.file) && names.insert(f.name), "{}: file or name used twice", f.file);
+            assert!(COLORS.iter().any(|(g, _)| *g == f.group), "{}: group {} has no colour", f.file, f.group);
             let a = crate::sources::Audio::load_path(&lib_path(f.file), Path::new(".")).unwrap_or_else(|e| panic!("{}: {e}", f.file));
             assert_eq!(a.sr, SR, "{}", f.file);
             assert_eq!(a.channels, f.ch, "{}", f.file);
             assert!((a.seconds() - f.dur).abs() < 0.001, "{}: {} s, table says {}", f.file, a.seconds(), f.dur);
             let peak = crate::dsp::gain_to_db(a.peak());
             assert!((peak - PEAK_DB).abs() < 0.1, "{}: peak {peak} dB", f.file);
+        }
+    }
+
+    /// Key (fractional MIDI) at the centre of the energy within 0.7 semitones of `near`, by a
+    /// Goertzel scan of the first second.
+    fn key_near(a: &crate::sources::Audio, near: u8) -> f64 {
+        let n = a.frames.min(SR as usize);
+        let mono: Vec<f64> = (0..n)
+            .map(|i| {
+                let (l, r) = a.sample(i as f64);
+                (l + r) as f64
+            })
+            .collect();
+        let power = |key: f64| {
+            let w = std::f64::consts::TAU * 440.0 * 2f64.powf((key - 69.0) / 12.0) / SR as f64;
+            let (mut re, mut im) = (0.0, 0.0);
+            for (i, x) in mono.iter().enumerate() {
+                let h = 0.5 - 0.5 * (std::f64::consts::TAU * i as f64 / n as f64).cos();
+                re += x * h * (w * i as f64).cos();
+                im += x * h * (w * i as f64).sin();
+            }
+            re * re + im * im
+        };
+        // sections are several players a few cents apart: take the centre of what sounds
+        let (mut sum, mut weight) = (0.0, 0.0);
+        for step in -70..=70 {
+            let key = near as f64 + step as f64 / 100.0;
+            let p = power(key);
+            sum += key * p;
+            weight += p;
+        }
+        sum / weight
+    }
+
+    /// The pitched one-shots are tuned by the build script: played at their root key they
+    /// sound that key, so a melody on the piano roll is in tune with the synths.
+    #[test]
+    fn pitched_samples_sound_their_root_key() {
+        let pitched = [
+            "vibraphone.flac",
+            "vibraphone-high.flac",
+            "xylophone.flac",
+            "balafon.flac",
+            "kalimba.flac",
+            "hand-chime.flac",
+            "harpsichord.flac",
+            "upright-piano.flac",
+            "fm-piano.flac",
+            "pipe-organ.flac",
+            "tenor-sax.flac",
+            "strings-tremolo.flac",
+            "cello-spiccato.flac",
+            "contrabass-pizz.flac",
+            "trumpet-staccato.flac",
+            "horn-staccato.flac",
+            "flute-staccato.flac",
+            "harp.flac",
+            "harp-high.flac",
+        ];
+        for name in pitched {
+            let f = file(name).unwrap_or_else(|| panic!("{name} is not in the library"));
+            let a = crate::sources::Audio::load_path(&lib_path(f.file), Path::new(".")).unwrap();
+            let key = key_near(&a, f.root);
+            assert!((key - f.root as f64).abs() <= 0.15, "{name}: sounds key {key:.2}, table says {}", f.root);
+        }
+        // the hits and stabs are layers on C: every octave of C is loud in them
+        for name in
+            ["orch-hit.flac", "orch-hit-minor.flac", "orch-hit-major.flac", "strings-stab.flac", "brass-stab.flac", "pizzicato.flac"]
+        {
+            let f = file(name).unwrap();
+            assert_eq!(f.root % 12, 0, "{name}");
+            let a = crate::sources::Audio::load_path(&lib_path(f.file), Path::new(".")).unwrap();
+            let key = key_near(&a, f.root);
+            assert!((key - f.root as f64).abs() <= 0.15, "{name}: its C sounds key {key:.2}");
         }
     }
 

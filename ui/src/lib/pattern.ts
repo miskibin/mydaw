@@ -318,8 +318,17 @@ export function noteAt(notes: readonly Note[], ch: Id, chan: Channel | undefined
   return -1;
 }
 
-/** Major / natural minor scale masks (bit k = k semitones above the root). */
-export const SCALES: [TranslationKey, number][] = [['b.sc.major', 0b101010110101], ['b.sc.minor', 0b010110101101], ['b.sc.chromatic', 0xfff]];
+/** Scale masks (bit k = k semitones above the root) keyed by the engine's scale id — the
+ * same id space as pitch::scale_mask, the Pitch Correct panel and setKey ops. */
+export const SCALES: [TranslationKey, number, number][] = [
+  ['b.sc.major', 1, 0b101010110101],
+  ['b.sc.minor', 2, 0b010110101101],
+  ['b.sc.pentatonicMaj', 3, 0b001010010101],
+  ['b.sc.pentatonicMin', 4, 0b010010101001],
+  ['b.sc.chromatic', 0, 0xfff],
+];
+/** Mask for an engine scale id (0 = chromatic, 1 = major, 2 = natural minor, 3/4 = pentatonics). */
+export const scaleMask = (id: number): number => SCALES.find(s => s[1] === id)?.[2] ?? 0xfff;
 /** "3 bars" in the current language. */
 export const barsText = (n: number): string => t(n === 1 ? 'b.pat.bar1' : n < 5 ? 'b.pat.bar2' : 'b.pat.bar5', { n });
 /** "3 notes" in the current language. */

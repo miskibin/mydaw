@@ -99,7 +99,18 @@ fn spectra(wave: u8) -> [Spec; FRAMES] {
         SINE => [
             spec_fn(|n| (if n == 1 { 1.0 } else { 0.0 }, 0.0)),
             // a warm, slightly saturated sine (2nd–4th harmonics)
-            spec_fn(|n| (match n { 1 => 1.0, 2 => 0.32, 3 => 0.16, 4 => 0.06, _ => 0.0 }, 0.0)),
+            spec_fn(|n| {
+                (
+                    match n {
+                        1 => 1.0,
+                        2 => 0.32,
+                        3 => 0.16,
+                        4 => 0.06,
+                        _ => 0.0,
+                    },
+                    0.0,
+                )
+            }),
         ],
         TRI => [
             spec_fn(|n| if n % 2 == 1 { (8.0 / (PI * PI) / (n * n) as f64, if (n / 2) % 2 == 0 { 0.0 } else { PI }) } else { (0.0, 0.0) }),
@@ -129,7 +140,8 @@ fn spectra(wave: u8) -> [Spec; FRAMES] {
             }),
             spec_fn(|n| {
                 let x = n as f64;
-                let a = (0.8 * gauss(x, 2.0, 0.8) + gauss(x, 6.0, 1.6) + 0.6 * gauss(x, 16.0, 4.0) + 0.35 * gauss(x, 40.0, 10.0) + 0.05) / x.sqrt();
+                let a = (0.8 * gauss(x, 2.0, 0.8) + gauss(x, 6.0, 1.6) + 0.6 * gauss(x, 16.0, 4.0) + 0.35 * gauss(x, 40.0, 10.0) + 0.05)
+                    / x.sqrt();
                 (a, 2.0 * PI * hash(n, 2))
             }),
         ],

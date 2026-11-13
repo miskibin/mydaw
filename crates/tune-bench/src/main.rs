@@ -44,21 +44,13 @@ struct Args(Vec<String>);
 impl Args {
     fn get(&self, k: &str) -> Option<&str> {
         let i = self.0.iter().position(|a| a == &format!("--{k}"))?;
-        self.0
-            .get(i + 1)
-            .map(String::as_str)
-            .filter(|v| !v.starts_with("--"))
+        self.0.get(i + 1).map(String::as_str).filter(|v| !v.starts_with("--"))
     }
     fn has(&self, k: &str) -> bool {
         self.0.iter().any(|a| a == &format!("--{k}"))
     }
     fn num(&self, k: &str, d: f64) -> Result<f64, String> {
-        self.get(k)
-            .map(|v| {
-                v.parse::<f64>()
-                    .map_err(|_| format!("--{k} must be a number"))
-            })
-            .unwrap_or(Ok(d))
+        self.get(k).map(|v| v.parse::<f64>().map_err(|_| format!("--{k} must be a number"))).unwrap_or(Ok(d))
     }
 }
 
@@ -72,6 +64,8 @@ fn params(a: &Args) -> Result<RefTune, String> {
         octave: None,
         key: 0,
         scale: 0,
+        speed: None,
+        melody: None,
     })
 }
 
@@ -105,15 +99,9 @@ fn summaries(label: &str, os: &[eval::Outcome]) -> Vec<Value> {
     groups.dedup();
     groups.sort();
     groups.dedup();
-    let mut out = vec![eval::summarize(
-        &format!("{label} (all)"),
-        &os.iter().collect::<Vec<_>>(),
-    )];
+    let mut out = vec![eval::summarize(&format!("{label} (all)"), &os.iter().collect::<Vec<_>>())];
     for g in groups {
-        out.push(eval::summarize(
-            &format!("{label} {g}"),
-            &os.iter().filter(|o| o.group == g).collect::<Vec<_>>(),
-        ));
+        out.push(eval::summarize(&format!("{label} {g}"), &os.iter().filter(|o| o.group == g).collect::<Vec<_>>()));
     }
     out
 }
@@ -126,13 +114,7 @@ fn run(cmd: &str, a: &Args) -> Result<bool, String> {
             let est = model.as_ref().map(|m| m as &dyn F0Estimator);
             let backend = if est.is_some() { "rmvpe" } else { "yin" };
             eprintln!("synthetic suite, detector {backend}");
-            let os = synth::run(
-                a.num("songs", 6.0)? as u32,
-                a.get("only"),
-                &p,
-                est,
-                a.get("write").map(Path::new),
-            );
+            let os = synth::run(a.num("songs", 6.0)? as u32, a.get("only"), &p, est, a.get("write").map(Path::new));
             let s = summaries("synthetic", &os);
             s.iter().for_each(eval::print);
             report(
@@ -148,10 +130,7 @@ fn run(cmd: &str, a: &Args) -> Result<bool, String> {
             let items = vocalset::index(&root)?;
             let limit = a.num("limit", 40.0)? as usize;
             let mode = a.get("mode").unwrap_or("all");
-            eprintln!(
-                "Annotated VocalSet: {} annotated recordings, detector {backend}",
-                items.len()
-            );
+            eprintln!("Annotated VocalSet: {} annotated recordings, detector {backend}", items.len());
             let mut s = vec![];
             let mut cases = vec![];
             if mode == "self" || mode == "all" {
@@ -162,25 +141,16 @@ fn run(cmd: &str, a: &Args) -> Result<bool, String> {
             if mode == "cross" || mode == "all" {
                 let pairs = vocalset::cross_pairs(&items);
                 let os = vocalset::run_cross(&vocalset::spread(&pairs, limit), &p, est);
-                s.push(eval::summarize(
-                    "vocalset cross-singer",
-                    &os.iter().collect::<Vec<_>>(),
-                ));
+                s.push(eval::summarize("vocalset cross-singer", &os.iter().collect::<Vec<_>>()));
                 cases.extend(os.iter().map(eval::outcome_json));
             }
             if mode == "mismatch" || mode == "all" {
                 let os = vocalset::run_mismatch(&items, limit.min(20), &p, est);
-                s.push(eval::summarize(
-                    "vocalset mismatch",
-                    &os.iter().collect::<Vec<_>>(),
-                ));
+                s.push(eval::summarize("vocalset mismatch", &os.iter().collect::<Vec<_>>()));
                 cases.extend(os.iter().map(eval::outcome_json));
             }
             s.iter().for_each(eval::print);
-            report(
-                a,
-                json!({ "suite": "vocalset", "detector": backend, "summaries": s, "cases": cases }),
-            )
+            report(a, json!({ "suite": "vocalset", "detector": backend, "summaries": s, "cases": cases }))
         }
         "ab" => {
             let model = estimator(a)?;
@@ -202,10 +172,7 @@ fn run(cmd: &str, a: &Args) -> Result<bool, String> {
             Ok(true)
         }
         "ab-score" => {
-            let v = ab::score(
-                Path::new(a.get("kit").ok_or("missing --kit")?),
-                Path::new(a.get("ratings").ok_or("missing --ratings")?),
-            )?;
+            let v = ab::score(Path::new(a.get("kit").ok_or("missing --kit")?), Path::new(a.get("ratings").ok_or("missing --ratings")?))?;
             println!("{}", serde_json::to_string_pretty(&v).unwrap_or_default());
             Ok(true)
         }
@@ -215,11 +182,7 @@ fn run(cmd: &str, a: &Args) -> Result<bool, String> {
 
 fn main() -> ExitCode {
     let raw: Vec<String> = std::env::args().skip(1).collect();
-    let Some(cmd) = raw
-        .first()
-        .cloned()
-        .filter(|c| c != "help" && c != "--help")
-    else {
+    let Some(cmd) = raw.first().cloned().filter(|c| c != "help" && c != "--help") else {
         eprint!("{HELP}");
         return ExitCode::SUCCESS;
     };

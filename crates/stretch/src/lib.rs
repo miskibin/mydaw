@@ -14,6 +14,7 @@ extern "C" {
         in_len: usize,
         output: *const *mut f32,
         out_len: usize,
+        semitones: f32,
     ) -> c_int;
     fn wave_stretch_min_output(sample_rate: f32, channels: c_int) -> usize;
 }
@@ -30,27 +31,33 @@ pub fn out_frames(frames: usize, ratio: f64) -> usize {
 /// Stretches interleaved stereo `input` at `sr` to `ratio` times its length, keeping
 /// pitch. The result has exactly [`out_frames`] frames.
 pub fn stretch_stereo(input: &[f32], sr: u32, ratio: f64) -> Result<Vec<f32>, String> {
+    stretch_shift_stereo(input, sr, ratio, 0.0)
+}
+
+/// Farthest supported transposition, in semitones either way.
+pub const MAX_SEMITONES: f32 = 24.0;
+
+/// [`stretch_stereo`] that also transposes by `semitones` (length unchanged by it), in
+/// the same pass.
+pub fn stretch_shift_stereo(input: &[f32], sr: u32, ratio: f64, semitones: f32) -> Result<Vec<f32>, String> {
+    if !(semitones.is_finite() && semitones.abs() <= MAX_SEMITONES + 1e-4) {
+        return Err(format!("transposition {semitones} is outside ±{MAX_SEMITONES} semitones"));
+    }
     if !(ratio.is_finite() && (MIN_RATIO - 1e-9..=MAX_RATIO + 1e-9).contains(&ratio)) {
-        return Err(format!(
-            "stretch ratio {ratio} is outside {MIN_RATIO}–{MAX_RATIO}"
-        ));
+        return Err(format!("stretch ratio {ratio} is outside {MIN_RATIO}–{MAX_RATIO}"));
     }
     let frames = input.len() / 2;
     let out_len = out_frames(frames, ratio);
     if frames == 0 || out_len == 0 {
         return Ok(vec![0.0; out_len * 2]);
     }
-    if (ratio - 1.0).abs() < 1e-9 {
+    if (ratio - 1.0).abs() < 1e-9 && semitones == 0.0 {
         return Ok(input[..frames * 2].to_vec());
     }
     let srf = sr.max(1) as f32;
     // very short buffers: pad with silence so the algorithm has room, then crop
     let min_out = unsafe { wave_stretch_min_output(srf, 2) } + 1;
-    let (in_n, out_n) = if out_len < min_out {
-        (((min_out as f64) / ratio).ceil() as usize, min_out)
-    } else {
-        (frames, out_len)
-    };
+    let (in_n, out_n) = if out_len < min_out { (((min_out as f64) / ratio).ceil() as usize, min_out) } else { (frames, out_len) };
     let mut l = vec![0.0f32; in_n];
     let mut r = vec![0.0f32; in_n];
     for (i, [a, b]) in input.as_chunks::<2>().0.iter().enumerate() {
@@ -61,7 +68,7 @@ pub fn stretch_stereo(input: &[f32], sr: u32, ratio: f64) -> Result<Vec<f32>, St
     let mut or = vec![0.0f32; out_n];
     let ins = [l.as_ptr(), r.as_ptr()];
     let outs = [ol.as_mut_ptr(), or.as_mut_ptr()];
-    let rc = unsafe { wave_stretch_exact(srf, 2, ins.as_ptr(), in_n, outs.as_ptr(), out_n) };
+    let rc = unsafe { wave_stretch_exact(srf, 2, ins.as_ptr(), in_n, outs.as_ptr(), out_n, semitones) };
     match rc {
         0 => {}
         1 => return Err("audio too short to stretch".into()),
@@ -84,8 +91,7 @@ mod tests {
         let n = (sr as f64 * secs) as usize;
         (0..n)
             .flat_map(|i| {
-                let v =
-                    (0.5 * (2.0 * std::f64::consts::PI * freq * i as f64 / sr as f64).sin()) as f32;
+                let v = (0.5 * (2.0 * std::f64::consts::PI * freq * i as f64 / sr as f64).sin()) as f32;
                 [v, v]
             })
             .collect()
@@ -146,6 +152,25 @@ mod tests {
             stretch_stereo(&x, sr, ratio).unwrap();
             println!("3 min stereo ×{ratio}: {:?}", t.elapsed());
         }
+    }
+
+    #[test]
+    fn transposes_and_keeps_the_length() {
+        let sr = 48_000;
+        let x = sine(440.0, sr, 1.0);
+        for (ratio, semis) in [(1.0, 7.0f32), (1.0, -12.0), (1.0, 12.0), (2.0, 3.0), (0.5, -5.5)] {
+            let y = stretch_shift_stereo(&x, sr, ratio, semis).unwrap();
+            assert_eq!(y.len() / 2, out_frames(x.len() / 2, ratio), "×{ratio} {semis} st");
+            let want = 440.0 * 2f64.powf(semis as f64 / 12.0);
+            let f = freq_of(&y, sr);
+            // within 10 cents
+            assert!((1200.0 * (f / want).log2()).abs() < 10.0, "×{ratio} {semis} st: {f} Hz, want {want}");
+            let mid = &y[y.len() / 4..y.len() * 3 / 4];
+            let rms = (mid.iter().map(|v| v * v).sum::<f32>() / mid.len() as f32).sqrt();
+            assert!((rms - 0.354).abs() < 0.06, "×{ratio} {semis} st: rms {rms}");
+        }
+        assert!(stretch_shift_stereo(&x, sr, 1.0, 30.0).is_err());
+        assert!(stretch_shift_stereo(&x, sr, 1.0, f32::NAN).is_err());
     }
 
     #[test]

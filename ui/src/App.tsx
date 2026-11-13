@@ -32,7 +32,7 @@ import { PianoRoll } from './views/PianoRoll';
 import { renameCurrent } from './views/patternShared';
 import { NotebookHost } from './views/Notebook';
 import { toggleNotebook } from './state/notebook';
-import { clonePattern, closeTopPatWin, nextEmptyPattern, patMode, pickPatternNum, setPatMode, stepPattern, toggleRack, toggleRoll } from './state/pattern';
+import { clonePattern, closeTopPatWin, nextEmptyPattern, patMode, pickPatternNum, stepPattern, toggleRack, toggleRoll } from './state/pattern';
 import { Help, Toolbar, TOOLS } from './views/Toolbar';
 
 /** Stacking rank of a window (effect windows, Channel Rack, Piano roll) inside the window layer (1 = bottom). */
@@ -67,6 +67,7 @@ function typingTarget() {
 const patWinFocused = () => !!(document.activeElement as HTMLElement | null)?.closest?.('.patwin');
 
 function onKey(e: KeyboardEvent) {
+  if (U.openingProject) { e.preventDefault(); return; }
   if (e.key === 'Alt') { e.preventDefault(); if (!U.alt) setU('alt', true); return; }
   if (typingIn(e.target as HTMLElement)) return;
   const k = e.key.toLowerCase(), m = e.ctrlKey || e.metaKey;
@@ -152,7 +153,7 @@ function onKey(e: KeyboardEvent) {
   if (e.shiftKey && !m && !e.altKey && e.code === 'KeyM' && !patWinFocused()) { e.preventDefault(); return A.toggleStretchMode(); }
   if (!m && !e.altKey) {
     if (k === 'r') return A.toggleRec();
-    if (k === 'l') return setPatMode(!patMode());
+    if (k === 'l') return A.switchMode(!patMode());
     if (k === 'f') { setU('follow', !U.follow); return say(U.follow ? tl('a.app.followOn') : tl('a.app.followOff')); }
     const t = TOOLS.find(x => x[1].toLowerCase() === k);
     if (t) { setU('tool', t[0]); say(tl('a.app.tool', { name: tl(t[2]) })); }
@@ -185,6 +186,7 @@ export function App() {
     window.addEventListener('blur', onBlur);
     let offDrop: (() => void) | null = null;
     be().onOsDrop(ev => {
+      if (U.openingProject) return;
       if (ev.type === 'over') { if (!U.dragOver) setU('dragOver', true); }
       else if (ev.type === 'leave') setU('dragOver', false);
       else { setU('dragOver', false); if (ev.paths.length) void importAt(ev.paths, ev.x, ev.y, U.alt); }
@@ -215,7 +217,8 @@ export function App() {
   createEffect(() => { be().setTitle((S.path ? baseName(S.path) : tl('a.tb.untitled')) + (S.dirty ? ' •' : '') + ' — WAVE'); });
 
   return (
-    <div class="app" onContextMenu={e => e.preventDefault()}>
+    <>
+    <div class="app" inert={U.openingProject} onContextMenu={e => e.preventDefault()}>
       <Toolbar />
       <div style={{ flex: 1, 'min-height': 0, display: 'flex' }}>
         <Show when={U.pickOpen}><Browser /></Show>
@@ -242,5 +245,11 @@ export function App() {
       <FxPickerHost />
       <MusicDialog />
     </div>
+    <Show when={U.openingProject}>
+      <div class="overlay" style={{ 'z-index': 400 }}>
+        <div class="dialog" role="status">{tl('d.act.opening')}</div>
+      </div>
+    </Show>
+    </>
   );
 }

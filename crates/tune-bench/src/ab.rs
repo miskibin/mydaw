@@ -32,18 +32,10 @@ fn snapped(take: &Audio, est: Option<&dyn F0Estimator>) -> Audio {
             drift: 0.0,
             formant: 0.0,
             gain: 0.0,
+            speed: None,
         })
         .collect();
-    wave_engine::tune_render::render(
-        take,
-        &a,
-        &ClipTune {
-            notes,
-            pencil: vec![],
-            reference: None,
-        },
-        None,
-    )
+    wave_engine::tune_render::render(take, &a, &ClipTune { notes, pencil: vec![], reference: None }, None)
 }
 
 fn trimmed(a: &Audio) -> Audio {
@@ -54,11 +46,7 @@ fn trimmed(a: &Audio) -> Audio {
 /// RMS over the active 20 ms blocks (gate −50 dBFS).
 fn active_rms(x: &[f32], sr: u32) -> f32 {
     let block = (sr as usize / 50).max(1) * 2;
-    let ms: Vec<f32> = x
-        .chunks(block)
-        .map(|c| c.iter().map(|v| v * v).sum::<f32>() / c.len() as f32)
-        .filter(|m| *m > 1e-5)
-        .collect();
+    let ms: Vec<f32> = x.chunks(block).map(|c| c.iter().map(|v| v * v).sum::<f32>() / c.len() as f32).filter(|m| *m > 1e-5).collect();
     if ms.is_empty() {
         return 0.0;
     }
@@ -72,18 +60,11 @@ fn matched(a: &Audio, b: &Audio) -> (Vec<f32>, Vec<f32>) {
     let gb = target / active_rms(b.content(), b.sr).max(1e-6);
     let peak = (a.peak() * ga).max(b.peak() * gb);
     let k = if peak > 0.98 { 0.98 / peak } else { 1.0 };
-    (
-        a.content().iter().map(|x| x * ga * k).collect(),
-        b.content().iter().map(|x| x * gb * k).collect(),
-    )
+    (a.content().iter().map(|x| x * ga * k).collect(), b.content().iter().map(|x| x * gb * k).collect())
 }
 
 /// (name, take, reference) fragments: from VocalSet when given, else synthetic.
-fn fragments(
-    root: Option<&Path>,
-    n: usize,
-    est: Option<&dyn F0Estimator>,
-) -> Result<Vec<(String, Audio, Audio)>, String> {
+fn fragments(root: Option<&Path>, n: usize, est: Option<&dyn F0Estimator>) -> Result<Vec<(String, Audio, Audio)>, String> {
     let mut out = vec![];
     if let Some(root) = root {
         let items = vocalset::index(root)?;
@@ -107,23 +88,11 @@ fn fragments(
                     drift: 0.0,
                     formant: 0.0,
                     gain: 0.0,
+                    speed: None,
                 })
                 .collect();
-            let off = wave_engine::tune_render::render(
-                &take,
-                &a,
-                &ClipTune {
-                    notes,
-                    pencil: vec![],
-                    reference: None,
-                },
-                None,
-            );
-            out.push((
-                format!("{} ← {}", ti.stem, ri.stem),
-                trimmed(&off),
-                trimmed(&reference),
-            ));
+            let off = wave_engine::tune_render::render(&take, &a, &ClipTune { notes, pencil: vec![], reference: None }, None);
+            out.push((format!("{} ← {}", ti.stem, ri.stem), trimmed(&off), trimmed(&reference)));
         }
     } else {
         let sr = 44100.0;
@@ -131,27 +100,10 @@ fn fragments(
             let melody = song(500 + s, 12);
             let mut rng = Rng(31 * (s + 1));
             let detune: Vec<f32> = (0..melody.len()).map(|_| rng.sym() * 80.0).collect();
-            let take = sing(
-                &melody,
-                &Voice {
-                    seed: s + 3,
-                    ..Voice::default()
-                },
-                &detune,
-                10.0,
-                sr,
-            );
+            let take = sing(&melody, &Voice { seed: s + 3, ..Voice::default() }, &detune, 10.0, sr);
             let reference = sing(
                 &melody,
-                &Voice {
-                    formant: 1.15,
-                    tempo: 0.92,
-                    jitter: 0.1,
-                    transpose: 0.0,
-                    vib_rate: 6.0,
-                    vib_depth: 0.25,
-                    seed: 50 + s,
-                },
+                &Voice { formant: 1.15, tempo: 0.92, jitter: 0.1, transpose: 0.0, vib_rate: 6.0, vib_depth: 0.25, seed: 50 + s },
                 &[],
                 0.0,
                 sr,
@@ -182,11 +134,7 @@ pub fn make(
     let mut template = String::from("listener,fragment,choice\n");
     for (i, (name, take, reference)) in frags.iter().enumerate() {
         let (ours, t, _) = tune_audio(take, reference, p, est);
-        let base = if baseline == "take" {
-            trimmed(take)
-        } else {
-            snapped(take, est)
-        };
+        let base = if baseline == "take" { trimmed(take) } else { snapped(take, est) };
         let (x, y) = matched(&ours, &base);
         let ours_first = rng.unit() < 0.5;
         let (a, b) = if ours_first { (&x, &y) } else { (&y, &x) };
@@ -194,16 +142,8 @@ pub fn make(
         write_wav(&out_dir.join(format!("{id}_A.wav")), a, take.sr)?;
         write_wav(&out_dir.join(format!("{id}_B.wav")), b, take.sr)?;
         let (r, _) = matched(reference, reference);
-        write_wav(
-            &out_dir.join(format!("{id}_reference.wav")),
-            &r,
-            reference.sr,
-        )?;
-        let (na, nb) = if ours_first {
-            ("tune-to-reference", baseline)
-        } else {
-            (baseline, "tune-to-reference")
-        };
+        write_wav(&out_dir.join(format!("{id}_reference.wav")), &r, reference.sr)?;
+        let (na, nb) = if ours_first { ("tune-to-reference", baseline) } else { (baseline, "tune-to-reference") };
         key += &format!("{id},\"{name}\",{na},{nb},{:.2}\n", t.score);
         template += &format!("listener1,{id},\n");
         eprintln!("  {id} {name} (score {:.2})", t.score);
@@ -222,9 +162,7 @@ pub fn make(
         ),
     )
     .map_err(|e| e.to_string())?;
-    Ok(
-        json!({ "kit": out_dir.display().to_string(), "fragments": frags.len(), "baseline": baseline }),
-    )
+    Ok(json!({ "kit": out_dir.display().to_string(), "fragments": frags.len(), "baseline": baseline }))
 }
 
 /// P(X ≥ k or X ≤ n−k) for X ~ Binomial(n, ½), k ≥ n/2: the two-sided exact p-value.
@@ -234,9 +172,7 @@ fn binomial_two_sided(k: usize, n: usize) -> f64 {
     for i in 1..=n {
         ln_c[i] = ln_c[i - 1] + ((n - i + 1) as f64).ln() - (i as f64).ln();
     }
-    let tail: f64 = (k..=n)
-        .map(|i| (ln_c[i] - n as f64 * 2f64.ln()).exp())
-        .sum();
+    let tail: f64 = (k..=n).map(|i| (ln_c[i] - n as f64 * 2f64.ln()).exp()).sum();
     (2.0 * tail).min(1.0)
 }
 
@@ -251,15 +187,12 @@ pub fn score(kit: &Path, ratings: &Path) -> Result<Value, String> {
             Some((id, if a_is_ours { 'A' } else { 'B' }))
         })
         .collect();
-    let text =
-        std::fs::read_to_string(ratings).map_err(|e| format!("{}: {e}", ratings.display()))?;
+    let text = std::fs::read_to_string(ratings).map_err(|e| format!("{}: {e}", ratings.display()))?;
     let (mut wins, mut total) = (0usize, 0usize);
     let mut per: std::collections::BTreeMap<String, (usize, usize)> = Default::default();
     for l in text.lines().skip(1) {
         let c: Vec<&str> = l.split(',').map(str::trim).collect();
-        let (Some(who), Some(id), Some(choice)) =
-            (c.first(), c.get(1), c.get(2).and_then(|s| s.chars().next()))
-        else {
+        let (Some(who), Some(id), Some(choice)) = (c.first(), c.get(1), c.get(2).and_then(|s| s.chars().next())) else {
             continue;
         };
         let Some(&ours) = ours_is.get(*id) else {

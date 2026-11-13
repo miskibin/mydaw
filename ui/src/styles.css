@@ -110,13 +110,38 @@ a { color: var(--blue); }
   0% { transform: translateX(-100%); }
   100% { transform: translateX(350%); }
 }
-.fgroup { padding: 4px 10px 2px 22px; font: 600 9px var(--sans); letter-spacing: .1em; color: var(--fg5); text-transform: uppercase; }
-.fitem { height: 22px; display: flex; align-items: center; gap: 6px; padding: 0 10px 0 22px; font: 12px var(--sans); color: var(--fg2); cursor: grab; }
+.bsearch { height: 30px; flex: none; display: flex; align-items: center; gap: 7px; padding: 0 6px 0 10px; border-bottom: 1px solid var(--bg0); color: var(--fg4); }
+.bsearch:focus-within { color: var(--fg2); box-shadow: inset 0 -1px 0 var(--blue); }
+.bsearch input { flex: 1; min-width: 0; height: 22px; border: 0; outline: 0; background: transparent; color: var(--fg-hi); font: 12px var(--sans); }
+.bsearch input::placeholder { color: var(--fg5); }
+.browser .scroll:focus { outline: none; }
+.browser .scroll:focus-visible { box-shadow: inset 0 0 0 1px var(--sel-ring); }
+.hmeta { flex: none; margin-left: 8px; font: 500 10px var(--mono); letter-spacing: 0; color: var(--fg4); }
+.flist { padding: 3px 0 5px; }
+.flist.in { margin: 4px -10px -6px; }
+/* open / closed mark of a group, kit or folder: points right, turns down when open */
+.chev { flex: none; color: var(--fg3); transition: transform .12s; }
+.chev.open { transform: rotate(90deg); }
+.grow { height: 26px; display: flex; align-items: center; gap: 7px; padding: 0 10px 0 8px; font: 500 12px var(--sans); color: var(--fg2); cursor: pointer; }
+.grow:hover { background: var(--bg6); color: var(--fg-hi); }
+.grow:hover .chev, .folder:hover .chev, .kit .top.can:hover .chev { color: var(--fg-hi); }
+.grow .gico { width: 18px; height: 18px; flex: none; display: grid; place-items: center; border-radius: 4px; background: color-mix(in srgb, var(--c) 20%, transparent); color: var(--c); }
+.grow .nm { flex: 1; min-width: 0; }
+.grow .cnt { font: 500 10px var(--mono); color: var(--fg4); }
+.fitem { height: 22px; display: flex; align-items: center; gap: 7px; padding: 0 10px; font: 12px var(--sans); color: var(--fg2); cursor: grab; }
+.fitem.sub { padding-left: 30px; }
+.fitem .fico { width: 14px; flex: none; display: grid; place-items: center; }
+.fitem .nm { flex: 1; min-width: 0; }
 .fitem:hover { background: var(--bg6); color: var(--fg-hi); }
-.fitem.playing { color: var(--green); }
-.chev { width: 14px; flex: none; color: var(--fg5); font: 10px var(--mono); text-align: center; }
-.folder { height: 26px; display: flex; align-items: center; gap: 6px; padding: 0 6px 0 10px; font: 12px var(--sans); color: var(--fg2); cursor: pointer; }
-.folder:hover { background: var(--bg6); }
+.fitem.sel { background: var(--sel-bg); color: var(--fg-hi); box-shadow: inset 2px 0 0 var(--blue); }
+.fitem.playing, .fitem.playing .fico { color: var(--green) !important; }
+.fkey { flex: none; padding: 1px 4px; border-radius: 3px; background: var(--bg1); font: 500 9px var(--mono); color: var(--fg3); }
+.fnote { padding: 4px 10px 4px 10px; font: 11px var(--sans); color: var(--fg4); }
+.fnote.sub { padding-left: 30px; }
+.fnote.err { color: var(--danger); }
+.kit .top.can { cursor: pointer; }
+.folder { height: 26px; display: flex; align-items: center; gap: 7px; padding: 0 6px 0 8px; font: 12px var(--sans); color: var(--fg2); cursor: pointer; }
+.folder:hover { background: var(--bg6); color: var(--fg-hi); }
 .xbtn { width: 18px; height: 18px; border: 0; border-radius: 3px; background: transparent; color: var(--fg4); cursor: pointer; padding: 0; font-size: 13px; line-height: 1; }
 .xbtn:hover { background: var(--line2); color: var(--danger); }
 .vsplit { width: 5px; flex: none; cursor: col-resize; background: var(--bg0); }
@@ -414,8 +439,16 @@ select option { background: var(--bg4); color: var(--fg); }
 .ptools .toolname { align-self: center; font: 600 10px var(--sans); color: var(--fg3); letter-spacing: .04em; min-width: 62px; }
 .ptools .vsep { align-self: center; height: 28px; }
 .ptools .smallbtn { height: 26px; padding: 0 10px; }
+/* the pitch editor: one row of tools under the title bar, labels beside their fields */
+.pitchwin .ptools { align-items: center; gap: 8px; padding: 5px 10px; }
+.pitchwin .ptools .numf { flex-direction: row; gap: 5px; height: 26px; box-sizing: border-box; padding: 0 7px; align-items: center; width: auto !important; }
+.pitchwin .ptools .numf .lab, .pitchwin .plab, .pitchwin .reflab { font: 600 8.5px var(--sans); color: var(--fg5); letter-spacing: .08em; text-transform: uppercase; white-space: nowrap; }
+.pitchwin .plab, .pitchwin .reflab { display: flex; flex-direction: row; align-items: center; gap: 5px; }
+.pitchwin .ptools .sel { height: 26px; }
+.pitchwin .reflab .sel { min-width: 130px; max-width: 200px; }
+.pitchwin .ptools .refnote { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.pitchwin .winhd .smallbtn { height: 22px; padding: 0 9px; }
 .macro { display: flex; align-items: flex-end; gap: 6px; }
-.refrow { align-items: flex-end; }
 .reflab { display: flex; flex-direction: column; gap: 2px; font: 600 8px var(--sans); color: var(--fg4); letter-spacing: .06em; }
 .reflab .sel { height: 26px; min-width: 150px; max-width: 220px; }
 .refnote { align-self: center; font: 500 11px var(--sans); color: var(--fg3); }
@@ -477,6 +510,7 @@ select option { background: var(--bg4); color: var(--fg); }
 .rackgrid { position: relative; flex: 1; min-width: 0; overflow: hidden; background: var(--bg2); }
 .crow { display: flex; align-items: center; gap: 5px; padding: 0 8px 0 0; border-bottom: 1px solid color-mix(in srgb, var(--bg0) 60%, transparent); box-sizing: border-box; }
 .crow.sel { background: var(--sel-bg2); }
+.crow.dropon { box-shadow: inset 0 0 0 1px var(--blue); background: var(--sel-bg2); }
 .crow .cstrip { width: 4px; align-self: stretch; flex: none; }
 .crow.muted .cstrip { opacity: .35; }
 .crow .miniknob { transform: scale(.84); }
@@ -556,6 +590,7 @@ select option { background: var(--bg4); color: var(--fg); }
 .toolbar .patselbox, .toolbar .patselbtn, .toolbar .patselnew { height: 28px; box-sizing: border-box; }
 .tbmid { min-width: 0; display: flex; align-items: center; gap: 8px; overflow: hidden; }
 .tbmid > * { flex-shrink: 0; }
+.mainvol { display: flex; align-items: center; height: 30px; padding: 0 3px; }
 .tbright { min-width: 0; align-self: stretch; display: flex; align-items: center; justify-content: flex-end; gap: 8px; }
 .tbright .dragfill { flex: 1 1 0; min-width: 0; align-self: stretch; }
 /* one height for every control in the bar */
@@ -566,8 +601,8 @@ select option { background: var(--bg4); color: var(--fg); }
 /* one row at every width: labels turn into icons, then redundant controls drop out */
 @media (max-width: 1560px) { .toolbar .loopText { display: none; } }
 @media (max-width: 1460px) { .toolbar .tapbtn, .toolbar .monbtn, .toolbar .clockbox .tag9 { display: none; } }
-@media (max-width: 1340px) { .toolbar .tbtn .lbl, .toolbar .typoct { display: none; } .toolbar .tbtn { padding: 0 7px; } .toolbar .count { display: none; } }
-@media (max-width: 1200px) { .toolbar { column-gap: 8px; } .toolbar .projName, .toolbar .hinttxt { display: none; } .toolbar .snapsel { width: 92px; } }
+@media (max-width: 1340px) { .toolbar .typoct { display: none; } .toolbar .count { display: none; } }
+@media (max-width: 1200px) { .toolbar { column-gap: 8px; } .toolbar .projName, .toolbar .hinttxt { display: none; } }
 @media (max-width: 1040px) { .toolbar .patselbtn { min-width: 64px; max-width: 96px; } .toolbar .patselnew { display: none; } .toolbar .tools > button:nth-child(n+4), .toolbar .seg > button.metrobtn, .toolbar .typkb { display: none; } .tbmid, .tbright { gap: 5px; } }
 @media (max-width: 900px) { .toolbar .snapsel, .toolbar .tools, .toolbar .clockbox > div { display: none; } }
 .winbtns > button { width: 46px; border: 0; background: transparent; color: var(--fg2); cursor: default; display: flex; align-items: center; justify-content: center; padding: 0; }
@@ -628,6 +663,10 @@ select option { background: var(--bg4); color: var(--fg); }
 .fxp-def { font: 500 9.5px var(--mono); color: var(--fg5); }
 .fxp-note, .fxp-empty { padding: 8px 6px; font: 400 12px/1.4 var(--sans); color: var(--fg4); }
 .fxp-grid .fxp-empty { grid-column: 1 / -1; padding: 24px 4px; }
+/* "All": a quiet section label with a hairline, spanning the grid */
+.fxp-sect { grid-column: 1 / -1; display: flex; align-items: center; gap: 8px; margin-top: 6px; font: 600 9px var(--sans); letter-spacing: .08em; text-transform: uppercase; color: var(--fg5); }
+.fxp-sect::after { content: ''; flex: 1; height: 1px; background: var(--line); }
+.fxp-grid > .fxp-sect:first-child { margin-top: 0; }
 .fxp-ft { display: flex; align-items: center; gap: 14px; padding: 7px 12px; border-top: 1px solid var(--line2); font: 400 11px var(--sans); color: var(--fg4); }
 .fxp-ft kbd { padding: 0 4px; border: 1px solid var(--line3); border-radius: 3px; font: 500 10px var(--mono); color: var(--fg3); background: var(--bg2); }
 .fxp-ft .grow { flex: 1; }
@@ -711,8 +750,8 @@ select option { background: var(--bg4); color: var(--fg); }
 
 
 /* automatic instrument icons (ui/instIcons guessIcon) */
-.pitem .picon, .cname .cicon, .strip .micon { display: inline-flex; flex: none; opacity: .9; }
-.pitem .picon { width: 12px; justify-content: center; }
+.pitem .picon, .sitem .picon, .cname .cicon, .strip .micon { display: inline-flex; flex: none; opacity: .9; }
+.pitem .picon, .sitem .picon { width: 12px; justify-content: center; }
 .cname .cicon { margin-right: 4px; }
 .strip .micon { margin-right: 4px; vertical-align: -1px; }
 
@@ -776,6 +815,13 @@ select option { background: var(--bg4); color: var(--fg); }
 .chanwin .smpgrp { display: flex; align-items: flex-end; gap: 14px; }
 .chanwin .smpgrp + .smpgrp { padding-left: 22px; border-left: 1px solid var(--line); }
 .chanwin .smpdim { opacity: .4; }
+.chanwin .inspick { height: 22px; max-width: 170px; flex: none; }
+.smpwin .smpwave { position: relative; flex: none; margin: 12px 12px 0; border: 1px solid var(--line); border-radius: 6px; overflow: hidden; cursor: pointer; }
+.smpwin .smpmode { margin-left: 4px; }
+.smpwin .smpstat { margin-left: auto; font-size: 10.5px; color: var(--fg4); }
+.smpwin .smpstat.bad { color: var(--red); }
+.smpwin .smpfit .seg > button { width: auto; padding: 0 9px; font: 500 11px var(--sans); }
+.smpwin .smpfit .seg > button:disabled { opacity: .35; cursor: default; }
 .chanwin .chknobs { display: flex; align-items: flex-end; gap: 18px; padding: 14px 14px 14px; flex-wrap: wrap; }
 .chanwin .chroute { display: flex; flex-direction: column; gap: 4px; margin-left: auto; font-size: 11px; color: var(--fg4); }
 .chanwin .chroute .sel { min-width: 150px; }
@@ -806,7 +852,13 @@ select option { background: var(--bg4); color: var(--fg); }
 /* bigger mute / solo / arm targets in track headers and mixer strips */
 .lane .mini.m, .lane .mini.s, .strip .mini.m, .strip .mini.s { min-width: 22px; height: 19px; font-size: 10px; }
 .lane .mini.route { min-width: 30px; padding: 0 4px; }
-.toolbar .snapsel { flex: none; width: 118px; }
+.toolbar .snapsel { flex: none; width: 96px; }
+/* PAT over SONG: two short rows take half the width of a side-by-side switch */
+.toolbar .seg.patsong { flex-direction: column; justify-content: center; gap: 1px; padding: 2px; }
+.toolbar .seg.patsong > button { height: 11px; width: 38px; padding: 0; font-size: 8.5px; line-height: 1; border-radius: 2px; }
+/* icon-only toolbar buttons (Mixer, Windows); the Windows button keeps its count */
+.toolbar .tbtn.icon { padding: 0 7px; }
+.toolbar .tbtn .cnt { font-size: 9.5px; font-weight: 600; min-width: 7px; }
 
 /* EQ quick low/high cut knobs */
 
@@ -898,3 +950,6 @@ select option { background: var(--bg4); color: var(--fg); }
 .updrow { display: flex; gap: 10px; align-items: center; font: 500 11px var(--sans); color: var(--fg2); min-height: 24px; }
 .updrow b { font: 600 12px var(--mono); color: var(--fg-hi); }
 @media (prefers-reduced-motion: reduce) { .updbar i { transition: none; } }
+.pcbtn { display: inline-flex; align-items: center; gap: 5px; position: relative; }
+.pcbtn .pcon { width: 5px; height: 5px; border-radius: 50%; }
+.refnote.warn { color: var(--amber); }

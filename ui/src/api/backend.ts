@@ -3,14 +3,15 @@
 import { Channel, invoke } from '@tauri-apps/api/core';
 import { listen } from '@tauri-apps/api/event';
 import type {
-  AudioConfig, AudioDevices, AudioHost, AudioStatus, LatencyReport, Catalog, CliStatus, ExportProgress, ExportResult, ExportStemsResult, F0ModelStatus, Id, ImportResult, LibFile,
-  KeysStatus, LibraryList, LibraryProgress, MidiDevice, MidiNoteEvent, MidiStatus, ModelProgress, AppInfo, UpdateInfo, UpdateProgress, MusicAnalysis, AutoVocalPlan, AutoVocalStyle, Op, OpenResult, PitchAnalysis, PitchTarget, RecoveredProject, RefTune, SaveResult, StateDto, TransportDto, Vst3Info, Vst3Param,
+  AudioConfig, AudioDevices, AudioHost, AudioStatus, LatencyReport, Catalog, CliStatus, ExportAudioOptions, ExportProgress, ExportResult, ExportStemsOptions, ExportStemsResult, F0ModelStatus, Id, ImportResult, LibFile,
+  KeysStatus, LibraryList, LibraryProgress, Melody, MelodyChannel, MidiDevice, MidiNoteEvent, MidiStatus, ModelProgress, AppInfo, UpdateInfo, UpdateProgress, MusicAnalysis, AutoVocalPlan, AutoVocalStyle, Op, OpenResult, PitchAnalysis, PitchTarget, RecoveredProject, RefTune, SaveResult, StateDto, TransportDto, Vst3Info, Vst3Param,
 } from './types';
 
 export interface OsDropEvent { type: 'over' | 'drop' | 'leave'; paths: string[]; x: number; y: number }
 
 export interface EventMap {
   state: StateDto;
+  'project-open-requested': null;
   'library-progress': LibraryProgress;
   /** WAVE Keys: the piano started loading, is ready, or is not on this computer. */
   'keys-status': KeysStatus;
@@ -66,11 +67,22 @@ export interface Backend {
    *  0 dB. One undo step; the original source stays in the project. Slow: seconds per minute of audio. */
   bakeRider(args: { clipId: Id; params: Record<string, number> }): Promise<{ sourceId: Id; clipId: Id }>;
   trimClip(clipId: Id): Promise<{ sourceId: Id }>;
+  /** FL's "Make unique" for audio clips (all of one source, on one track): they get their own copy of the source
+   *  (same file and audio, own name "Name #2" and colour) on a new track right below theirs, routed to a free mixer
+   *  insert (no track or channel routed to it, no effects; a new one when none is free), named after the copy.
+   *  One undo step; other clips of the source are untouched. Rejects other clip kinds and mixed sources/tracks. */
+  makeUnique(clipIds: Id[]): Promise<{ sourceId: Id; track: number; insertId: Id }>;
   /** Renders a comp clip to a new source; the clip becomes an ordinary audio clip (one undo step). */
   flattenComp(clipId: Id): Promise<{ sourceId: Id }>;
   /** Plays one whole take instead of the comp (null = back to the comp). Live only, not undone. */
   compAudition(compId: Id, takeId: Id | null): Promise<void>;
-  previewClip(clipId: Id): Promise<void>;
+  /** Plays one clip alone. `from` (seconds of the source): from there, the take with its pitch edits at the
+   *  source's own speed, to the end of the clip (the pitch editor's Solo); rejects when nothing is left after it. */
+  previewClip(clipId: Id, from?: number): Promise<void>;
+  /** Channels whose notes play over an audio clip (pattern clips in the playlist), best fit to the singing first. */
+  melodyChannels(clipId: Id): Promise<MelodyChannel[]>;
+  /** The notes `channel` plays over the clip as a melody reference (a copy; `span`: seconds of the source). */
+  melodyReference(clipId: Id, channel: Id, span?: [number, number] | null): Promise<{ melody: Melody; fit: number }>;
   previewFile(path: string): Promise<void>;
   previewStop(): Promise<void>;
   /** Play one note of a channel now (not an edit). `key` MIDI (default: the channel's root), `vel` 0..1, `pattern`: the one being edited (routing). */
@@ -104,7 +116,9 @@ export interface Backend {
   libraryRemoveFolder(path: string): Promise<string[]>;
   projectNew(): Promise<StateDto>;
   /** The file dialog when `path` is omitted. */
-  projectOpen(path?: string): Promise<OpenResult>;
+  projectOpen(path?: string, ifRevision?: number): Promise<OpenResult>;
+  /** Project paths received at launch or forwarded by another instance. */
+  takeProjectOpenRequests(): Promise<string[]>;
   /** The save dialog when the project has no path yet or `saveAs`. */
   projectSave(saveAs?: boolean): Promise<SaveResult>;
   /** Autosave tick for a project that was never saved: keeps its crash-recovery copy current
@@ -116,16 +130,16 @@ export interface Backend {
   recoveryRestore(id: string): Promise<{ state: StateDto; warnings: string[] }>;
   /** Deletes a recovered project the user does not want. */
   recoveryDiscard(id: string): Promise<void>;
-  /** Offline bounce of the master mix to a 32-bit float stereo WAV. */
-  exportAudio(opts: { useLoop: boolean; tail: number; sampleRate: number; format?: 'wav' | 'mp3'; mp3Kbps?: number }): Promise<ExportResult>;
+  /** Offline bounce of the master mix to stereo WAV or MP3. */
+  exportAudio(opts: ExportAudioOptions): Promise<ExportResult>;
   /**
-   * Stem export, like FL Studio's "Split mixer tracks": asks for a folder, then writes one 32-bit float
+   * Stem export, like FL Studio's "Split mixer tracks": asks for a folder, then writes one
    * WAV per mixer insert that has sound (named after the insert, after its effects and fader, before the
    * master), plus `Master.wav` (the mix with master effects) when `includeMaster`. Muted inserts and
    * inserts with nothing routed into them get no file; solo is ignored. All files have the same length.
    * Progress: `export-progress`. No file is left behind when aborted.
    */
-  exportStems(opts: { useLoop: boolean; tail: number; sampleRate: number; includeMaster: boolean }): Promise<ExportStemsResult>;
+  exportStems(opts: ExportStemsOptions): Promise<ExportStemsResult>;
   /** Abort an in-flight `exportAudio` / `exportStems` before a file is written. */
   exportCancel(): Promise<void>;
   vst3Scan(rescan: boolean): Promise<Vst3Info[]>;
@@ -226,9 +240,12 @@ export function tauriBackend(): Backend {
     autoVocalPlan: a => invoke('auto_vocal_plan', { clipId: a.clipId, beatClipId: a.beatClipId ?? null, style: a.style ?? null, bakeRider: a.bakeRider ?? null }),
     bakeRider: a => invoke('bake_rider', { clipId: a.clipId, params: a.params }),
     trimClip: clipId => invoke('trim_clip', { clipId }),
+    makeUnique: clipIds => invoke('make_unique', { clipIds }),
     flattenComp: clipId => invoke('flatten_comp', { clipId }),
     compAudition: (compId, takeId) => invoke('comp_audition', { compId, takeId }),
-    previewClip: clipId => invoke('preview_clip', { clipId }),
+    previewClip: (clipId, from) => invoke('preview_clip', { clipId, from: from ?? null }),
+    melodyChannels: clipId => invoke('melody_channels', { clipId }),
+    melodyReference: (clipId, channel, span) => invoke('melody_reference', { clipId, channel, span: span ?? null }),
     previewFile: path => invoke('preview_file', { path }),
     previewStop: () => invoke('preview_stop'),
     typingNote: a => invoke('typing_note', { ch: a.ch, key: a.key, vel: a.vel ?? null, on: a.on }),
@@ -251,14 +268,15 @@ export function tauriBackend(): Backend {
     libraryAddFolder: () => invoke('library_add_folder'),
     libraryRemoveFolder: path => invoke('library_remove_folder', { path }),
     projectNew: () => invoke('project_new'),
-    projectOpen: path => invoke('project_open', { path: path ?? null }),
+    projectOpen: (path, ifRevision) => invoke('project_open', { path: path ?? null, ifRevision }),
+    takeProjectOpenRequests: () => invoke('take_project_open_requests'),
     projectSave: saveAs => invoke('project_save', { saveAs: !!saveAs }),
     recoveryWrite: () => invoke('recovery_write'),
     recoveryList: () => invoke('recovery_list'),
     recoveryRestore: id => invoke('recovery_restore', { id }),
     recoveryDiscard: id => invoke('recovery_discard', { id }),
-    exportAudio: opts => invoke('export_audio', { useLoop: opts.useLoop, tail: opts.tail, sampleRate: opts.sampleRate, format: opts.format, mp3Kbps: opts.mp3Kbps }),
-    exportStems: opts => invoke('export_stems', { useLoop: opts.useLoop, tail: opts.tail, sampleRate: opts.sampleRate, includeMaster: opts.includeMaster }),
+    exportAudio: opts => invoke('export_audio', { ...opts }),
+    exportStems: opts => invoke('export_stems', { ...opts }),
     exportCancel: () => invoke('export_cancel'),
     vst3Scan: rescan => invoke('vst3_scan', { rescan }),
     vst3Editor: (fxId, open) => invoke('vst3_editor', { fxId, open }),

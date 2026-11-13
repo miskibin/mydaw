@@ -82,11 +82,7 @@ impl Drop for Busy<'_> {
 pub fn notes_of(body: Option<&str>) -> Option<String> {
     let body = body?.replace("\r\n", "\n");
     let body = body.trim_start_matches('\n');
-    let cut = if body.starts_with("---") {
-        0
-    } else {
-        body.find(NOTES_END).unwrap_or(body.len())
-    };
+    let cut = if body.starts_with("---") { 0 } else { body.find(NOTES_END).unwrap_or(body.len()) };
     let notes = body[..cut].trim();
     (!notes.is_empty()).then(|| notes.to_string())
 }
@@ -100,8 +96,7 @@ pub fn release_url(version: Option<&str>) -> Result<String, String> {
     let ok = !v.is_empty()
         && v.len() <= 32
         && v.starts_with(|c: char| c.is_ascii_digit())
-        && v.chars()
-            .all(|c| c.is_ascii_alphanumeric() || c == '.' || c == '-' || c == '+');
+        && v.chars().all(|c| c.is_ascii_alphanumeric() || c == '.' || c == '-' || c == '+');
     if ok {
         Ok(format!("{REPO_URL}/releases/tag/v{v}"))
     } else {
@@ -130,9 +125,7 @@ pub fn open_release(version: Option<&str>) -> Result<(), String> {
         c.arg(&url);
         c
     };
-    cmd.spawn()
-        .map(|_| ())
-        .map_err(|e| format!("could not open {url}: {e}"))
+    cmd.spawn().map(|_| ()).map_err(|e| format!("could not open {url}: {e}"))
 }
 
 /// Limits `update-progress` events: one per percent (or per 512 KiB when the size is
@@ -144,20 +137,12 @@ pub struct Throttle {
 
 impl Throttle {
     pub fn new() -> Self {
-        Throttle {
-            last_pct: -1,
-            last_at: None,
-        }
+        Throttle { last_pct: -1, last_at: None }
     }
     pub fn due(&mut self, done: u64, total: u64, now: Instant) -> bool {
-        let pct = done
-            .saturating_mul(100)
-            .checked_div(total)
-            .unwrap_or(done / (512 * 1024)) as i64;
+        let pct = done.saturating_mul(100).checked_div(total).unwrap_or(done / (512 * 1024)) as i64;
         let last = total > 0 && done >= total;
-        let waited = self
-            .last_at
-            .is_none_or(|t| now.duration_since(t) >= Duration::from_millis(80));
+        let waited = self.last_at.is_none_or(|t| now.duration_since(t) >= Duration::from_millis(80));
         if pct == self.last_pct && !last {
             return false;
         }
@@ -172,6 +157,11 @@ impl Throttle {
 
 /// Asks GitHub whether a newer release exists. The found update is kept for `download`.
 pub async fn check(handle: &AppHandle, st: &State) -> Result<Option<UpdateInfo>, String> {
+    // The passive NSIS installer should reopen the last project from settings. The
+    // updater's default /ARGS would replay the project supplied to the original process.
+    #[cfg(windows)]
+    let updater = handle.updater_builder().restart_after_install(false).installer_arg("/R").build().map_err(|e| e.to_string())?;
+    #[cfg(not(windows))]
     let updater = handle.updater().map_err(|e| e.to_string())?;
     let found = updater.check().await.map_err(|e| e.to_string())?;
     let mut pending = st.pending.lock();
@@ -183,14 +173,9 @@ pub async fn check(handle: &AppHandle, st: &State) -> Result<Option<UpdateInfo>,
                 date: update.date.map(|d| d.date().to_string()),
             };
             // the same release found again keeps its downloaded installer
-            let same = pending
-                .as_ref()
-                .is_some_and(|p| p.update.version == update.version);
+            let same = pending.as_ref().is_some_and(|p| p.update.version == update.version);
             if !same {
-                *pending = Some(Pending {
-                    update,
-                    bytes: None,
-                });
+                *pending = Some(Pending { update, bytes: None });
             }
             Some(info)
         }
@@ -207,9 +192,7 @@ pub async fn download(handle: &AppHandle, st: &State) -> Result<(), String> {
     let _busy = Busy::take(&st.busy)?;
     let update = {
         let p = st.pending.lock();
-        let p = p
-            .as_ref()
-            .ok_or("no update was found: check for updates first")?;
+        let p = p.as_ref().ok_or("no update was found: check for updates first")?;
         if p.bytes.is_some() {
             return Ok(());
         }
@@ -249,15 +232,9 @@ pub struct Ready<'a> {
 pub fn ready(st: &State) -> Result<Ready<'_>, String> {
     let busy = Busy::take(&st.busy)?;
     let p = st.pending.lock();
-    let p = p
-        .as_ref()
-        .ok_or("no update was found: check for updates first")?;
+    let p = p.as_ref().ok_or("no update was found: check for updates first")?;
     let bytes = p.bytes.clone().ok_or("the update is not downloaded yet")?;
-    Ok(Ready {
-        update: p.update.clone(),
-        bytes,
-        _busy: busy,
-    })
+    Ok(Ready { update: p.update.clone(), bytes, _busy: busy })
 }
 
 #[cfg(test)]
@@ -267,10 +244,7 @@ mod tests {
     #[test]
     fn notes_stop_at_the_rule() {
         let body = "### Added\n- Auto update\n\n---\nWAVE: a fast DAW.\n* installer tips";
-        assert_eq!(
-            notes_of(Some(body)).as_deref(),
-            Some("### Added\n- Auto update")
-        );
+        assert_eq!(notes_of(Some(body)).as_deref(), Some("### Added\n- Auto update"));
     }
 
     #[test]
@@ -278,33 +252,16 @@ mod tests {
         assert_eq!(notes_of(None), None);
         assert_eq!(notes_of(Some("  \n ")), None);
         assert_eq!(notes_of(Some("---\nonly tips")), None);
-        assert_eq!(
-            notes_of(Some("- one\r\n- two\r\n\r\n---\r\ntips")).as_deref(),
-            Some("- one\n- two")
-        );
-        assert_eq!(
-            notes_of(Some("- no rule at all")).as_deref(),
-            Some("- no rule at all")
-        );
+        assert_eq!(notes_of(Some("- one\r\n- two\r\n\r\n---\r\ntips")).as_deref(), Some("- one\n- two"));
+        assert_eq!(notes_of(Some("- no rule at all")).as_deref(), Some("- no rule at all"));
     }
 
     #[test]
     fn release_urls_stay_inside_the_repository() {
         assert_eq!(release_url(None).unwrap(), format!("{REPO_URL}/releases"));
-        assert_eq!(
-            release_url(Some("0.9.3")).unwrap(),
-            format!("{REPO_URL}/releases/tag/v0.9.3")
-        );
+        assert_eq!(release_url(Some("0.9.3")).unwrap(), format!("{REPO_URL}/releases/tag/v0.9.3"));
         assert!(release_url(Some("1.0.0-beta.1")).is_ok());
-        for bad in [
-            "",
-            "v1",
-            "../x",
-            "1.0 && calc",
-            "1.0/../../x",
-            "https://evil",
-            "1\n2",
-        ] {
+        for bad in ["", "v1", "../x", "1.0 && calc", "1.0/../../x", "https://evil", "1\n2"] {
             assert!(release_url(Some(bad)).is_err(), "{bad:?}");
         }
     }

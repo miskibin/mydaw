@@ -64,10 +64,7 @@ impl Fingerprint {
             .ok()
             .and_then(|time| time.duration_since(UNIX_EPOCH).ok())
             .map_or(0, |since| since.as_nanos().min(u128::from(u64::MAX)) as u64);
-        Some(Self {
-            len: meta.len(),
-            modified_ns,
-        })
+        Some(Self { len: meta.len(), modified_ns })
     }
 }
 
@@ -115,28 +112,19 @@ impl<T: Clone + Serialize + DeserializeOwned> ScanCache<T> {
     pub fn load(file_name: &str) -> Self {
         let file = crate::blocklist::data_file(file_name);
         let entries = file.as_deref().map(Self::read_file).unwrap_or_default();
-        Self {
-            entries: Mutex::new(entries),
-            file,
-        }
+        Self { entries: Mutex::new(entries), file }
     }
 
     /// A cache that is never written anywhere. For tests.
     pub fn in_memory() -> Self {
-        Self {
-            entries: Mutex::new(BTreeMap::new()),
-            file: None,
-        }
+        Self { entries: Mutex::new(BTreeMap::new()), file: None }
     }
 
     /// A cache backed by an explicit file.
     pub fn with_file(file: impl Into<PathBuf>) -> Self {
         let file = file.into();
         let entries = Self::read_file(&file);
-        Self {
-            entries: Mutex::new(entries),
-            file: Some(file),
-        }
+        Self { entries: Mutex::new(entries), file: Some(file) }
     }
 
     fn read_file(path: &Path) -> BTreeMap<PathBuf, (Fingerprint, Outcome<T>)> {
@@ -146,26 +134,14 @@ impl<T: Clone + Serialize + DeserializeOwned> ScanCache<T> {
         let parsed: CacheFile<T> = match serde_json::from_str(&text) {
             Ok(parsed) => parsed,
             Err(err) => {
-                log::debug!(
-                    "ignoring an unreadable scan cache at {}: {err}",
-                    path.display()
-                );
+                log::debug!("ignoring an unreadable scan cache at {}: {err}", path.display());
                 return BTreeMap::new();
             }
         };
         if parsed.version != CACHE_VERSION {
             return BTreeMap::new();
         }
-        parsed
-            .entries
-            .into_iter()
-            .map(|entry| {
-                (
-                    PathBuf::from(entry.path),
-                    (entry.fingerprint, entry.outcome),
-                )
-            })
-            .collect()
+        parsed.entries.into_iter().map(|entry| (PathBuf::from(entry.path), (entry.fingerprint, entry.outcome))).collect()
     }
 
     /// What is known about `module`, if its fingerprint still matches.
@@ -184,9 +160,7 @@ impl<T: Clone + Serialize + DeserializeOwned> ScanCache<T> {
     /// a pass. Writing per module would rewrite the whole file dozens of times
     /// during the one scan it is meant to make fast.
     pub fn put(&self, module: &Path, fingerprint: Fingerprint, outcome: Outcome<T>) {
-        self.entries
-            .lock()
-            .insert(module.to_path_buf(), (fingerprint, outcome));
+        self.entries.lock().insert(module.to_path_buf(), (fingerprint, outcome));
     }
 
     /// Forget a module -- the next scan opens it again.
@@ -234,10 +208,7 @@ impl<T: Clone + Serialize + DeserializeOwned> ScanCache<T> {
                 })
                 .collect()
         };
-        let payload = CacheFile {
-            version: CACHE_VERSION,
-            entries,
-        };
+        let payload = CacheFile { version: CACHE_VERSION, entries };
         let Ok(text) = serde_json::to_string_pretty(&payload) else {
             return;
         };
@@ -245,10 +216,7 @@ impl<T: Clone + Serialize + DeserializeOwned> ScanCache<T> {
             let _ = std::fs::create_dir_all(parent);
         }
         if let Err(err) = std::fs::write(file, text) {
-            log::debug!(
-                "could not write the plugin scan cache to {}: {err}",
-                file.display()
-            );
+            log::debug!("could not write the plugin scan cache to {}: {err}", file.display());
         }
     }
 }
@@ -259,10 +227,7 @@ mod tests {
     use crate::test_support::scratch_dir;
 
     fn fingerprint(len: u64) -> Fingerprint {
-        Fingerprint {
-            len,
-            modified_ns: 42,
-        }
+        Fingerprint { len, modified_ns: 42 }
     }
 
     #[test]
@@ -271,20 +236,10 @@ mod tests {
         let module = Path::new(r"C:\plugins\Thing.vst3");
 
         assert!(cache.get(module, fingerprint(10)).is_none());
-        cache.put(
-            module,
-            fingerprint(10),
-            Outcome::Found(vec!["Thing".to_owned()]),
-        );
+        cache.put(module, fingerprint(10), Outcome::Found(vec!["Thing".to_owned()]));
 
-        assert_eq!(
-            cache.get(module, fingerprint(10)),
-            Some(Outcome::Found(vec!["Thing".to_owned()]))
-        );
-        assert!(
-            cache.get(module, fingerprint(11)).is_none(),
-            "a module the user upgraded must be read again, not re-reported"
-        );
+        assert_eq!(cache.get(module, fingerprint(10)), Some(Outcome::Found(vec!["Thing".to_owned()])));
+        assert!(cache.get(module, fingerprint(11)).is_none(), "a module the user upgraded must be read again, not re-reported");
         assert_eq!(cache.len(), 1);
 
         cache.forget(module);
@@ -297,15 +252,8 @@ mod tests {
         // and fails identically every time.
         let cache: ScanCache<String> = ScanCache::in_memory();
         let module = Path::new(r"C:\plugins\garbage.vst3");
-        cache.put(
-            module,
-            fingerprint(3),
-            Outcome::Refused("not a shared library".to_owned()),
-        );
-        assert_eq!(
-            cache.get(module, fingerprint(3)),
-            Some(Outcome::Refused("not a shared library".to_owned()))
-        );
+        cache.put(module, fingerprint(3), Outcome::Refused("not a shared library".to_owned()));
+        assert_eq!(cache.get(module, fingerprint(3)), Some(Outcome::Refused("not a shared library".to_owned())));
     }
 
     #[test]
@@ -326,10 +274,7 @@ mod tests {
         assert!(file.exists());
 
         let reloaded: ScanCache<String> = ScanCache::with_file(&file);
-        assert_eq!(
-            reloaded.get(&module, print),
-            Some(Outcome::Found(vec!["Thing".to_owned()]))
-        );
+        assert_eq!(reloaded.get(&module, print), Some(Outcome::Found(vec!["Thing".to_owned()])));
 
         // ...and a module that has since been uninstalled is dropped.
         std::fs::remove_file(&module).unwrap();
@@ -347,10 +292,7 @@ mod tests {
         assert!(ScanCache::<String>::with_file(&file).is_empty());
 
         std::fs::write(&file, br#"{"version":9999,"entries":[]}"#).unwrap();
-        assert!(
-            ScanCache::<String>::with_file(&file).is_empty(),
-            "a cache written by another version is discarded, not guessed at"
-        );
+        assert!(ScanCache::<String>::with_file(&file).is_empty(), "a cache written by another version is discarded, not guessed at");
     }
 
     #[test]

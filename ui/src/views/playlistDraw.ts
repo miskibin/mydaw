@@ -390,12 +390,13 @@ function drawClip(g: CanvasRenderingContext2D, v: View, c: Clip, src: Pattern | 
     if (icon && cw > 30) { drawGlyph(g, icon, tx, cy + 2.5, 10); tx += 13; }
     g.font = FONT; g.fillText(src.name, tx, cy + 11);
     let ax = tx + g.measureText(src.name).width + 5;
-    const st = isAudio ? c.stretch ?? 1 : 1;
-    if (st !== 1) {
-      // the stretch factor; '…' while the pitch-preserving render is not ready (the clip plays
-      // resampled meanwhile), '!' when it failed; 'rs' = resampled on purpose (pitch follows)
+    const st = isAudio ? c.stretch ?? 1 : 1, pt = isAudio ? c.pitch ?? 0 : 0;
+    if (st !== 1 || pt) {
+      // the stretch factor and transposition; '…' while the render is not ready (the clip plays
+      // resampled, at its own pitch, meanwhile), '!' when it failed; 'rs' = resampled on purpose
       const status = v.stretching?.[c.id];
-      const label = '×' + st.toFixed(2) + (c.resample ? ' rs' : status === '' ? ' …' : status != null ? ' !' : '');
+      const label = (st !== 1 ? '×' + st.toFixed(2) + (c.resample ? ' rs' : '') : '') + (pt ? (st !== 1 ? ' ' : '') + (pt > 0 ? '+' : '') + (Number.isInteger(pt) ? pt : pt.toFixed(2)) + ' st' : '')
+        + (status === '' ? ' …' : status != null ? ' !' : '');
       g.font = MONO9;
       if (status) g.fillStyle = T.red;
       g.fillText(label, ax, cy + 11);

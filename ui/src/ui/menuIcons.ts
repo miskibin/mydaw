@@ -111,9 +111,40 @@ export const builtinGlyph = (inst: string): MenuGlyph => BUILTIN[inst] ?? INST_I
 const LIB_GROUP: Record<string, MenuGlyph> = {
   Kicks: g(faCircleDot), Snares: g(faDrum), Claps: g(faHandsClapping), Hats: g(faDrumSteelpan),
   Cymbals: g(faCompactDisc), Toms: INST_ICONS.drums, Percussion: g(faHandFist), Tonal: g(faMusic),
+  Orchestra: g(faWind), FX: INST_ICONS.fx,
 };
 /** Glyph for a standard-library sample group (by its id, not its translated name); other folders get the sample icon. */
 export const libGlyph = (group: string): MenuGlyph => LIB_GROUP[group] ?? INST_ICONS.sample;
+
+// What a file or folder of the user's own samples is, read from its name: the same marks as the
+// standard library's groups, so a "Kicks" folder looks like the built-in kicks.
+const NAME_GLYPH: [RegExp, MenuGlyph][] = [
+  [/kick|\bbd\b|stopa/i, LIB_GROUP.Kicks],
+  [/snare|\bsd\b|rim|werbel/i, LIB_GROUP.Snares],
+  [/clap|snap|kla[sś]/i, LIB_GROUP.Claps],
+  [/hat|\bhh\b|\boh\b|\bch\b/i, LIB_GROUP.Hats],
+  [/cymb|crash|ride|splash|china|talerz/i, LIB_GROUP.Cymbals],
+  [/\btoms?\b/i, LIB_GROUP.Toms],
+  [/808|\bsub\b|bass|\bbas\b/i, INST_ICONS.bass],
+  [/perc|conga|bongo|shaker|tamb|cowbell|clave|triangle/i, LIB_GROUP.Percussion],
+  [/orch|string|brass|violin|cello|horn|trumpet|smycz|flute|timpani/i, LIB_GROUP.Orchestra],
+  [/\bfx\b|riser|sweep|impact|noise|whoosh|swell|uplift|downlift|efekt/i, LIB_GROUP.FX],
+  [/vo[ck]|vox|voice|wokal|chant|adlib/i, INST_ICONS.vocal],
+  [/guit|gitar/i, INST_ICONS.guitar],
+  [/piano|keys|rhodes|organ|chord|akord/i, INST_ICONS.piano],
+  [/synth|lead|pad|pluck|arp|bell|melod|tonal/i, LIB_GROUP.Tonal],
+  [/loop|p[ęe]tl|drum|beat|break/i, INST_ICONS.drums],
+];
+const nameCache = new Map<string, MenuGlyph | null>();
+function nameGlyph(name: string): MenuGlyph | null {
+  let v = nameCache.get(name);
+  if (v === undefined) { v = NAME_GLYPH.find(([re]) => re.test(name))?.[1] ?? null; nameCache.set(name, v); }
+  return v;
+}
+/** Glyph of a library group row: the standard library's own, else read from the group's name. */
+export const libGroupGlyph = (group: string): MenuGlyph => LIB_GROUP[group] ?? nameGlyph(group) ?? INST_ICONS.sample;
+/** Glyph of a library file: its standard-library group's, else read from its name, then its group's name. */
+export const libFileGlyph = (f: { name: string; group: string }): MenuGlyph => LIB_GROUP[f.group] ?? nameGlyph(f.name) ?? nameGlyph(f.group) ?? INST_ICONS.sample;
 
 /** Other instrument-picker rows. */
 export const PICK_GLYPH = {

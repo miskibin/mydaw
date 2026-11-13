@@ -202,7 +202,14 @@ impl Bq {
             "lp" => ((1.0 - cw) / 2.0, 1.0 - cw, (1.0 - cw) / 2.0, 1.0 + alpha, -2.0 * cw, 1.0 - alpha),
             _ => {
                 let s = 2.0 * a.sqrt() * alpha;
-                (a * ((a + 1.0) + (a - 1.0) * cw + s), -2.0 * a * ((a - 1.0) + (a + 1.0) * cw), a * ((a + 1.0) + (a - 1.0) * cw - s), (a + 1.0) - (a - 1.0) * cw + s, 2.0 * ((a - 1.0) - (a + 1.0) * cw), (a + 1.0) - (a - 1.0) * cw - s)
+                (
+                    a * ((a + 1.0) + (a - 1.0) * cw + s),
+                    -2.0 * a * ((a - 1.0) + (a + 1.0) * cw),
+                    a * ((a + 1.0) + (a - 1.0) * cw - s),
+                    (a + 1.0) - (a - 1.0) * cw + s,
+                    2.0 * ((a - 1.0) - (a + 1.0) * cw),
+                    (a + 1.0) - (a - 1.0) * cw - s,
+                )
             }
         };
         Self { b: [b0 / a0, b1 / a0, b2 / a0], a: [a1 / a0, a2 / a0], z: [0.0; 2] }
@@ -305,7 +312,13 @@ pub fn rider_levels(x: &[f32], sr: f32, style: Style) -> (f64, f64, f64, f64) {
 
 fn block_db(x: &[f64], n: usize, peak: bool) -> Vec<f64> {
     x.chunks_exact(n.max(1))
-        .map(|c| if peak { 20.0 * (c.iter().fold(0f64, |m, v| m.max(v.abs())) + 1e-9).log10() } else { db10(c.iter().map(|v| v * v).sum::<f64>() / c.len() as f64) })
+        .map(|c| {
+            if peak {
+                20.0 * (c.iter().fold(0f64, |m, v| m.max(v.abs())) + 1e-9).log10()
+            } else {
+                db10(c.iter().map(|v| v * v).sum::<f64>() / c.len() as f64)
+            }
+        })
         .collect()
 }
 
@@ -413,7 +426,8 @@ fn research_deess_sib(x: &[f64], sr: f32) -> f64 {
     let thr = p95 - over.max(0.0) - 3.0;
     let g: Vec<f64> = r.iter().zip(&loud).map(|(&v, &l)| if l && v > thr { (-(v - thr)).max(-12.0) } else { 0.0 }).collect();
     let g = smooth_gain(&g, n, sr, 1.0, 40.0);
-    let y: Vec<f64> = (0..x.len()).map(|i| lo[i] + hi[i] * 10f64.powf(g.get(i / n).copied().unwrap_or(*g.last().unwrap_or(&0.0)) / 20.0)).collect();
+    let y: Vec<f64> =
+        (0..x.len()).map(|i| lo[i] + hi[i] * 10f64.powf(g.get(i / n).copied().unwrap_or(*g.last().unwrap_or(&0.0)) / 20.0)).collect();
     sibilance_p95(&y, sr)
 }
 
@@ -531,7 +545,14 @@ pub fn render_stereo(kind: FxKind, params: &BTreeMap<String, f64>, l: &[f32], r:
 }
 
 /// [`render_stereo`] with a processor the caller keeps.
-pub fn render_stereo_with(p: &mut dyn Processor, kind: FxKind, params: &BTreeMap<String, f64>, xl: &[f32], xr: &[f32], sr: f32) -> (Vec<f32>, Vec<f32>) {
+pub fn render_stereo_with(
+    p: &mut dyn Processor,
+    kind: FxKind,
+    params: &BTreeMap<String, f64>,
+    xl: &[f32],
+    xr: &[f32],
+    sr: f32,
+) -> (Vec<f32>, Vec<f32>) {
     let mut fx = catalog::new_fx(1, kind, 120.0);
     for (k, v) in params {
         fx.params.insert(k.clone(), *v);
@@ -641,7 +662,10 @@ fn comp_params(thr: f64) -> BTreeMap<String, f64> {
 
 fn deess_params(thr: f64) -> BTreeMap<String, f64> {
     // split band at 5 kHz, relative (ratio) threshold, up to 12 dB: the research de-esser
-    params(FxKind::Deess, &[("thr", thr), ("range", 12.0), ("freq", 5000.0), ("mode", 0.0), ("look", 5.0), ("listen", 0.0), ("detect", 1.0)])
+    params(
+        FxKind::Deess,
+        &[("thr", thr), ("range", 12.0), ("freq", 5000.0), ("mode", 0.0), ("look", 5.0), ("listen", 0.0), ("detect", 1.0)],
+    )
 }
 
 /// Stage-by-stage calibration result of the dynamics chain.
@@ -683,7 +707,8 @@ pub fn calibrate_dynamics(x: &[f32], sr: f32, style: Style, long_look: bool) -> 
         let gs: Vec<f64> = g.iter().zip(&sung1).filter(|(_, s)| **s).map(|(v, _)| -v).collect();
         percentile(&gs, 99.0)
     };
-    let fet_in = if fet_want > 0.05 { bisect(0.0, 36.0, fet_want, 11, |v| fet_p99(&render(FxKind::Fet, &fet_params(v), &xr, sr))) } else { 0.0 };
+    let fet_in =
+        if fet_want > 0.05 { bisect(0.0, 36.0, fet_want, 11, |v| fet_p99(&render(FxKind::Fet, &fet_params(v), &xr, sr))) } else { 0.0 };
     let fet = fet_params(fet_in);
     let y1 = render(FxKind::Fet, &fet, &xr, sr);
     let fet_got = fet_p99(&y1);
@@ -706,7 +731,9 @@ pub fn calibrate_dynamics(x: &[f32], sr: f32, style: Style, long_look: bool) -> 
     // de-esser: reach the research de-esser's sibilance (higher threshold = more sibilance)
     let sib_want = research_deess_sib(&y264, sr);
     let t0 = research_deess_thr(&y264, sr);
-    let dthr = bisect((t0 - 12.0).max(-60.0), (t0 + 12.0).min(0.0), sib_want, 9, |v| sibilance_p95(&to64(&render(FxKind::Deess, &deess_params(v), &y2, sr)), sr));
+    let dthr = bisect((t0 - 12.0).max(-60.0), (t0 + 12.0).min(0.0), sib_want, 9, |v| {
+        sibilance_p95(&to64(&render(FxKind::Deess, &deess_params(v), &y2, sr)), sr)
+    });
     let deess = deess_params(dthr);
     let y3 = render(FxKind::Deess, &deess, &y2, sr);
     let sib_got = sibilance_p95(&to64(&y3), sr);
@@ -728,7 +755,23 @@ pub fn calibrate_dynamics(x: &[f32], sr: f32, style: Style, long_look: bool) -> 
 /// research plate (T60, pre-delay 30 ms, wet 300 Hz – 7 kHz). Measured on the engine's
 /// reverb, so it stays right if the reverb's internal levels change.
 pub fn reverb_mix_for_send(send_db: f64, t60: f64, sr: f32) -> (BTreeMap<String, f64>, f64) {
-    let base = |mix: f64| params(FxKind::Reverb, &[("size", t60), ("pre", 30.0), ("lo", 300.0), ("hi", 7000.0), ("width", 100.0), ("mix", mix), ("tone", 0.0), ("space", 0.0), ("duck", 0.0), ("bass", 1.0)]);
+    let base = |mix: f64| {
+        params(
+            FxKind::Reverb,
+            &[
+                ("size", t60),
+                ("pre", 30.0),
+                ("lo", 300.0),
+                ("hi", 7000.0),
+                ("width", 100.0),
+                ("mix", mix),
+                ("tone", 0.0),
+                ("space", 0.0),
+                ("duck", 0.0),
+                ("bass", 1.0),
+            ],
+        )
+    };
     let n = (sr * 4.0) as usize;
     let mut s: u64 = 0x9E37_79B9_7F4A_7C15;
     let x: Vec<f32> = (0..n)
@@ -794,7 +837,8 @@ pub fn plan(inp: &PlanInput) -> AutoVocalPlan {
     let mut tune_note = "no key detected in the beat: pitch correction left off".to_owned();
     let mut tune = params(FxKind::Tune, &[]);
     if let Some(k) = &inp.key {
-        analysis.key = Some(KeyInfo { root: k.root, minor: k.minor, name: crate::music::key_name(k.root, k.minor), confidence: k.confidence });
+        analysis.key =
+            Some(KeyInfo { root: k.root, minor: k.minor, name: crate::music::key_name(k.root, k.minor), confidence: k.confidence });
         let scale = if k.minor { 2u32 } else { 1u32 };
         let mask = crate::pitch::scale_mask(scale);
         let mut chosen = scale as f64;
@@ -824,10 +868,17 @@ pub fn plan(inp: &PlanInput) -> AutoVocalPlan {
             }
         }
         let (retune, humanize, flex, vibrato) = if inp.style == Style::Hard { (0.0, 0.0, 0.0, 20.0) } else { (40.0, 30.0, 40.0, 60.0) };
-        tune = params(FxKind::Tune, &[("key", k.root as f64), ("scale", chosen), ("retune", retune), ("humanize", humanize), ("flex", flex), ("vibrato", vibrato)]);
+        tune = params(
+            FxKind::Tune,
+            &[("key", k.root as f64), ("scale", chosen), ("retune", retune), ("humanize", humanize), ("flex", flex), ("vibrato", vibrato)],
+        );
         tune_enabled = true;
         tune_note = if chosen == 0.0 {
-            format!("{} from the beat, but only {:.0} % of the singing is on that scale: notes snap chromatically", crate::music::key_name(k.root, k.minor), 100.0 * analysis.scale_share.unwrap_or(0.0))
+            format!(
+                "{} from the beat, but only {:.0} % of the singing is on that scale: notes snap chromatically",
+                crate::music::key_name(k.root, k.minor),
+                100.0 * analysis.scale_share.unwrap_or(0.0)
+            )
         } else {
             format!("{} from the beat (confidence {:.2})", crate::music::key_name(k.root, k.minor), k.confidence)
         };
@@ -837,7 +888,10 @@ pub fn plan(inp: &PlanInput) -> AutoVocalPlan {
     }
 
     let (reverb, _) = reverb_mix_for_send(REVERB_SEND_DB, REVERB_T60_S, sr);
-    let limiter = params(FxKind::Limit, &[("gain", 0.0), ("ceil", LIMIT_CEILING_DBTP), ("rel", 80.0), ("auto", 0.0), ("look", 5.0), ("link", 100.0), ("out", 0.0)]);
+    let limiter = params(
+        FxKind::Limit,
+        &[("gain", 0.0), ("ceil", LIMIT_CEILING_DBTP), ("rel", 80.0), ("auto", 0.0), ("look", 5.0), ("link", 100.0), ("out", 0.0)],
+    );
     let wet = render(FxKind::Reverb, &reverb, &dynm.after, sr);
     let limited = render(FxKind::Limit, &limiter, &wet, sr);
     stats.iqr400_db = [iqr400(x, x, sr), iqr400(&dynm.after, x, sr)];
@@ -853,10 +907,23 @@ pub fn plan(inp: &PlanInput) -> AutoVocalPlan {
     let r = &dynm.rider;
     let chain = vec![
         fx(FxKind::Tune, tune, tune_enabled, tune_note),
-        fx(FxKind::Rider, dynm.rider.clone(), true, format!("target {:.1} dB, noise floor {:.1} dB; gain p5/p50/p95 {:.1}/{:.1}/{:.1} dB", r["target"], r["floor"], stats.rider_gain_db[0], stats.rider_gain_db[1], stats.rider_gain_db[2])),
+        fx(
+            FxKind::Rider,
+            dynm.rider.clone(),
+            true,
+            format!(
+                "target {:.1} dB, noise floor {:.1} dB; gain p5/p50/p95 {:.1}/{:.1}/{:.1} dB",
+                r["target"], r["floor"], stats.rider_gain_db[0], stats.rider_gain_db[1], stats.rider_gain_db[2]
+            ),
+        ),
         fx(FxKind::Fet, dynm.fet, true, format!("fast 4:1 peak stage, {:.1} dB on the loudest 1 %", stats.fet_p99_gr_db[1])),
         fx(FxKind::Comp, dynm.comp, true, format!("slow 2.5:1 stage, {:.1} dB mean reduction", stats.comp_mean_gr_db[1])),
-        fx(FxKind::Deess, dynm.deess, true, format!("sibilance {:.1} → {:.1} dB (pro median {SIB_TARGET_DB:.1})", analysis.sibilance_db, stats.sibilance_after_db[1])),
+        fx(
+            FxKind::Deess,
+            dynm.deess,
+            true,
+            format!("sibilance {:.1} → {:.1} dB (pro median {SIB_TARGET_DB:.1})", analysis.sibilance_db, stats.sibilance_after_db[1]),
+        ),
         fx(FxKind::Reverb, reverb, true, format!("small plate, T60 {REVERB_T60_S} s, {REVERB_SEND_DB} dB send")),
         fx(FxKind::Limit, limiter, true, format!("true-peak ceiling {LIMIT_CEILING_DBTP} dBTP")),
     ];
@@ -917,7 +984,11 @@ pub mod metrics {
     /// m2: per-word level spread: (IQR, P90 − P10, word count).
     pub fn m2(x: &[f32], sr: f32, segs: &[(usize, usize)]) -> (f64, f64, usize) {
         let p = pw(x, sr, 0.005, 0.005);
-        let lv: Vec<f64> = segs.iter().filter(|(_, b)| *b <= p.len()).map(|&(a, b)| 10.0 * (p[a..b].iter().sum::<f64>() / (b - a) as f64).log10()).collect();
+        let lv: Vec<f64> = segs
+            .iter()
+            .filter(|(_, b)| *b <= p.len())
+            .map(|&(a, b)| 10.0 * (p[a..b].iter().sum::<f64>() / (b - a) as f64).log10())
+            .collect();
         if lv.len() < 4 {
             return (f64::NAN, f64::NAN, lv.len());
         }
@@ -990,7 +1061,8 @@ mod tests {
     #[test]
     fn plan_calibrates_every_stage() {
         let x = take(14.0);
-        let key = crate::music::KeyEstimate { root: 7, minor: false, confidence: 0.5, candidates: vec![], chroma: [0.0; 12], tuning_cents: 0.0 };
+        let key =
+            crate::music::KeyEstimate { root: 7, minor: false, confidence: 0.5, candidates: vec![], chroma: [0.0; 12], tuning_cents: 0.0 };
         let beat: Vec<f32> = take(14.0).iter().map(|v| v * 2.0).collect();
         let plan = plan(&PlanInput { vocal: &x, sr: SR, style: Style::Natural, key: Some(key), pitch: None, beat: Some((&beat, SR)) });
         let kinds: Vec<FxKind> = plan.chain.iter().map(|f| f.kind).collect();
@@ -1031,8 +1103,10 @@ mod tests {
         for (i, c) in curve.iter_mut().enumerate().take(300) {
             *c = [61.0, 63.0, 66.0, 68.0, 70.0][i % 5]; // only black keys: none is in C major
         }
-        let pa = PitchAnalysis { rate: 200.0, curve, levels: vec![0.1; 400], confidence: vec![0.9; 400], notes: vec![], backend: "yin".into() };
-        let key = crate::music::KeyEstimate { root: 0, minor: false, confidence: 0.5, candidates: vec![], chroma: [0.0; 12], tuning_cents: 0.0 };
+        let pa =
+            PitchAnalysis { rate: 200.0, curve, levels: vec![0.1; 400], confidence: vec![0.9; 400], notes: vec![], backend: "yin".into() };
+        let key =
+            crate::music::KeyEstimate { root: 0, minor: false, confidence: 0.5, candidates: vec![], chroma: [0.0; 12], tuning_cents: 0.0 };
         let p = plan(&PlanInput { vocal: &x, sr: SR, style: Style::Natural, key: Some(key), pitch: Some(&pa), beat: None });
         assert_eq!(p.chain[0].params["scale"], 0.0);
         assert!(p.analysis.scale_share.unwrap() < 0.75);

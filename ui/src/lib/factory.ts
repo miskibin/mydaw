@@ -4,7 +4,7 @@
 import data from '../api/factory.json';
 import { SAMPLE_ROOT, samplerDefault, VOL_UNITY, type Channel, type Id, type Project, type Source } from '../api/types';
 
-export interface FactoryFile { file: string; name: string; group: string; root: number; dur: number; ch: number; bytes: number; color: string }
+export interface FactoryFile { file: string; name: string; group: string; root: number; pitched: boolean; dur: number; ch: number; bytes: number; color: string }
 export const FACTORY_KIT: string = data.kit;
 export const FACTORY_FILES: readonly FactoryFile[] = data.files;
 export const LIB_SCHEME = 'lib:';

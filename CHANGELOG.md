@@ -14,6 +14,106 @@ shown in the app after an update and is published as the release notes (see
   edits.txt` runs many commands with one load and one save, and writes nothing if a line fails.
   `--dry-run` tries an edit without saving, `--save-as` writes a copy. A file the app has open is
   never overwritten behind its back.
+- **Wrap effect tails on WAV loops.** Choose *Wrap* to hear the end of the delay and reverb at the start of the exported mix or stems. The file is one loop long.
+- **Export 24-bit PCM WAV.** Choose it for the mix or stems and enable dithering if needed. WAV defaults to 32-bit float.
+- **Open `.wave` projects from Windows File Explorer.** Projects have a document icon and open on double-click. If WAVE is already running, it brings the window forward and asks about unsaved changes before switching projects.
+- **Tune a vocal to the melody you played in the piano roll.** Play a melody, sing along to it,
+  then in the Piano roll press **♪ Vocal reference** (only the selected notes, or the whole
+  channel) — the vocal's pitch editor opens with that melody as its target. Or open the pitch
+  editor, choose *To reference* and pick the melody from *Melodies in the project* (they are
+  listed by how well they fit what you sang). The vocal keeps its own timing: singing a little
+  early or late is fine, the octave nearest your voice is used (a melody played an octave higher
+  just works), in a chord the note nearest your voice is taken, and ad-libs with nothing played
+  under them stay as sung. The melody is copied into the vocal, so changing the piano roll later
+  does not change it until you press *Update*.
+- **Correction you can understand: Strength, Speed and Flatten**, with one-click styles
+  (Natural, Pop, Tight, Robot). *Speed* is how fast the voice is pulled onto the note — 0 ms is
+  the hard "robot" step, around 50 ms tight pop, 100 ms and more keeps the singer's own scoop. The
+  line under the controls says in words what *Correct* will do. A reference has its own Speed too.
+- **Play and loop in the pitch editor like in the Playlist.** Click the ruler to move the start
+  marker (while playing, playback jumps there), drag it to set the loop, double-click to remove
+  the loop; Space or *Play* plays the song so you hear the vocal in the mix, and the view follows
+  playback. *Solo* plays the vocal alone, with your edits, from the marker.
+- **Pitch Correct one click away.** The pitch editor, the sample window and a sampler channel's
+  window have a *Pitch Correct* button that puts the real-time tuner on that sound's mixer insert
+  (with the editor's key and scale), or opens it when it is already there. The sample window also
+  opens the pitch editor.
+- **Main volume knob next to Play and Stop**, like FL Studio: it is the Master fader (drag, scroll,
+  double-click for 0 dB, right-click to automate).
+
+### Fixed
+- Loop takes keep their recorded ending when you stop on the boundary. Starting partway through a loop also keeps the start of every following pass.
+- The pitch editor's preview now plays your pitch edits (it used to play the original recording).
+- The reference list no longer offers drum hits and one-shots: only recordings in the playlist or
+  a comp, at least a second long.
+
+## 0.9.13 — 2026-11-12
+
+### Added
+- **Make unique for audio clips**, like FL Studio. Open an audio clip's menu (click or right-click
+  the icon in its top-left corner) and choose *Make unique*: the clip gets its own copy of the
+  sample ("Guitar #2", same file, nothing is copied on disk) on a new track right below, sent to a
+  free mixer insert named after it, so you can put effects on that one clip. Selected clips of the
+  same sample on that track go along. Other clips of the sample stay as they are; Ctrl+Z undoes it
+  in one step. From the command line: `wave make-unique --clip ID`.
+- **One sample window for audio clips and sampler channels**, like FL Studio. Double-click an audio
+  clip and you get the same window as a Channel Rack sampler: the waveform (click it to listen,
+  drag the markers for the part that plays and the corner handles for the fades), the file, then
+  Reverse, Normalize and the knobs. The MIXER picker sits in the header of both, next to the close
+  button; scroll over it to step through the mixer inserts.
+- **Transpose audio clips ±12 semitones without changing their length.** PITCH and FINE in the
+  sample window. It is rendered once in the background (the Playlist shows `+5 st …` meanwhile and
+  the clip plays at its own pitch until it is ready) and saved with the song.
+- **Fit an audio clip to 1 or 2 beats or 1, 2, 4 or 8 bars** with one click (*Fit to* in the sample
+  window), like FL Studio's TIME → Beat/Bar. Keep pitch stretches it at the same pitch; Resample
+  changes speed and pitch together. Lengths that would need more than ¼×–4× are greyed out.
+- **Icons in Project → Audio**: every sample shows the icon its clips show in the Playlist.
+
+- **Drop a library sample on a Channel Rack channel to replace its sample**, like FL Studio. The
+  row lights up and the label says what will be replaced; the channel keeps its steps, notes and
+  mixer routing (a synth or WAVE Keys channel becomes a sampler). Drop on empty rack space for a
+  new channel.
+- **The standard library grew from 50 to 148 sounds.** More 808 (long, boomy, deep and punchy
+  kicks, four more snares, short and long open hats, deeper and brighter toms, a mid conga) and
+  six 808 basses, one of them driven so it carries on small speakers. More acoustic drums
+  (snares with and without wires, rimshot, cross stick, rope and field drums, group claps, floor
+  tom, cymbal bell, choke) and hand percussion: congas, darbuka, frame drum, agogo, cowbells,
+  guiro, vibraslap, sleigh bells, log drums, anvil, brake drum.
+- **Orchestra.** Three orchestra hits (open, minor, major) built from strings, brass and
+  timpani, a strings stab, a brass stab and pizzicato, all on C so they follow the notes you
+  play; single notes of tremolo strings, cello, contrabass, trumpet, horn, flute and harp;
+  timpani, concert bass drum, gong, tubular bell and an orchestral crash.
+- **More tonal one-shots**, each tuned to its key: vibraphone, xylophone, balafon, kalimba,
+  hand chime, harpsichord, upright piano, FM piano and clav, pipe organ, tenor sax.
+- **FX.** Cymbal swells (short and long) and a bass-drum swell for build-ups, timpani and snare
+  rolls, wind chimes, a bell tree and a zap.
+- **Search in the Library.** Type in the field above the list: several words must all match
+  the name or the group ("808 bass", "orchestra hit"). It looks in the standard library, your
+  installed kits and your folders at once.
+- **Browse samples with the keyboard.** ↑ and ↓ move through the list and play each sample;
+  Enter adds the one you are on as a sampler channel.
+
+### Changed
+- **Play, stop and record come first in the toolbar**, right after the project name.
+- **The sample window has no Preview, Trim, Pitch… or Tempo / key… buttons any more.** Click the
+  waveform to listen. *Trim to the part that plays*, *Edit pitch…* and *Detect tempo and key…* are
+  in the clip's menu (the icon in its corner).
+- **PAT / SONG switches what is playing**, like FL Studio: while the song plays, PAT (or L) loops
+  the current pattern straight away, and SONG goes back to the song, with no Stop in between.
+- **The Piano roll zooms out further**: until the whole pattern and the empty bars after it fit.
+- **The Library tab is easier to read.** Groups are rows with their own icon, colour and file
+  count that open and close with a click anywhere on the row; the open/closed arrows are
+  drawn clearly instead of the tiny grey marks. Every sample carries its group's icon, your
+  own folders get icons from their names (kicks, snares, hats, bass, vocals …), and the
+  standard library has its own section above the kits you can download.
+- **Pitched samples show their key** (G#1, C4 …) in the Library, the key a sampler channel
+  made from them is rooted at.
+- The installer is about 11 MB larger: the new sounds ship inside WAVE and need no download.
+
+### Fixed
+- **A new pattern plays at once.** Making or picking a pattern while a pattern loops could keep
+  playing the old one until Stop.
+- **808 drums get a drum icon.** "808 Kick", "808 Snare" and the like showed the bass icon.
 
 ## 0.9.12 — 2026-11-12
 

@@ -20,7 +20,9 @@ pub enum VoiceKind {
     Keys,
     /// A synth channel: its notes go to the channel's `poly::SynthInst`, not this pool.
     Synth,
-    Click { accent: bool },
+    Click {
+        accent: bool,
+    },
 }
 
 /// Where a voice plays.
@@ -242,7 +244,9 @@ impl VoicePool {
                 let rate = a.sr as f64 / self.sr as f64 * 2f64.powf((key as f64 - ch.root as f64) / 12.0) * m.rate;
                 // a note of a cut group silences what the group is playing, when it starts
                 if m.cut != 0 {
-                    for v in self.voices.iter_mut().filter(|v| v.alive && v.kind == VoiceKind::Sample && v.cut == m.cut && v.cut_at == u32::MAX) {
+                    for v in
+                        self.voices.iter_mut().filter(|v| v.alive && v.kind == VoiceKind::Sample && v.cut == m.cut && v.cut_at == u32::MAX)
+                    {
                         v.cut_at = v.t.saturating_add(delay.saturating_sub(v.delay));
                     }
                 }
@@ -281,7 +285,18 @@ impl VoicePool {
             Some(i) => i,
             None => (0..self.voices.len()).max_by_key(|&i| self.voices[i].t).unwrap_or(0),
         };
-        self.voices[idx] = Voice { kind, dest, chan, chan_id, vel: vel.max(0.0), rate, delay, len: (len_s * self.sr) as u32, alive: true, ..Voice::dead() };
+        self.voices[idx] = Voice {
+            kind,
+            dest,
+            chan,
+            chan_id,
+            vel: vel.max(0.0),
+            rate,
+            delay,
+            len: (len_s * self.sr) as u32,
+            alive: true,
+            ..Voice::dead()
+        };
         idx
     }
 
@@ -298,7 +313,14 @@ impl VoicePool {
             let (g, pan, g0, pan0, sample, piano) = match chans.get(v.chan) {
                 Some(c) => {
                     let on = if c.on { v.vel } else { 0.0 } * if v.kind == VoiceKind::Sample { c.smp.gain } else { 1.0 };
-                    (c.gain * on, c.pan, c.gain0 * on, c.pan0, c.sample.as_deref().map(|a| (a, c.smp)), c.keys.as_deref().map(|b| (b, c.keys_release)))
+                    (
+                        c.gain * on,
+                        c.pan,
+                        c.gain0 * on,
+                        c.pan0,
+                        c.sample.as_deref().map(|a| (a, c.smp)),
+                        c.keys.as_deref().map(|b| (b, c.keys_release)),
+                    )
                 }
                 None if v.chan == NO_CHAN => (v.vel, 0.0, v.vel, 0.0, None, None),
                 None => {

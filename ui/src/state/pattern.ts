@@ -10,7 +10,7 @@ import { KEYS_DYNAMICS, KEYS_RELEASE, SAMPLE_ROOT, samplerDefault, TOTAL_BEATS, 
 import { baseName, clamp, mod } from '../lib/format';
 import { BAR, barsText, cloneNotes, notesText, stepsOf } from '../lib/pattern';
 import { fitOnScreen, rackFitWidth } from '../lib/rack';
-import { commit } from './edit';
+import { commit, enqueue } from './edit';
 import { newTrack } from '../lib/clipOps';
 import { planMoveNotes } from '../lib/moveNotes';
 import { unwrap } from 'solid-js/store';
@@ -133,32 +133,36 @@ export function openRoll(ch?: Id) {
   requestAnimationFrame(() => (document.querySelector('.rollwin') as HTMLElement | null)?.focus({ preventScroll: true }));
   if (U.rollWin) { rollFront(); return; }
   const z = U.zTop + 1, g = lastWin.rollWin, W = window.innerWidth, H = window.innerHeight;
-  if (g) {
+  // full screen by default, like FL's piano roll (a melody needs the room; the Channel Rack stays
+  // one F6 away). A window the user made smaller reopens where they left it.
+  if (g && !rollMax) {
     const w = clamp(g.w, 640, Math.max(640, W - 20)), h = clamp(g.h, 360, Math.max(360, H - 20));
     setU({ zTop: z, plugsHidden: false, rollWin: { x: clamp(g.x, 0, Math.max(0, W - 120)), y: clamp(g.y, 0, Math.max(0, H - 80)), w, h, z } });
     return;
   }
-  // first time: the whole work area, like FL's piano roll (a melody needs the room; the Channel
-  // Rack stays one F6 away and the title bar's double-click restores a smaller window)
-  setU({ zTop: z, plugsHidden: false, rollWin: { ...workArea(), z } });
+  rollMax = true;
+  setU({ zTop: z, plugsHidden: false, rollWin: { ...fullArea(), z } });
 }
-/** The playlist's area: where a maximised pattern window goes (down to the window's bottom when the mixer leaves too little). */
-function workArea() {
-  const r = document.querySelector('.plwrap')?.getBoundingClientRect(), W = window.innerWidth, H = window.innerHeight;
-  const x = Math.round(r?.left ?? 0), y = Math.round(r?.top ?? 54);
-  const h = Math.round((r && r.bottom - y >= 420 ? r.bottom : H) - y);
-  return { x, y, w: Math.max(640, W - x), h: Math.max(360, h) };
+/** Everything under the toolbar: where the maximised Piano roll goes (it covers the browser and the mixer too). */
+function fullArea() {
+  const W = window.innerWidth, H = window.innerHeight;
+  const y = Math.round(document.querySelector('.toolbar')?.getBoundingClientRect().bottom ?? 54);
+  return { x: 0, y, w: Math.max(640, W), h: Math.max(360, H - y) };
 }
+/** The Piano roll fills `fullArea()`: it follows the app window's size and reopens full screen. */
+let rollMax = true;
 let rollRestore: { x: number; y: number; w: number; h: number } | null = null;
-/** Double-click on the Piano roll's title bar: fill the work area, or go back to the size before. */
+/** Double-click on the Piano roll's title bar: go back to the size before, or fill the screen again. */
 export function toggleRollMax() {
   const w = U.rollWin; if (!w) return;
-  const a = workArea(), full = Math.abs(w.x - a.x) < 4 && Math.abs(w.y - a.y) < 4 && Math.abs(w.w - a.w) < 4 && Math.abs(w.h - a.h) < 4;
-  if (!full) { rollRestore = { x: w.x, y: w.y, w: w.w, h: w.h }; setU('rollWin', v => v && { ...v, ...a }); return; }
+  if (!rollMax) { rollRestore = { x: w.x, y: w.y, w: w.w, h: w.h }; rollMax = true; setU('rollWin', v => v && { ...v, ...fullArea() }); return; }
   const W = window.innerWidth, H = window.innerHeight;
   const b = rollRestore ?? { w: clamp(Math.round(W * 0.62), 640, W - 40), h: clamp(Math.round(H * 0.58), 360, H - 100), x: Math.round(W * 0.19), y: 96 };
+  rollMax = false;
   setU('rollWin', v => v && { ...v, ...b });
 }
+/** A drag or resize of the Piano roll's frame: it is no longer full screen. */
+export function rollMoved() { rollMax = false; }
 export function closeRoll() { const w = U.rollWin; if (w) lastWin.rollWin = { x: w.x, y: w.y, w: w.w, h: w.h }; setU('rollWin', null); }
 export function toggleRoll() { if (onTop('rollWin')) closeRoll(); else openRoll(); }
 /** Escape: close the top pattern window when it is above every effect window. True when one closed. */
@@ -424,13 +428,14 @@ export async function togglePreview(id: Id) {
     if (U.patPlaying && previewId === id) { await stopPreview(); say(t('b.st.prevStopped')); return; }
     previewId = id;
     if (U.playing) setU('playing', false);
-    await be().patternPlay(id);
+    // queued behind pending edits: a pattern made a moment ago must reach the engine first
+    await enqueue(() => be().patternPlay(id));
     setU('patPlaying', true);
     say(t('b.st.prevSay', { mode: t(patMode() ? 'b.st.modePatWord' : 'b.st.modePrevWord'), name: patById(id)?.name ?? t('b.st.patternWord'), hint: patMode() ? '' : t('b.st.prevHint') }));
   } catch (e) { say(t('b.st.prevErr', { err: String(e) })); }
 }
 export async function stopPreview() {
-  try { await be().patternPlay(null); setU('patPlaying', false); } catch (e) { console.warn(e); }
+  try { await enqueue(() => be().patternPlay(null)); setU('patPlaying', false); } catch (e) { console.warn(e); }
 }
 
 /**
@@ -458,6 +463,7 @@ createRoot(() => {
     if (need > w.h) setU('rackWin', 'h', Math.min(need, Math.max(220, window.innerHeight - w.y - 20)));
   }));
   const keepOnScreen = () => {
+    if (U.rollWin && rollMax) { const a = fullArea(); setU('rollWin', v => v && { ...v, ...a }); }
     for (const k of ['rackWin', 'rollWin'] as const) {
       const w = U[k]; if (!w) continue;
       const x = clamp(w.x, 0, Math.max(0, window.innerWidth - 120)), y = clamp(w.y, 0, Math.max(0, window.innerHeight - 80));

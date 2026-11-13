@@ -16,10 +16,11 @@ import { eqCurve } from '../lib/eq';
 import { clamp, dbg } from '../lib/format';
 import { t } from '../lib/i18n';
 import { midiToHz, noteAt, scaleMask, simpleTarget, snapNote } from '../lib/pitch';
+import { collectMelody, melodyFit, melodyTarget } from '../lib/melody';
 import { newFx } from '../lib/presets';
 import { synthVocal, vocalAt, vocalPeaks, type VocalSample } from './mockVocal';
 import type {
-  AudioConfig, AudioStatus, LatencyReport, AnyBuiltinKind, AutoVocalPlan, AutoVocalStyle, Catalog, Clip, ExportResult, ExportStemsResult, F0ModelStatus, Fx, Id, KeysStatus, LibFile, LibraryList, MidiDevice, MidiStatus, MusicAnalysis, Op, OpenResult, PitchAnalysis, PitchTarget, Project, RefTune, SaveResult, Source, StateDto, TransportDto, Vst3Info, Vst3Param,
+  AudioConfig, AudioStatus, LatencyReport, AnyBuiltinKind, AutoVocalPlan, AutoVocalStyle, Catalog, Clip, ExportAudioOptions, ExportResult, ExportStemsOptions, ExportStemsResult, F0ModelStatus, Fx, Id, KeysStatus, LibFile, LibraryList, Melody, MelodyChannel, MidiDevice, MidiStatus, MusicAnalysis, Op, OpenResult, PitchAnalysis, PitchTarget, Project, RefTune, SaveResult, Source, StateDto, TransportDto, Vst3Info, Vst3Param,
 } from './types';
 import { exportRange, exportSeconds, stemInserts, uniqueFileStems } from '../lib/export';
 import { MockUpdates } from './mockUpdates';
@@ -111,7 +112,7 @@ export class MockBackend implements Backend {
   private playT0 = 0; private playFrom = 0;
   private rec: null | { track: number; clipStart: number; t0: number; peaks: number[]; sent: number; lap: [number, number] | null; pass: number } = null;
   private audition: Record<string, Id> = {};
-  private preview: null | { t0: number; dur: number; off: number } = null;
+  private preview: null | { t0: number; dur: number; off: number; rate?: number } = null;
   /** Pattern loop preview (engine `pattern_play`) and recent auditions (insert id → time) for the meters. */
   private patPlay: null | { id: Id; t0: number } = null;
   private flash = new Map<Id, number>();
@@ -340,8 +341,9 @@ export class MockBackend implements Backend {
     }
     let previewPos = -1;
     if (this.preview) {
-      previewPos = this.preview.off + (performance.now() - this.preview.t0) / 1000;
-      if (previewPos > this.preview.off + this.preview.dur) { this.preview = null; previewPos = -1; }
+      const el = (performance.now() - this.preview.t0) / 1000;
+      previewPos = this.preview.off + el * (this.preview.rate ?? 1);
+      if (el > this.preview.dur) { this.preview = null; previewPos = -1; }
     }
     const inLevel = this.tr.rec ? 0.2 + 0.5 * Math.abs(Math.sin(t * 3)) * Math.random() : 0;
     void spb;
@@ -620,11 +622,30 @@ export class MockBackend implements Backend {
     const p = reference ?? c.tune?.reference;
     if (!p) throw new Error('this clip has no reference');
     const take = await this.pitchAnalyze(clipId);
+    if (p.melody) return melodyTarget(take, c.tune?.notes.length ? c.tune.notes : take.notes, p.melody.notes, p);
     const rs = this.srcMeta.get(p.source) ?? this.p.sources.find(x => x.id === p.source) as MockSource | undefined;
     if (!rs) throw new Error(`no reference source ${p.source}`);
     const rv = synthVocal(rs.seed ?? rs.id, rs.dur);
     const notes = c.tune?.notes.length ? c.tune.notes : take.notes;
     return simpleTarget(take, { rate: rv.rate, curve: rv.curve, levels: rv.levels, notes: rv.notes }, notes, p);
+  }
+  async melodyChannels(clipId: Id): Promise<MelodyChannel[]> {
+    const c = this.p.clips.find(x => x.id === clipId);
+    if (!c || c.kind !== 'audio') throw new Error('only audio clips have pitch');
+    const take = await this.pitchAnalyze(clipId), spb = 60 / this.p.bpm, st = c.stretch ?? 1;
+    const region: [number, number] = [c.offset * spb / st, (c.offset + c.len) * spb / st];
+    return (this.p.channels ?? [])
+      .map(ch => { const ns = collectMelody(this.p, c, ch.id); return { channel: ch.id, name: ch.name, notes: ns.length, fit: melodyFit(take, region, ns) }; })
+      .filter(x => x.notes > 0)
+      .sort((a, b) => b.fit - a.fit || b.notes - a.notes);
+  }
+  async melodyReference(clipId: Id, channel: Id, span?: [number, number] | null): Promise<{ melody: Melody; fit: number }> {
+    const c = this.p.clips.find(x => x.id === clipId);
+    if (!c || c.kind !== 'audio') throw new Error('only audio clips have pitch');
+    if (!(this.p.channels ?? []).some(x => x.id === channel)) throw new Error('no such channel');
+    const take = await this.pitchAnalyze(clipId), spb = 60 / this.p.bpm, st = c.stretch ?? 1;
+    const notes = collectMelody(this.p, c, channel, span);
+    return structuredClone({ melody: { channel, ...(span ? { span } : {}), notes }, fit: melodyFit(take, [c.offset * spb / st, (c.offset + c.len) * spb / st], notes) });
   }
   private f0Backend = 'yin';
   async f0ModelStatus(): Promise<F0ModelStatus> {
@@ -805,9 +826,39 @@ export class MockBackend implements Backend {
     this.pushUndo(prev); this.changed();
     return { sourceId: id };
   }
-  async previewClip(clipId: Id) {
+  async makeUnique(clipIds: Id[]) {
+    const cs = clipIds.map(id => this.p.clips.find(x => x.id === id));
+    const first = cs[0];
+    if (!first || cs.some(c => !c)) throw new Error(first ? 'no such clip' : 'no clips given');
+    if (cs.some(c => c!.kind !== 'audio')) throw new Error('only audio clips can be made unique this way');
+    if (cs.some(c => c!.ref !== first.ref || c!.track !== first.track)) throw new Error('the clips must play the same sample on the same track');
+    const old = this.p.sources.find(s => s.id === first.ref), meta = this.srcMeta.get(first.ref), tr = this.p.tracks[first.track];
+    if (!old || !meta) throw new Error("the clip's source is missing");
+    if (!tr) throw new Error("the clip's track is missing");
+    // engine.rs `unique_base`: "Guitar #2" counts on from "Guitar"
+    const base = old.name.replace(/(.) #\d+$/, '$1');
+    let k = 2; while (this.p.sources.some(s => s.name === base + ' #' + k)) k++;
+    const name = base + ' #' + k;
+    const prev = structuredClone(this.p), id = this.p.nextId++;
+    this.srcMeta.set(id, { ...meta, id, name }); this.p.sources.push({ ...old, id, name });
+    const rp = this.recPeaks.get(first.ref); if (rp) this.recPeaks.set(id, rp);
+    // the new track plays where the old one does (engine.rs `make_unique_audio`): no insert is claimed
+    const at = first.track + 1, insertId = tr.insert;
+    this.p.tracks.splice(at, 0, { id: this.p.nextId++, name, color: old.color, muted: false, solo: false, arm: false, vol: 0.7937, h: tr.h, insert: insertId, ...(tr.icon ? { icon: tr.icon } : {}) });
+    for (const c of this.p.clips) {
+      if (clipIds.includes(c.id)) { c.track = at; c.ref = id; } else if (c.track >= at) c.track++;
+    }
+    this.pushUndo(prev); this.changed();
+    return { sourceId: id, track: at, insertId };
+  }
+  async previewClip(clipId: Id, from?: number) {
     const c = this.p.clips.find(x => x.id === clipId); if (!c) return;
-    this.preview = { t0: performance.now(), dur: c.len * this.spb(), off: c.offset * this.spb() };
+    // like the engine: positions in seconds of the source (a stretched clip plays `stretch` times longer)
+    const st = c.stretch ?? 1, a = c.offset * this.spb() / st, b = (c.offset + c.len) * this.spb() / st;
+    if (from == null) { this.preview = { t0: performance.now(), dur: c.len * this.spb(), off: a, rate: 1 / st }; return; }
+    const f = clamp(from, a, b);
+    if (f >= b) throw new Error('nothing to play after that point');
+    this.preview = { t0: performance.now(), dur: b - f, off: f, rate: 1 };
   }
   async previewFile(path: string) { this.preview = { t0: performance.now(), dur: 0.6 + (hash(path) % 400) / 100, off: 0 }; }
   async previewStop() { this.preview = null; }
@@ -893,7 +944,7 @@ export class MockBackend implements Backend {
   async libraryFiles(q: { kit?: string; folder?: string }): Promise<LibFile[]> {
     await delay(10);
     // the standard library is listed by its portable paths (the app lists where it is installed; importing either gives `lib:` sources)
-    if (q.kit === FACTORY_KIT) return FACTORY_FILES.map(f => ({ name: f.name, path: libPath(f.file), group: f.group, root: f.root }));
+    if (q.kit === FACTORY_KIT) return FACTORY_FILES.map(f => ({ name: f.name, path: libPath(f.file), group: f.group, root: f.root, ...(f.pitched ? { pitched: true } : {}) }));
     const root = q.kit ? 'C:\\WAVE\\Library\\' + q.kit : q.folder ?? '';
     const groups: Record<string, string[]> = q.kit === 'wave-keys'
       ? { Pady: ['Warm Pad C', 'Glass Pad Am', 'Choir Pad F'], Akordy: ['Rhodes Chord 1', 'Rhodes Chord 2', 'Piano Stab'], Pętle: ['Keys Loop 120', 'Pad Loop Am-F'] }
@@ -918,12 +969,14 @@ export class MockBackend implements Backend {
   /** Tests: the next native file dialog is dismissed, as when the user presses Cancel. */
   dismissNextDialog = false;
   private dialog(): boolean { const ok = !this.dismissNextDialog; this.dismissNextDialog = false; return ok; }
-  async projectOpen(path?: string): Promise<OpenResult> {
+  async projectOpen(path?: string, ifRevision?: number): Promise<OpenResult> {
     if (path == null && !this.dialog()) return { cancelled: true };
+    if (ifRevision != null && ifRevision !== this.revision) throw new Error('REVISION_CONFLICT: project changed');
     this.resetTo(sketchProject(this.cat), path ?? 'C:\\Users\\michal\\Music\\Demo.wave');
     this.recovery = null;
     return { state: this.dto(), warnings: [] };
   }
+  async takeProjectOpenRequests(): Promise<string[]> { return []; }
   async projectSave(saveAs?: boolean): Promise<SaveResult> {
     if (!this.path || saveAs) {
       if (!this.dialog()) return { cancelled: true };
@@ -967,10 +1020,11 @@ export class MockBackend implements Backend {
   }
 
   private exportAbort = false;
-  async exportAudio(opts: { useLoop: boolean; tail: number; sampleRate: number; format?: 'wav' | 'mp3'; mp3Kbps?: number }): Promise<ExportResult> {
+  async exportAudio(opts: ExportAudioOptions): Promise<ExportResult> {
     this.exportAbort = false;
     const { from, to } = exportRange(this.p, opts.useLoop);
-    const secs = exportSeconds(from, to, this.p.bpm, opts.tail);
+    const tail = opts.format !== 'mp3' && opts.wrapTail ? 0 : opts.tail;
+    const secs = exportSeconds(from, to, this.p.bpm, tail);
     // Simulate a short offline bounce so the dialog's busy/cancel path is exercisable.
     const steps = 8;
     for (let i = 0; i < steps; i++) {
@@ -983,7 +1037,7 @@ export class MockBackend implements Backend {
       out: name,
       fromBeat: from,
       toBeat: to,
-      tail: opts.tail,
+      tail,
       stats: {
         seconds: secs,
         sampleRate: opts.sampleRate,
@@ -996,10 +1050,11 @@ export class MockBackend implements Backend {
     };
   }
   /** Like the engine: one file per insert with sound (+ Master), the same names, nothing written when cancelled. */
-  async exportStems(opts: { useLoop: boolean; tail: number; sampleRate: number; includeMaster: boolean }): Promise<ExportStemsResult> {
+  async exportStems(opts: ExportStemsOptions): Promise<ExportStemsResult> {
     this.exportAbort = false;
     const { from, to } = exportRange(this.p, opts.useLoop);
-    const secs = exportSeconds(from, to, this.p.bpm, opts.tail);
+    const tail = opts.wrapTail ? 0 : opts.tail;
+    const secs = exportSeconds(from, to, this.p.bpm, tail);
     const jobs = [
       ...(opts.includeMaster ? [{ name: 'Master', master: true }] : []),
       ...stemInserts(this.p).map(m => ({ name: m.name.trim() || `Insert ${m.id}`, master: false })),
@@ -1018,7 +1073,7 @@ export class MockBackend implements Backend {
     }
     this.emit('export-progress', { done: jobs.length, total: jobs.length, name: '' });
     const dir = this.path ? this.path.replace(/[\\/][^\\/]*$/, '') : 'C:\\Users\\michal\\Music';
-    return { dir, fromBeat: from, toBeat: to, tail: opts.tail, format: 'wav', files, skipped: [] };
+    return { dir, fromBeat: from, toBeat: to, tail, format: 'wav', files, skipped: [] };
   }
   async exportCancel() { this.exportAbort = true; }
 

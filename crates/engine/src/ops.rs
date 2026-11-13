@@ -8,53 +8,143 @@ use serde::{Deserialize, Serialize};
 
 use crate::model::*;
 
+/// Which notes a `transformNotes` verb touches.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(tag = "kind", rename_all = "camelCase", rename_all_fields = "camelCase")]
+pub enum TransformSelect {
+    /// Note indices into the pattern's current notes (the piano roll's selection).
+    Indices { indices: Vec<usize> },
+    /// Notes starting in `from`..`to` steps, optionally one channel only.
+    Range {
+        from: f32,
+        to: f32,
+        #[serde(default)]
+        ch: Option<Id>,
+    },
+}
+
+fn major_scale_id() -> u32 {
+    1
+}
+
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "op", rename_all = "camelCase", rename_all_fields = "camelCase")]
 pub enum Op {
     /// Insert or replace clips by id.
-    PutClips { clips: Vec<Clip> },
-    RemoveClips { ids: Vec<Id> },
+    PutClips {
+        clips: Vec<Clip>,
+    },
+    RemoveClips {
+        ids: Vec<Id>,
+    },
     /// Insert (new id) or replace a track. New tracks are appended.
-    PutTrack { track: Track },
+    PutTrack {
+        track: Track,
+    },
     /// Remove a track (lane) with its clips; lanes below move up one.
-    RemoveTrack { id: Id },
+    RemoveTrack {
+        id: Id,
+    },
     /// Insert or replace a mixer insert *without* touching its effect chain
     /// (`fx` in the payload is ignored for an existing insert).
-    PutInsert { insert: Insert },
-    RemoveInsert { id: Id },
+    PutInsert {
+        insert: Insert,
+    },
+    RemoveInsert {
+        id: Id,
+    },
     /// Insert or replace an effect. `index` places a new effect (default: end of chain).
-    PutFx { insert_id: Id, fx: Fx, #[serde(default)] index: Option<usize> },
-    RemoveFx { fx_id: Id },
-    MoveFx { fx_id: Id, to: usize },
+    PutFx {
+        insert_id: Id,
+        fx: Fx,
+        #[serde(default)]
+        index: Option<usize>,
+    },
+    RemoveFx {
+        fx_id: Id,
+    },
+    MoveFx {
+        fx_id: Id,
+        to: usize,
+    },
     /// Insert or replace a pattern. Notes may still say `inst` instead of `ch` (old
     /// scripts): they get that instrument's built-in channel (created if missing). `len` is
     /// derived (the notes' end rounded up to a bar, at least `minLen`); whatever is sent is
     /// replaced. When an existing pattern's length changes, its clips that show exactly one
     /// whole pass of it (`offset` 0, `len` = old length) take the new length; other clips
     /// keep theirs.
-    PutPattern { pattern: Pattern },
+    PutPattern {
+        pattern: Pattern,
+    },
     /// Remove a pattern and every clip that plays it.
-    RemovePattern { id: Id },
+    RemovePattern {
+        id: Id,
+    },
+    /// Apply a deterministic note transformation to a pattern. Same verb, params, seed
+    /// and notes always produce identical notes (seeded splitmix64; default seed 0).
+    /// `select` limits which notes the verb touches: the UI's selected note indices, or
+    /// a step range (`from`..`to` in steps, optionally one channel). Absent = all notes.
+    TransformNotes {
+        pattern: Id,
+        verb: crate::transform::TransformVerb,
+        #[serde(default)]
+        seed: Option<u64>,
+        #[serde(default)]
+        select: Option<TransformSelect>,
+    },
+    /// Set the project's musical key and scale for the scale-aware note tools. `key`
+    /// `null` clears the key (scale tools stay pitch-neutral). `scale` absent = major.
+    SetKey {
+        #[serde(default)]
+        key: Option<u8>,
+        #[serde(default = "major_scale_id")]
+        scale: u32,
+    },
     /// Insert or replace a Channel Rack channel. `index` places a new channel (default:
     /// last) or moves an existing one.
-    PutChannel { channel: Channel, #[serde(default)] index: Option<usize> },
+    PutChannel {
+        channel: Channel,
+        #[serde(default)]
+        index: Option<usize>,
+    },
     /// Remove a channel and its notes in every pattern.
-    RemoveChannel { id: Id },
+    RemoveChannel {
+        id: Id,
+    },
     /// Rename / recolour a source. Audio itself is changed with dedicated commands.
-    PutSource { source: Source },
-    RemoveSource { id: Id },
+    PutSource {
+        source: Source,
+    },
+    RemoveSource {
+        id: Id,
+    },
     /// Insert or replace an automation envelope.
-    PutAutomation { automation: Automation },
+    PutAutomation {
+        automation: Automation,
+    },
     /// Remove an automation and every clip that plays it.
-    RemoveAutomation { id: Id },
+    RemoveAutomation {
+        id: Id,
+    },
     /// Insert or replace a take group with its comp (takes, regions, crossfade).
-    PutComp { comp: Comp },
+    PutComp {
+        comp: Comp,
+    },
     /// Remove a take group and every clip that plays it.
-    RemoveComp { id: Id },
+    RemoveComp {
+        id: Id,
+    },
     /// Replace the lyrics notebook (all pages, in tab order). Never touches the audio graph.
-    PutNotebook { notebook: Notebook },
-    SetBpm { bpm: f64 },
-    SetLoop { #[serde(rename = "loop")] range: Option<LoopRange> },
+    PutNotebook {
+        notebook: Notebook,
+    },
+    SetBpm {
+        bpm: f64,
+    },
+    SetLoop {
+        #[serde(rename = "loop")]
+        range: Option<LoopRange>,
+    },
 }
 
 #[derive(Debug, thiserror::Error, PartialEq)]
@@ -87,6 +177,29 @@ impl Dirty {
     }
 }
 
+/// The per-note sanity PutPattern and TransformNotes share: finite timing, velocity in
+/// range, a key that exists, inside the arrangement's total length.
+fn check_notes(p: &Project, pt: &Pattern) -> Result<(), OpError> {
+    for n in &pt.notes {
+        if !(n.step.is_finite() && n.step >= 0.0 && n.len.is_finite() && n.len > 0.0) {
+            return Err(OpError::Invalid(format!("pattern {}: a note has an invalid step/len", pt.id)));
+        }
+        if !(n.v.is_finite() && (0.0..=1.0).contains(&n.v)) {
+            return Err(OpError::Invalid("note velocity `v` must be 0..1".into()));
+        }
+        if n.p.is_some_and(|k| k > 127) {
+            return Err(OpError::Invalid("note key `p` must be 0..127".into()));
+        }
+        if (n.step + n.len) as f64 > TOTAL_BEATS * 4.0 {
+            return Err(OpError::Invalid(format!("pattern {}: notes must end within {TOTAL_BEATS} beats", pt.id)));
+        }
+    }
+    if let Some(n) = pt.notes.iter().find(|n| p.channel(n.ch).is_none()) {
+        return Err(OpError::Missing { what: "channel", id: n.ch });
+    }
+    Ok(())
+}
+
 fn bump(p: &mut Project, id: Id) {
     if id >= p.next_id {
         p.next_id = id + 1;
@@ -106,10 +219,21 @@ pub fn apply(p: &mut Project, op: &Op) -> Result<Dirty, OpError> {
                     return Err(OpError::Invalid(format!("clip {} is on track {} which does not exist", c.id, c.track)));
                 }
                 if !(c.stretch.is_finite() && (crate::model::STRETCH_MIN - 1e-9..=crate::model::STRETCH_MAX + 1e-9).contains(&c.stretch)) {
-                    return Err(OpError::Invalid(format!("clip {}: stretch must be {}..{}", c.id, crate::model::STRETCH_MIN, crate::model::STRETCH_MAX)));
+                    return Err(OpError::Invalid(format!(
+                        "clip {}: stretch must be {}..{}",
+                        c.id,
+                        crate::model::STRETCH_MIN,
+                        crate::model::STRETCH_MAX
+                    )));
                 }
                 if c.kind != ClipKind::Audio && (c.stretch != 1.0 || c.resample) {
                     return Err(OpError::Invalid(format!("clip {}: only audio clips can be stretched", c.id)));
+                }
+                if !(c.pitch.is_finite() && c.pitch.abs() <= crate::model::CLIP_PITCH + 1e-4) {
+                    return Err(OpError::Invalid(format!("clip {}: pitch must be within ±{} semitones", c.id, crate::model::CLIP_PITCH)));
+                }
+                if c.kind != ClipKind::Audio && c.pitch != 0.0 {
+                    return Err(OpError::Invalid(format!("clip {}: only audio clips can be transposed", c.id)));
                 }
                 let known = match c.kind {
                     ClipKind::Pat => p.patterns.iter().any(|x| x.id == c.source),
@@ -121,14 +245,25 @@ pub fn apply(p: &mut Project, op: &Op) -> Result<Dirty, OpError> {
                     return Err(OpError::Missing { what: "clip source", id: c.source });
                 }
                 if let Some(r) = c.tune.as_ref().and_then(|t| t.reference.as_ref()) {
-                    if !p.sources.iter().any(|x| x.id == r.source) {
+                    if r.melody.is_none() && !p.sources.iter().any(|x| x.id == r.source) {
                         return Err(OpError::Missing { what: "reference source", id: r.source });
+                    }
+                    if let Some(m) = &r.melody {
+                        if m.notes.iter().any(|n| n.end.partial_cmp(&n.start) != Some(std::cmp::Ordering::Greater) || n.key > 127) {
+                            return Err(OpError::Invalid(format!("clip {}: melody notes need end > start and a key 0..127", c.id)));
+                        }
+                    }
+                    if r.speed.is_some_and(|v| !(0.0..=1000.0).contains(&v)) {
+                        return Err(OpError::Invalid(format!("clip {}: reference speed must be 0..1000 ms", c.id)));
                     }
                     if [r.correction, r.vibrato, r.influence].iter().any(|v| !(0.0..=1.0).contains(v)) {
                         return Err(OpError::Invalid(format!("clip {}: reference correction, vibrato and influence must be 0..1", c.id)));
                     }
                     if r.octave.is_some_and(|o| o % 12 != 0 || o.abs() > 36) || r.key > 11 || r.scale > 4 {
-                        return Err(OpError::Invalid(format!("clip {}: reference octave must be a multiple of 12 within ±36, key 0..11, scale 0..4", c.id)));
+                        return Err(OpError::Invalid(format!(
+                            "clip {}: reference octave must be a multiple of 12 within ±36, key 0..11, scale 0..4",
+                            c.id
+                        )));
                     }
                 }
             }
@@ -225,18 +360,15 @@ pub fn apply(p: &mut Project, op: &Op) -> Result<Dirty, OpError> {
                     return Err(OpError::Invalid("a VST3 slot cannot swap its plugin; remove and add it".into()));
                 }
                 // a parameter that changes the effect's latency (look-ahead) re-plans the PDC
-                let bypass_changed = old.bypass != fx.bypass || crate::catalog::latency(old, 48000.0) != crate::catalog::latency(fx, 48000.0);
+                let bypass_changed =
+                    old.bypass != fx.bypass || crate::catalog::latency(old, 48000.0) != crate::catalog::latency(fx, 48000.0);
                 let m = p.inserts.iter_mut().find(|m| m.id == *insert_id).unwrap();
                 let slot = m.fx.iter_mut().find(|f| f.id == fx.id).unwrap();
                 *slot = fx.clone();
                 d.params = true;
                 d.mixer |= bypass_changed;
             } else {
-                let m = p
-                    .inserts
-                    .iter_mut()
-                    .find(|m| m.id == *insert_id)
-                    .ok_or(OpError::Missing { what: "insert", id: *insert_id })?;
+                let m = p.inserts.iter_mut().find(|m| m.id == *insert_id).ok_or(OpError::Missing { what: "insert", id: *insert_id })?;
                 let at = index.unwrap_or(m.fx.len()).min(m.fx.len());
                 m.fx.insert(at, fx.clone());
                 bump(p, fx.id);
@@ -272,23 +404,7 @@ pub fn apply(p: &mut Project, op: &Op) -> Result<Dirty, OpError> {
                 return Err(OpError::Invalid("swing must be 0..1".into()));
             }
             let mut pt = pattern.clone();
-            for n in &pt.notes {
-                if !(n.step.is_finite() && n.step >= 0.0 && n.len.is_finite() && n.len > 0.0) {
-                    return Err(OpError::Invalid(format!("pattern {}: a note has an invalid step/len", pt.id)));
-                }
-                if !(n.v.is_finite() && (0.0..=1.0).contains(&n.v)) {
-                    return Err(OpError::Invalid("note velocity `v` must be 0..1".into()));
-                }
-                if n.p.is_some_and(|k| k > 127) {
-                    return Err(OpError::Invalid("note key `p` must be 0..127".into()));
-                }
-                if (n.step + n.len) as f64 > TOTAL_BEATS * 4.0 {
-                    return Err(OpError::Invalid(format!("pattern {}: notes must end within {TOTAL_BEATS} beats", pt.id)));
-                }
-            }
-            if let Some(n) = pt.notes.iter().find(|n| p.channel(n.ch).is_none()) {
-                return Err(OpError::Missing { what: "channel", id: n.ch });
-            }
+            check_notes(p, &pt)?;
             pt.fit_len();
             bump(p, pt.id);
             let (id, len) = (pt.id, pt.len);
@@ -384,11 +500,7 @@ pub fn apply(p: &mut Project, op: &Op) -> Result<Dirty, OpError> {
             d.timeline = true;
         }
         Op::PutSource { source } => {
-            let s = p
-                .sources
-                .iter_mut()
-                .find(|x| x.id == source.id)
-                .ok_or(OpError::Missing { what: "source", id: source.id })?;
+            let s = p.sources.iter_mut().find(|x| x.id == source.id).ok_or(OpError::Missing { what: "source", id: source.id })?;
             s.name = source.name.clone();
             s.color = source.color.clone();
         }
@@ -412,7 +524,7 @@ pub fn apply(p: &mut Project, op: &Op) -> Result<Dirty, OpError> {
             p.comps.retain(|c| !c.takes.is_empty());
             p.clips.retain(|c| !(c.kind == ClipKind::Comp && empty.contains(&c.source)));
             for t in p.clips.iter_mut().filter_map(|c| c.tune.as_mut()) {
-                if t.reference.is_some_and(|r| r.source == *id) {
+                if t.reference.as_ref().is_some_and(|r| r.melody.is_none() && r.source == *id) {
                     t.reference = None;
                 }
             }
@@ -442,6 +554,175 @@ pub fn apply(p: &mut Project, op: &Op) -> Result<Dirty, OpError> {
             p.patterns.retain(|x| x.id != *id);
             p.clips.retain(|c| !(c.kind == ClipKind::Pat && c.source == *id));
             d.timeline = true;
+        }
+        Op::TransformNotes { pattern: pid, verb, seed, select } => {
+            let Some(pi) = p.patterns.iter().position(|x| x.id == *pid) else {
+                return Err(OpError::Missing { what: "pattern", id: *pid });
+            };
+            // everything the verb needs, read before the pattern is borrowed mutably
+            let len_steps = (p.patterns[pi].len * 4.0).round().max(16.0) as u32;
+            let ks = p.key.map(|k| (k, p.scale));
+            let roots: Vec<(Id, u8)> = p.channels.iter().map(|c| (c.id, c.root)).collect();
+            let chan_ok = |id: Id| roots.iter().any(|(cid, _)| *cid == id);
+            // generator sizes are bounded before anything allocates: a CLI or UI typo
+            // ("--n 4000000000") must fail as a validation error, not as an OOM
+            const MAX_SLOTS: u32 = 512;
+            const MAX_BARS: u32 = 32;
+            match verb {
+                crate::transform::TransformVerb::EuclidFill { ch, k, n, .. } => {
+                    if !chan_ok(*ch) {
+                        return Err(OpError::Missing { what: "channel", id: *ch });
+                    }
+                    if !(1..=MAX_SLOTS).contains(n) || *k == 0 || *k > MAX_SLOTS {
+                        return Err(OpError::Invalid(format!("euclidFill k/n must be 1..={MAX_SLOTS}")));
+                    }
+                }
+                crate::transform::TransformVerb::Melody { ch, bars, .. } => {
+                    if !chan_ok(*ch) {
+                        return Err(OpError::Missing { what: "channel", id: *ch });
+                    }
+                    if !(1..=MAX_BARS).contains(bars) {
+                        return Err(OpError::Invalid(format!("melody bars must be 1..={MAX_BARS}")));
+                    }
+                }
+                crate::transform::TransformVerb::EuclidDrums { voices, bars } => {
+                    if let Some(v) = voices.iter().find(|v| !chan_ok(v.ch)) {
+                        return Err(OpError::Missing { what: "channel", id: v.ch });
+                    }
+                    if !(1..=MAX_BARS).contains(bars) {
+                        return Err(OpError::Invalid(format!("drums bars must be 1..={MAX_BARS}")));
+                    }
+                    if voices.iter().any(|v| v.k == 0 || v.k > MAX_SLOTS || v.n == 0 || v.n > MAX_SLOTS) {
+                        return Err(OpError::Invalid(format!("drums voice k/n must be 1..={MAX_SLOTS}")));
+                    }
+                }
+                crate::transform::TransformVerb::Humanize { .. }
+                | crate::transform::TransformVerb::Quantize { .. }
+                | crate::transform::TransformVerb::Strum { .. } => {}
+            }
+            let all_notes = select.is_none();
+            let mut notes = std::mem::take(&mut p.patterns[pi].notes);
+            let idx: Vec<usize> = match select {
+                None => (0..notes.len()).collect(),
+                Some(crate::ops::TransformSelect::Indices { indices }) => {
+                    if indices.iter().any(|&i| i >= notes.len()) {
+                        return Err(OpError::Invalid("select: a note index is out of range".into()));
+                    }
+                    indices.clone()
+                }
+                Some(crate::ops::TransformSelect::Range { from, to, ch }) => {
+                    let (from, to) = ((*from).min(*to), (*to).max(*from));
+                    (0..notes.len())
+                        .filter(|&i| {
+                            let n = &notes[i];
+                            n.step >= from && n.step < to && ch.is_none_or(|c| n.ch == c)
+                        })
+                        .collect()
+                }
+            };
+            let mut target: Vec<Note> = idx.iter().map(|&i| notes[i].clone()).collect();
+            let rng = &mut crate::transform::SplitMix64::new(seed.unwrap_or(0));
+            match verb {
+                crate::transform::TransformVerb::Humanize { timing, velocity } => {
+                    crate::transform::humanize(&mut target, *timing, *velocity, rng);
+                }
+                crate::transform::TransformVerb::Quantize { grid, amount, scale_aware } => {
+                    crate::transform::quantize(&mut target, *grid, *amount, if *scale_aware { ks } else { None }, &roots);
+                }
+                crate::transform::TransformVerb::EuclidFill { ch, k, n, rotate, vel } => {
+                    crate::transform::euclidean_fill(&mut target, *ch, *k, *n, *rotate, *vel, len_steps);
+                }
+                crate::transform::TransformVerb::Strum { width, ramp } => {
+                    crate::transform::strum(&mut target, *width, *ramp);
+                }
+                crate::transform::TransformVerb::EuclidDrums { voices, bars } => {
+                    // the seed shades each voice's velocity ±15 %: same seed, same shading;
+                    // a new seed gives the same groove a subtly different punch
+                    let shade = &mut crate::transform::SplitMix64::new(seed.unwrap_or(0));
+                    for v in voices {
+                        let vel = (v.vel * (1.0 + shade.pm1() * 0.15)).clamp(0.1, 1.0);
+                        crate::transform::euclidean_fill(&mut target, v.ch, v.k, v.n, v.rotate, vel, (*bars).max(1) * 16);
+                    }
+                }
+                crate::transform::TransformVerb::Melody { ch, bars, density, repeat } => {
+                    crate::transform::melody(
+                        &mut target,
+                        *ch,
+                        (ks.map(|(k, _)| k).unwrap_or(0), p.scale),
+                        *bars,
+                        *density,
+                        *repeat,
+                        seed.unwrap_or(0),
+                    );
+                }
+            }
+            // positional verbs (humanize/quantize/strum) map every selected note 1:1;
+            // generators change cardinality, so they merge: everything that was not
+            // selected stays, and the full generator output takes the selection's place
+            let generative = matches!(
+                verb,
+                crate::transform::TransformVerb::EuclidFill { .. }
+                    | crate::transform::TransformVerb::EuclidDrums { .. }
+                    | crate::transform::TransformVerb::Melody { .. }
+            );
+            let new_notes = if all_notes {
+                target
+            } else if generative {
+                let selected: std::collections::HashSet<usize> = idx.iter().copied().collect();
+                let mut merged: Vec<Note> =
+                    notes.iter().enumerate().filter(|(i, _)| !selected.contains(i)).map(|(_, n)| n.clone()).collect();
+                merged.extend(target);
+                merged
+            } else {
+                for (slot, i) in idx.iter().enumerate() {
+                    notes[*i] = target[slot].clone();
+                }
+                notes
+            };
+            // the final note set must satisfy the same sanity as a putPattern
+            for n in &new_notes {
+                if !(n.step.is_finite() && n.step >= 0.0 && n.len.is_finite() && n.len > 0.0) {
+                    return Err(OpError::Invalid(format!("pattern {}: a note has an invalid step/len", pid)));
+                }
+                if !(n.v.is_finite() && (0.0..=1.0).contains(&n.v)) {
+                    return Err(OpError::Invalid("note velocity `v` must be 0..1".into()));
+                }
+                if n.p.is_some_and(|k| k > 127) {
+                    return Err(OpError::Invalid("note key `p` must be 0..127".into()));
+                }
+                if (n.step + n.len) as f64 > TOTAL_BEATS * 4.0 {
+                    return Err(OpError::Invalid(format!("pattern {}: notes must end within {TOTAL_BEATS} beats", pid)));
+                }
+                if !chan_ok(n.ch) {
+                    return Err(OpError::Missing { what: "channel", id: n.ch });
+                }
+            }
+            let old_len = p.patterns[pi].len;
+            p.patterns[pi].notes = new_notes;
+            // a generator can push notes past the pattern's end: grow the pattern like
+            // putPattern does, so whole-pass clips follow
+            p.patterns[pi].fit_len();
+            let new_len = p.patterns[pi].len;
+            if (old_len - new_len).abs() > 1e-9 {
+                follow_pattern_length(p, *pid, old_len, new_len);
+                d.timeline = true;
+            }
+            bump(p, *pid);
+            d.timeline = true;
+        }
+        Op::SetKey { key, scale } => {
+            if let Some(k) = key {
+                if *k > 11 {
+                    return Err(OpError::Invalid("key must be 0..11 (0 = C)".into()));
+                }
+            }
+            if *scale > 4 {
+                return Err(OpError::Invalid("scale must be 0..4 (see pitch::scale_mask)".into()));
+            }
+            p.key = *key;
+            p.scale = *scale;
+            d.timeline = true;
+            d.params = true;
         }
         Op::RemoveAutomation { id } => {
             p.automations.retain(|a| a.id != *id);
@@ -582,11 +863,7 @@ fn validate_fx(fx: &Fx) -> Result<(), OpError> {
         return Err(OpError::Invalid("a VST3 slot needs `plugin`".into()));
     }
     match (&fx.maps, fx.kind == FxKind::Warp) {
-        (None, true) => {
-            return Err(OpError::Invalid(
-                "a Warp needs `maps` (see fx_catalog().warp for the factory slots)".into(),
-            ))
-        }
+        (None, true) => return Err(OpError::Invalid("a Warp needs `maps` (see fx_catalog().warp for the factory slots)".into())),
         (Some(_), false) => return Err(OpError::Invalid("only a Warp has `maps`".into())),
         (Some(m), true) => validate_maps(m)?,
         (None, false) => {}
@@ -603,26 +880,17 @@ fn validate_maps(m: &crate::model::WarpMaps) -> Result<(), OpError> {
     use crate::model::{WARP_BAR, WARP_POINTS, WARP_SLOTS};
     for (bank, slots) in [("time", &m.time), ("vol", &m.vol)] {
         if slots.len() > WARP_SLOTS {
-            return Err(OpError::Invalid(format!(
-                "Warp {bank} maps: at most {WARP_SLOTS} slots"
-            )));
+            return Err(OpError::Invalid(format!("Warp {bank} maps: at most {WARP_SLOTS} slots")));
         }
         for (i, s) in slots.iter().enumerate() {
-            let bad = |why: &str| {
-                Err(OpError::Invalid(format!(
-                    "Warp {bank} slot {}: {why}",
-                    i + 1
-                )))
-            };
+            let bad = |why: &str| Err(OpError::Invalid(format!("Warp {bank} slot {}: {why}", i + 1)));
             if s.points.len() > WARP_POINTS {
                 return bad(&format!("at most {WARP_POINTS} points"));
             }
-            if s.points.iter().any(|p| {
-                !(0.0..=WARP_BAR).contains(&p.t)
-                    || !(0.0..=1.0).contains(&p.v)
-                    || !p.tension.is_finite()
-                    || p.tension.abs() > 1.0
-            }) {
+            if s.points
+                .iter()
+                .any(|p| !(0.0..=WARP_BAR).contains(&p.t) || !(0.0..=1.0).contains(&p.v) || !p.tension.is_finite() || p.tension.abs() > 1.0)
+            {
                 return bad("points need t 0..4 beats, v 0..1, tension -1..1");
             }
             if s.points.windows(2).any(|w| w[1].t < w[0].t) {
@@ -642,4 +910,205 @@ pub fn apply_all(p: &mut Project, ops: &[Op]) -> Result<Dirty, OpError> {
     }
     *p = work;
     Ok(d)
+}
+
+#[cfg(test)]
+mod transform_tests {
+    use super::*;
+
+    fn project_with_notes() -> Project {
+        let mut p = crate::demo::routed_project();
+        p.patterns[0].notes = vec![
+            Note { ch: 1001, step: 0.0, len: 1.0, p: Some(61), v: 0.8 },
+            Note { ch: 1001, step: 4.3, len: 1.0, p: Some(64), v: 0.8 },
+            Note { ch: 1001, step: 8.0, len: 1.0, p: Some(60), v: 0.8 },
+        ];
+        p
+    }
+
+    #[test]
+    fn transform_notes_is_deterministic_in_the_seed() {
+        let notes_at = |seed: u64| {
+            let mut p = project_with_notes();
+            crate::ops::apply_all(
+                &mut p,
+                &[Op::TransformNotes {
+                    pattern: 1,
+                    verb: crate::transform::TransformVerb::Humanize { timing: 0.5, velocity: 0.4 },
+                    seed: Some(seed),
+                    select: None,
+                }],
+            )
+            .unwrap();
+            p.patterns[0].notes.clone()
+        };
+        assert_eq!(notes_at(41), notes_at(41));
+        assert_ne!(notes_at(41), notes_at(42));
+    }
+
+    #[test]
+    fn quantize_with_scale_aware_uses_the_project_key() {
+        let mut p = project_with_notes();
+        crate::ops::apply_all(&mut p, &[Op::SetKey { key: Some(0), scale: 1 }]).unwrap();
+        crate::ops::apply_all(
+            &mut p,
+            &[Op::TransformNotes {
+                pattern: 1,
+                verb: crate::transform::TransformVerb::Quantize { grid: 1.0, amount: 1.0, scale_aware: true },
+                seed: None,
+                select: None,
+            }],
+        )
+        .unwrap();
+        // the C# snaps to C, the E and C are already in scale
+        let keys: Vec<u8> = p.patterns[0].notes.iter().map(|n| n.p.unwrap()).collect();
+        assert_eq!(keys, vec![60, 64, 60]);
+    }
+
+    #[test]
+    fn a_generator_with_a_selection_merges_instead_of_panicking() {
+        let mut p = project_with_notes();
+        p.channels.push(crate::model::Channel { id: 1002, ..p.channels[0].clone() });
+        p.patterns[0].notes[1].ch = 1002; // an unselected note on another channel must survive
+        crate::ops::apply_all(
+            &mut p,
+            &[Op::TransformNotes {
+                pattern: 1,
+                verb: crate::transform::TransformVerb::EuclidFill { ch: 1001, k: 3, n: 8, rotate: 0, vel: 0.7 },
+                seed: None,
+                select: Some(crate::ops::TransformSelect::Indices { indices: vec![0, 2] }),
+            }],
+        )
+        .unwrap();
+        // both selected ch-1001 notes are replaced by the 3 generated onsets; the
+        // unselected ch-1002 note survives untouched
+        let notes = &p.patterns[0].notes;
+        assert_eq!(notes.iter().filter(|n| n.ch == 1001).count(), 3);
+        assert_eq!(notes.iter().filter(|n| n.ch == 1002).count(), 1);
+        assert_eq!(notes.len(), 4);
+    }
+
+    #[test]
+    fn generator_sizes_are_bounded_before_allocating() {
+        let mut p = project_with_notes();
+        let err = crate::ops::apply_all(
+            &mut p,
+            &[Op::TransformNotes {
+                pattern: 1,
+                verb: crate::transform::TransformVerb::EuclidFill { ch: 1001, k: 1, n: 4_000_000_000, rotate: 0, vel: 0.7 },
+                seed: None,
+                select: None,
+            }],
+        )
+        .unwrap_err();
+        assert!(err.to_string().contains("1..=512"), "{err}");
+        // and the pattern is untouched by the rejected op
+        assert_eq!(p.patterns[0].notes.len(), 3);
+    }
+
+    #[test]
+    fn a_melody_past_the_pattern_end_grows_the_pattern_and_whole_pass_clips() {
+        let mut p = project_with_notes();
+        crate::ops::apply_all(&mut p, &[Op::SetKey { key: Some(9), scale: 2 }]).unwrap();
+        crate::ops::apply_all(
+            &mut p,
+            &[Op::TransformNotes {
+                pattern: 1,
+                verb: crate::transform::TransformVerb::Melody { ch: 1001, bars: 2, density: 0.55, repeat: 1 },
+                seed: Some(7),
+                select: None,
+            }],
+        )
+        .unwrap();
+        // the melody's last note ends at step 33 = 8.25 beats: content length ceils to
+        // whole bars, so the 1-bar pattern grew to 3 bars
+        assert_eq!(p.patterns[0].len, 12.0);
+    }
+
+    #[test]
+    fn quantize_without_a_key_is_pitch_neutral() {
+        let mut p = project_with_notes();
+        crate::ops::apply_all(
+            &mut p,
+            &[Op::TransformNotes {
+                pattern: 1,
+                verb: crate::transform::TransformVerb::Quantize { grid: 1.0, amount: 1.0, scale_aware: true },
+                seed: None,
+                select: None,
+            }],
+        )
+        .unwrap();
+        // no project key: pitches pass through unchanged
+        let keys: Vec<u8> = p.patterns[0].notes.iter().map(|n| n.p.unwrap()).collect();
+        assert_eq!(keys, vec![61, 64, 60]);
+    }
+
+    #[test]
+    fn select_range_touches_only_notes_in_range() {
+        let mut p = project_with_notes();
+        crate::ops::apply_all(
+            &mut p,
+            &[Op::TransformNotes {
+                pattern: 1,
+                verb: crate::transform::TransformVerb::Quantize { grid: 1.0, amount: 1.0, scale_aware: false },
+                seed: None,
+                select: Some(crate::ops::TransformSelect::Range { from: 4.0, to: 8.0, ch: None }),
+            }],
+        )
+        .unwrap();
+        let notes = &p.patterns[0].notes;
+        assert_eq!(notes[0].step, 0.0); // outside the range: untouched
+        assert_eq!(notes[1].step, 4.0); // 4.3 snapped into the range
+        assert_eq!(notes[2].step, 8.0); // range end is exclusive
+    }
+
+    #[test]
+    fn unknown_channel_is_an_error_not_a_partial_apply() {
+        let mut p = project_with_notes();
+        let err = crate::ops::apply_all(
+            &mut p,
+            &[Op::TransformNotes {
+                pattern: 1,
+                verb: crate::transform::TransformVerb::EuclidFill { ch: 9999, k: 4, n: 16, rotate: 0, vel: 0.7 },
+                seed: None,
+                select: None,
+            }],
+        )
+        .unwrap_err();
+        assert!(matches!(err, crate::ops::OpError::Missing { what: "channel", id: 9999 }));
+        assert_eq!(p.patterns[0].notes.len(), 3); // untouched
+    }
+
+    #[test]
+    fn set_key_validates_and_clears() {
+        let mut p = project_with_notes();
+        crate::ops::apply_all(&mut p, &[Op::SetKey { key: Some(12), scale: 1 }]).unwrap_err();
+        crate::ops::apply_all(&mut p, &[Op::SetKey { key: Some(9), scale: 2 }]).unwrap();
+        assert_eq!(p.key, Some(9));
+        assert_eq!(p.scale, 2);
+        crate::ops::apply_all(&mut p, &[Op::SetKey { key: None, scale: 1 }]).unwrap();
+        assert_eq!(p.key, None);
+    }
+
+    #[test]
+    fn euclid_drums_fill_only_their_channels() {
+        let mut p = project_with_notes();
+        crate::ops::apply_all(
+            &mut p,
+            &[Op::TransformNotes {
+                pattern: 1,
+                verb: crate::transform::TransformVerb::EuclidDrums {
+                    voices: vec![crate::transform::DrumVoice { ch: 1001, k: 4, n: 16, rotate: 0, vel: 0.7 }],
+                    bars: 1,
+                },
+                seed: None,
+                select: None,
+            }],
+        )
+        .unwrap();
+        let notes = &p.patterns[0].notes;
+        assert_eq!(notes.len(), 4);
+        assert!(notes.iter().all(|n| n.ch == 1001));
+        assert_eq!(notes[0].step, 0.0);
+    }
 }

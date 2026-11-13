@@ -18,8 +18,13 @@ fn main() {
             let (i0, i1) = ((n.start * an.rate as f64) as usize, ((n.end * an.rate as f64) as usize).min(an.curve.len()));
             let mut v: Vec<f32> = an.curve[i0..i1].iter().copied().filter(|x| !x.is_nan()).collect();
             v.sort_by(f32::total_cmp);
-            let shift = if v.is_empty() { 0.0 } else { let c = v[v.len() / 2]; (snap(c, key, mask) - c) * 100.0 * cp / 100.0 };
-            NoteEdit { start: n.start, end: n.end, shift, drift: dp / 100.0, formant: 0.0, gain: 0.0 }
+            let shift = if v.is_empty() {
+                0.0
+            } else {
+                let c = v[v.len() / 2];
+                (snap(c, key, mask) - c) * 100.0 * cp / 100.0
+            };
+            NoteEdit { start: n.start, end: n.end, shift, drift: dp / 100.0, formant: 0.0, gain: 0.0, speed: None }
         })
         .collect();
     let out = wave_engine::tune_render::render(&au, &an, &ClipTune { notes, pencil: vec![], reference: None }, None);

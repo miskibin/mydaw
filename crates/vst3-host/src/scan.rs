@@ -24,10 +24,7 @@ use std::sync::OnceLock;
 use parking_lot::Mutex;
 use serde::{Deserialize, Serialize};
 use vst3::ComPtr;
-use vst3::Steinberg::{
-    kResultOk, IPluginFactory, IPluginFactory2, IPluginFactory2Trait, IPluginFactoryTrait,
-    PClassInfo, PClassInfo2,
-};
+use vst3::Steinberg::{kResultOk, IPluginFactory, IPluginFactory2, IPluginFactory2Trait, IPluginFactoryTrait, PClassInfo, PClassInfo2};
 use wave_plugin_scan::{ModuleScan, ScanTarget, WorkerSpawn};
 
 use crate::module::{c_string_to_string, has_vst3_extension, resolve_binary, ClassId, Module};
@@ -91,17 +88,10 @@ pub(crate) enum Kind {
 impl Kind {
     /// `Instrument` wins over `Fx` when a plugin declares both.
     pub(crate) fn from_subcategories(subcategories: &str) -> Self {
-        let parts: Vec<&str> = subcategories
-            .split('|')
-            .map(str::trim)
-            .filter(|part| !part.is_empty())
-            .collect();
+        let parts: Vec<&str> = subcategories.split('|').map(str::trim).filter(|part| !part.is_empty()).collect();
         if parts.is_empty() {
             Self::Unknown
-        } else if parts
-            .iter()
-            .any(|part| part.eq_ignore_ascii_case("Instrument"))
-        {
+        } else if parts.iter().any(|part| part.eq_ignore_ascii_case("Instrument")) {
             Self::Instrument
         } else if parts.iter().any(|part| part.eq_ignore_ascii_case("Fx")) {
             Self::Effect
@@ -116,10 +106,7 @@ impl ScannedClass {
     /// those would hide working effects; the stereo bus check at
     /// [`instantiate`](crate::instantiate) has the final say).
     pub(crate) fn is_effect(&self) -> bool {
-        matches!(
-            Kind::from_subcategories(&self.subcategories),
-            Kind::Effect | Kind::Unknown
-        )
+        matches!(Kind::from_subcategories(&self.subcategories), Kind::Effect | Kind::Unknown)
     }
 
     pub(crate) fn to_info(&self) -> PluginInfo {
@@ -143,10 +130,7 @@ impl ScanTarget for ScannedClass {
         let opened = Module::open(module).map_err(|err| err.to_string())?;
         let classes = read_classes(opened.factory(), module);
         if classes.is_empty() {
-            return Err(format!(
-                "VST3 module {} exports no audio plugin class",
-                module.display()
-            ));
+            return Err(format!("VST3 module {} exports no audio plugin class", module.display()));
         }
         Ok(classes)
     }
@@ -193,9 +177,7 @@ pub(crate) fn read_classes(factory: &ComPtr<IPluginFactory>, path: &Path) -> Vec
                 }
             }
             let mut info: PClassInfo = std::mem::zeroed();
-            if factory.getClassInfo(index, &mut info) == kResultOk
-                && c_string_to_string(&info.category) == AUDIO_MODULE_CLASS
-            {
+            if factory.getClassInfo(index, &mut info) == kResultOk && c_string_to_string(&info.category) == AUDIO_MODULE_CLASS {
                 found.push(ScannedClass {
                     cid: ClassId::from_tuid(&info.cid),
                     name: c_string_to_string(&info.name),
@@ -227,12 +209,7 @@ pub fn default_search_paths() -> Vec<PathBuf> {
             paths.push(PathBuf::from(common).join("VST3"));
         }
         if let Some(local) = std::env::var_os("LOCALAPPDATA") {
-            paths.push(
-                PathBuf::from(local)
-                    .join("Programs")
-                    .join("Common")
-                    .join("VST3"),
-            );
+            paths.push(PathBuf::from(local).join("Programs").join("Common").join("VST3"));
         }
     }
     #[cfg(target_os = "macos")]
@@ -304,10 +281,7 @@ fn dedicated_worker() -> Option<PathBuf> {
     if sibling.is_file() {
         return Some(sibling);
     }
-    if dir
-        .file_name()
-        .is_some_and(|leaf| leaf == "deps" || leaf == "examples")
-    {
+    if dir.file_name().is_some_and(|leaf| leaf == "deps" || leaf == "examples") {
         let up = dir.parent()?.join(&name);
         if up.is_file() {
             return Some(up);
@@ -317,17 +291,9 @@ fn dedicated_worker() -> Option<PathBuf> {
 }
 
 /// Run one pass over `roots` and turn it into a browser list.
-pub(crate) fn scan_with(
-    scanner: &ModuleScan<ScannedClass>,
-    roots: &[PathBuf],
-    rescan: bool,
-) -> Vec<PluginInfo> {
+pub(crate) fn scan_with(scanner: &ModuleScan<ScannedClass>, roots: &[PathBuf], rescan: bool) -> Vec<PluginInfo> {
     let modules = module_paths(roots);
-    let pass = if rescan {
-        scanner.scan_all(&modules)
-    } else {
-        scanner.list_cached(&modules)
-    };
+    let pass = if rescan { scanner.scan_all(&modules) } else { scanner.list_cached(&modules) };
     if rescan {
         log::info!(
             "VST3 scan: {} module(s), {} class(es), {} from cache, {} child process(es), {} failure(s), {} newly block-listed",
@@ -342,18 +308,9 @@ pub(crate) fn scan_with(
             log::debug!("VST3 module {}: {failure}", module.display());
         }
     }
-    let mut list: Vec<PluginInfo> = pass
-        .found
-        .iter()
-        .filter(|class| class.is_effect())
-        .map(ScannedClass::to_info)
-        .collect();
+    let mut list: Vec<PluginInfo> = pass.found.iter().filter(|class| class.is_effect()).map(ScannedClass::to_info).collect();
     list.sort_by(|a, b| {
-        a.name
-            .to_lowercase()
-            .cmp(&b.name.to_lowercase())
-            .then_with(|| a.vendor.cmp(&b.vendor))
-            .then_with(|| a.path.cmp(&b.path))
+        a.name.to_lowercase().cmp(&b.name.to_lowercase()).then_with(|| a.vendor.cmp(&b.vendor)).then_with(|| a.path.cmp(&b.path))
     });
     list.dedup();
     list
@@ -435,25 +392,16 @@ mod tests {
 
     #[test]
     fn subcategories_decide_what_is_offered_as_an_insert_effect() {
-        assert_eq!(
-            Kind::from_subcategories("Instrument|Synth"),
-            Kind::Instrument
-        );
+        assert_eq!(Kind::from_subcategories("Instrument|Synth"), Kind::Instrument);
         assert_eq!(Kind::from_subcategories("Fx|Reverb"), Kind::Effect);
-        assert_eq!(
-            Kind::from_subcategories("Fx|Instrument|Pitch Shift"),
-            Kind::Instrument
-        );
+        assert_eq!(Kind::from_subcategories("Fx|Instrument|Pitch Shift"), Kind::Instrument);
         assert_eq!(Kind::from_subcategories(" FX | Delay "), Kind::Effect);
         assert_eq!(Kind::from_subcategories("Analyzer|Spectrum"), Kind::Other);
         assert_eq!(Kind::from_subcategories("  "), Kind::Unknown);
         assert_eq!(Kind::from_subcategories("Fx||Delay|"), Kind::Effect);
 
         assert!(class("Fx|Reverb").is_effect());
-        assert!(
-            class("").is_effect(),
-            "an unclassified plugin is still worth offering"
-        );
+        assert!(class("").is_effect(), "an unclassified plugin is still worth offering");
         assert!(!class("Instrument|Synth").is_effect());
         assert!(!class("Analyzer").is_effect());
     }
@@ -472,10 +420,7 @@ mod tests {
     #[test]
     fn the_cache_shape_matches_the_old_hosts_entries_and_omits_the_path() {
         let json = serde_json::to_value(class("Fx")).unwrap();
-        assert!(
-            json.get("path").is_none(),
-            "a child must not supply the module path"
-        );
+        assert!(json.get("path").is_none(), "a child must not supply the module path");
         assert_eq!(json["cid"], "07".repeat(16));
         // An entry written by the old host's cache still parses.
         let old = serde_json::json!({
@@ -514,12 +459,7 @@ mod tests {
         let paths = default_search_paths();
         assert!(!paths.is_empty());
         if std::env::var_os("VST3_PATH").is_none() {
-            assert!(
-                paths.iter().all(|path| path.ends_with("VST3")
-                    || path.ends_with("vst3")
-                    || path.ends_with(".vst3")),
-                "{paths:?}"
-            );
+            assert!(paths.iter().all(|path| path.ends_with("VST3") || path.ends_with("vst3") || path.ends_with(".vst3")), "{paths:?}");
         }
     }
 
@@ -531,10 +471,7 @@ mod tests {
         // In-process, so this unit test needs no worker binary; the
         // integration tests cover the child-process path.
         let scanner = ModuleScan::<ScannedClass>::in_memory().with_spawn(WorkerSpawn::InProcess);
-        assert!(
-            scan_with(&scanner, std::slice::from_ref(&dir), false).is_empty(),
-            "listing opens nothing"
-        );
+        assert!(scan_with(&scanner, std::slice::from_ref(&dir), false).is_empty(), "listing opens nothing");
         assert!(scan_with(&scanner, std::slice::from_ref(&dir), true).is_empty());
         let err = ScannedClass::read_module(&dir.join("a.vst3")).unwrap_err();
         assert!(err.contains("a.vst3"), "{err}");

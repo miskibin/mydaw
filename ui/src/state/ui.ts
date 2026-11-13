@@ -9,7 +9,8 @@ export type Tool = 'draw' | 'paint' | 'erase' | 'mute' | 'slice' | 'select';
 
 /** `z`: stacking order — the most recently opened/focused window has the highest. */
 export interface PlugWin { fxId: Id; x: number; y: number; w: number; z: number }
-export interface PitchWin { clipId: Id; x: number; y: number; w: number; h: number }
+/** `melody`: open with this channel's notes as the reference (`span`: seconds of the source; a Piano roll selection). */
+export interface PitchWin { clipId: Id; x: number; y: number; w: number; h: number; z?: number; melody?: { channel: Id; span?: [number, number] | null } }
 export interface EditorWin { clipId: Id; x: number; y: number; w: number; h: number }
 export interface MusicWin { clipId?: Id; fxId?: Id }
 /**
@@ -51,6 +52,7 @@ export interface UiState {
   editor: EditorWin | null; menu: Menu | null; help: boolean; settings: boolean; exportOpen: boolean;
   /** True while `exportAudio` is in flight (so Escape can abort and report). */
   exportBusy: boolean;
+  openingProject: boolean;
   vstPicker: { insId: Id } | null;
   /** add-effect picker, anchored at (x, y) (−1 = centred) */
   fxPicker: { insId: Id; x: number; y: number } | null;
@@ -95,6 +97,7 @@ export const [U, setU] = createStore<UiState>({
   start: 0, follow: true, alt: false,
   mixOpen: true, mixMin: false, mixH: 300, mixSel: 6, fxSel: 903, fxDrag: null,
   plugs: [], plugsHidden: false, editor: null, menu: null, help: false, settings: false, exportOpen: false, exportBusy: false, vstPicker: null, fxPicker: null, musicWin: null,
+  openingProject: false,
   readout: t('d.ui.ready'),
   headW: 196, pickW: 220, pickOpen: true, browserTab: 'project',
   ghost: null, dragOver: false, eqSel: {}, fetMode: {}, pitchEd: null, pat: 1, selCh: null, rackWin: null, rollWin: null, rackGraph: null, patPlaying: false, takesOpen: {}, compSel: null, autoSel: null, zTop: 1, marquee: null,

@@ -23,7 +23,14 @@ fn main() {
             period = if det.hz > 0.0 && det.confidence > 0.55 { sr / det.hz } else { 0.0 };
             det.hint = if period > 0.0 { det.hz } else { 0.0 };
         }
-        let d = if delay > 0 { let v = dl[w]; dl[w] = s; w = (w + 1) % dl.len(); v } else { s };
+        let d = if delay > 0 {
+            let v = dl[w];
+            dl[w] = s;
+            w = (w + 1) % dl.len();
+            v
+        } else {
+            s
+        };
         y.push(ps.process(d, period, ratio, 1.0));
     }
     let out: Vec<f32> = y[lat..].iter().flat_map(|&v| [v, v]).collect();

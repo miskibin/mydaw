@@ -157,19 +157,38 @@ export interface Clip {
   stretch?: number;
   /** Stretch by changing speed and pitch together instead of keeping the pitch. */
   resample?: boolean;
+  /** Audio clips: transposition in semitones (cents as the fraction), ±`CLIP_PITCH`; the length stays.
+   *  Rendered offline with the stretch, in the background (absent = 0). */
+  pitch?: number;
 }
 /** Range of `Clip.stretch`. */
 export const STRETCH_MIN = 0.25;
 export const STRETCH_MAX = 4;
+/** Farthest `Clip.pitch`, semitones either way. */
+export const CLIP_PITCH = 12;
 
-/** Times in seconds of the source; `shift`/`formant` in cents, `drift` 0..1, `gain` dB. */
-export interface NoteEdit { start: number; end: number; shift: number; drift: number; formant: number; gain: number }
+/** Times in seconds of the source; `shift`/`formant` in cents, `drift` 0..1, `gain` dB.
+ *  `speed`: retune speed in ms — how long the pitch takes to reach its correction (95 %); 0 = instant
+ *  (hard tune); absent = the reference's speed, else immediate. */
+export interface NoteEdit { start: number; end: number; shift: number; drift: number; formant: number; gain: number; speed?: number | null }
 /** `pencil`: hand-drawn `[seconds, midi]` points, sorted; gaps > 30 ms end a run.
  *  `reference`: Tune to Reference — the base pitch comes from another performance; notes and pencil apply on top. */
 export interface ClipTune { notes: NoteEdit[]; pencil?: [number, number][]; reference?: RefTune | null }
 /** Tune to Reference: `source` = the reference audio; correction/vibrato/influence 0..1;
  *  `octave` in semitones (multiple of 12), null = automatic; key 0..11 and scale 0..4 for the non-reference share. */
-export interface RefTune { source: Id; correction: number; vibrato: number; influence: number; octave?: number | null; key?: number; scale?: number }
+export interface RefTune {
+  source: Id; correction: number; vibrato: number; influence: number; octave?: number | null; key?: number; scale?: number;
+  /** Retune speed (ms) for notes without their own; absent = immediate. */
+  speed?: number | null;
+  /** The reference is a melody from the project (then `source` is 0 and `influence` 1). */
+  melody?: Melody | null;
+}
+/** A melody reference: a copy of a channel's piano roll notes where the playlist plays them over the clip, in
+ *  seconds of the take's source. `span` = only notes within it (a piano roll selection). */
+export interface Melody { channel: Id; span?: [number, number] | null; notes: MelodyNote[] }
+export interface MelodyNote { start: number; end: number; key: number }
+/** `melody_channels`: a channel playing notes over the clip; `fit` 0..1 = share of the singing it matches. */
+export interface MelodyChannel { channel: Id; name: string; notes: number; fit: number }
 
 /** `pitch_analyze`: pitch every 1/rate s (null = unvoiced), levels 0..1, segmented notes (seconds of the source).
  *  `confidence` 0..1 per frame; `backend` = the detector ("rmvpe" or "yin"). */
@@ -299,7 +318,24 @@ export interface Project {
   channels?: Channel[];
   /** The lyrics notebook (absent in old projects = no pages). */
   notebook?: Notebook;
+  /** Musical key for the piano roll and scale-aware note tools (0 = C; null = none set). */
+  key?: number | null;
+  /** Which pitches are in: 0 chromatic, 1 major, 2 natural minor, 3/4 pentatonic (`pitch::scale_mask`). */
+  scale?: number;
 }
+
+/** A `transformNotes` verb: deterministic in `seed` and the pattern's notes. */
+export type TransformVerb =
+  | { kind: 'humanize'; timing?: number; velocity?: number }
+  | { kind: 'quantize'; grid?: number; amount?: number; scaleAware?: boolean }
+  | { kind: 'euclidFill'; ch: Id; k: number; n: number; rotate?: number; vel?: number }
+  | { kind: 'strum'; width?: number; ramp?: number }
+  | { kind: 'euclidDrums'; voices: { ch: Id; k: number; n: number; rotate?: number; vel?: number }[]; bars?: number }
+  | { kind: 'melody'; ch: Id; bars?: number; density?: number; repeat?: number };
+/** Which notes a `transformNotes` verb touches. */
+export type TransformSelect =
+  | { kind: 'indices'; indices: number[] }
+  | { kind: 'range'; from: number; to: number; ch?: Id };
 
 /** One notebook page: each line of `text` is a bar counted from `startBar` (1-based); `[…]` lines are headers. */
 export interface LyricPage { id: Id; name: string; startBar: number; text: string }
@@ -324,6 +360,8 @@ export type Op =
   | { op: 'setBpm'; bpm: number }
   | { op: 'setLoop'; loop: LoopRange | null }
   | { op: 'putAutomation'; automation: Automation }
+  | { op: 'transformNotes'; pattern: Id; verb: TransformVerb; seed?: number; select?: TransformSelect }
+  | { op: 'setKey'; key: number | null; scale?: number }
   | { op: 'removeAutomation'; id: Id }
   | { op: 'putComp'; comp: Comp }
   | { op: 'removeComp'; id: Id }
@@ -421,9 +459,17 @@ export interface MidiNoteEvent { note: MidiLastNote; count: number }
 
 export interface Kit { id: string; name: string; description: string; bytes: number; count: number; installed: boolean }
 export interface LibraryList { kits: Kit[]; folders: string[] }
-/** `root`: the MIDI key at which the file sounds at its own pitch, when the library knows it. */
-export interface LibFile { name: string; path: string; group: string; root?: number }
+/** `root`: the MIDI key at which the file sounds at its own pitch, when the library knows it; `pitched`: it plays a note there (drums and noises do not). */
+export interface LibFile { name: string; path: string; group: string; root?: number; pitched?: boolean }
 export interface LibraryProgress { id: string; done: number; total: number; error?: string }
+
+export interface WavExportOptions { wavBits?: 24 | 32; dither?: boolean; wrapTail?: boolean }
+export interface ExportRangeOptions { useLoop: boolean; tail: number; sampleRate: number }
+export type ExportAudioOptions = ExportRangeOptions & (
+  | ({ format?: 'wav' } & WavExportOptions)
+  | { format: 'mp3'; mp3Kbps?: number }
+);
+export type ExportStemsOptions = ExportRangeOptions & WavExportOptions & { includeMaster: boolean };
 
 /** Level stats returned by an offline master bounce. */
 export interface ExportStats {

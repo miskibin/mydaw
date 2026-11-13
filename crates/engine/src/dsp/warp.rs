@@ -55,9 +55,7 @@ pub mod idx {
     pub const COUNT: usize = 14;
 }
 
-pub const SLOT_NAMES: [&str; 16] = [
-    "1", "2", "3", "4", "5", "6", "7", "8", "9", "10", "11", "12", "13", "14", "15", "16",
-];
+pub const SLOT_NAMES: [&str; 16] = ["1", "2", "3", "4", "5", "6", "7", "8", "9", "10", "11", "12", "13", "14", "15", "16"];
 pub const TRIGS: [&str; 6] = ["Off", "1/16", "1/8", "1/4", "1/2", "1 takt"];
 pub const TRIG_BEATS: [f64; 6] = [0.0, 0.25, 0.5, 1.0, 2.0, 4.0];
 pub const POSITIONS: [&str; 2] = ["Song", "Trigger"];
@@ -103,11 +101,7 @@ impl Bank {
     fn activate(&mut self, slot: usize, beat: f64, oneshot: bool) {
         self.active = slot;
         self.start_beat = beat;
-        self.oneshot_end = if oneshot && slot != 0 {
-            Some(beat + WARP_BAR)
-        } else {
-            None
-        };
+        self.oneshot_end = if oneshot && slot != 0 { Some(beat + WARP_BAR) } else { None };
     }
     /// A new parameter value: switch now or at the next boundary of `q` beats.
     fn request(&mut self, slot: usize, beat: f64, q: f64, oneshot: bool) {
@@ -118,11 +112,7 @@ impl Bank {
             return;
         }
         let floor = (beat / q).floor() * q;
-        let at = if beat - floor < TRIG_TOL {
-            floor
-        } else {
-            floor + q
-        };
+        let at = if beat - floor < TRIG_TOL { floor } else { floor + q };
         self.pending = Some((slot, at));
     }
     /// Advance to `beat`: apply a due pending change or end a one-shot.
@@ -229,9 +219,7 @@ impl Warp {
     #[inline]
     fn in_history(&self, pos: f64) -> bool {
         let n = self.ring[0].len() as f64;
-        pos >= self.valid_from as f64 + 1.0
-            && pos <= self.abs as f64 - 1.0 - LATENCY as f64
-            && pos >= self.abs as f64 - n + 2.0
+        pos >= self.valid_from as f64 + 1.0 && pos <= self.abs as f64 - 1.0 - LATENCY as f64 && pos >= self.abs as f64 - n + 2.0
     }
 
     /// Forget the history (playhead jump, start, end of a hold).
@@ -344,12 +332,7 @@ impl Processor for Warp {
         let floor_ms = if click { 1.0 } else { 0.0 };
         let k_up = coef(sr, self.p[idx::ATT].max(floor_ms));
         let k_dn = coef(sr, self.p[idx::REL].max(floor_ms));
-        let xf_len = (if self.p[idx::ATTACK] >= 0.5 {
-            XF_ATTACK_S
-        } else {
-            XF_S
-        } * sr)
-            .max(1.0);
+        let xf_len = (if self.p[idx::ATTACK] >= 0.5 { XF_ATTACK_S } else { XF_S } * sr).max(1.0);
         let k_gate = coef(sr, 1.0);
         let dc_on = self.p[idx::DC] >= 0.5;
         let dc_r = 1.0 - std::f32::consts::TAU * 5.0 / sr;
@@ -376,16 +359,12 @@ impl Processor for Warp {
                         self.frozen = true;
                         self.hold = Hold::Looping { start, len };
                     } else {
-                        self.hold = Hold::Recording {
-                            until: bar0 + WARP_BAR + WARP_BAR,
-                        };
+                        self.hold = Hold::Recording { until: bar0 + WARP_BAR + WARP_BAR };
                     }
                 }
                 _ => {
                     let bar1 = (ctx.beat / WARP_BAR).ceil() * WARP_BAR;
-                    self.hold = Hold::Recording {
-                        until: bar1 + WARP_BAR,
-                    };
+                    self.hold = Hold::Recording { until: bar1 + WARP_BAR };
                 }
             }
         }
@@ -411,9 +390,7 @@ impl Processor for Warp {
                         self.frozen = true;
                         self.hold = Hold::Looping { start, len };
                     } else {
-                        self.hold = Hold::Recording {
-                            until: until + WARP_BAR,
-                        };
+                        self.hold = Hold::Recording { until: until + WARP_BAR };
                     }
                 }
             }
@@ -422,10 +399,7 @@ impl Processor for Warp {
             let (pos, y_beats) = match self.hold {
                 Hold::Looping { start, len } => (start + (beat / WARP_BAR).fract() * len, 0.0),
                 _ => {
-                    let v = Self::slot(&maps, true, self.tb.active)
-                        .map(|s| s.value_at(xt, 0.0))
-                        .unwrap_or(1.0)
-                        .clamp(0.0, 1.0);
+                    let v = Self::slot(&maps, true, self.tb.active).map(|s| s.value_at(xt, 0.0)).unwrap_or(1.0).clamp(0.0, 1.0);
                     let y = (1.0 - v as f64) * WARP_DEPTH;
                     let d = (y * spb).max(LATENCY as f64);
                     (self.abs as f64 - 1.0 - d, y)
@@ -471,10 +445,7 @@ impl Processor for Warp {
             }
             // volume map
             let xv = self.vb.x(beat, song);
-            let g_t = Self::slot(&maps, false, self.vb.active)
-                .map(|s| s.value_at(xv, tns))
-                .unwrap_or(1.0)
-                .clamp(0.0, 1.0);
+            let g_t = Self::slot(&maps, false, self.vb.active).map(|s| s.value_at(xv, tns)).unwrap_or(1.0).clamp(0.0, 1.0);
             let k = if g_t > self.gain { k_up } else { k_dn };
             self.gain += (g_t - self.gain) * k;
             let g = 1.0 + (self.gain - 1.0) * vmix;
@@ -537,11 +508,7 @@ impl Processor for Warp {
         out[6] = self.m_speed;
         out[7] = self.m_gain;
         let filled = (self.abs - self.valid_from).min(self.ring[0].len() as u64) as f32;
-        let spb = if self.sr > 0.0 {
-            self.sr * 60.0 / 120.0
-        } else {
-            1.0
-        };
+        let spb = if self.sr > 0.0 { self.sr * 60.0 / 120.0 } else { 1.0 };
         out[8] = filled / spb; // in beats at 120 bpm; the UI rescales with the song tempo
         out[9] = match self.hold {
             Hold::Off => 0.0,
@@ -580,12 +547,8 @@ pub fn factory_maps() -> WarpMaps {
         time: Vec<WarpSlot>,
         vol: Vec<WarpSlot>,
     }
-    let f: File = serde_json::from_str(include_str!("../warp_factory.json"))
-        .expect("warp_factory.json is valid");
-    WarpMaps {
-        time: f.time,
-        vol: f.vol,
-    }
+    let f: File = serde_json::from_str(include_str!("../warp_factory.json")).expect("warp_factory.json is valid");
+    WarpMaps { time: f.time, vol: f.vol }
 }
 
 #[cfg(test)]
@@ -597,10 +560,7 @@ mod tests {
 
     fn params(kv: &[(usize, f32)]) -> ParamBlock {
         let mut pb = ParamBlock::default();
-        for (i, d) in crate::catalog::params(crate::model::FxKind::Warp)
-            .iter()
-            .enumerate()
-        {
+        for (i, d) in crate::catalog::params(crate::model::FxKind::Warp).iter().enumerate() {
             pb.values[i] = d.def as f32;
         }
         // test signals are often DC: the DC filter would take them away
@@ -613,14 +573,8 @@ mod tests {
 
     fn with_maps(time: Vec<AutoPoint>, vol: Vec<AutoPoint>) -> Box<WarpMaps> {
         Box::new(WarpMaps {
-            time: vec![WarpSlot {
-                name: "t".into(),
-                points: time,
-            }],
-            vol: vec![WarpSlot {
-                name: "v".into(),
-                points: vol,
-            }],
+            time: vec![WarpSlot { name: "t".into(), points: time }],
+            vol: vec![WarpSlot { name: "v".into(), points: vol }],
         })
     }
 
@@ -637,16 +591,7 @@ mod tests {
             let m = 256.min(n - i);
             let mut l: Vec<f32> = (i..i + m).map(&input).collect();
             let mut r = l.clone();
-            w.process(
-                &mut l,
-                &mut r,
-                &ProcessCtx {
-                    sample_rate: SR,
-                    bpm: 120.0,
-                    beat: i as f64 * bps,
-                    playing: true,
-                },
-            );
+            w.process(&mut l, &mut r, &ProcessCtx { sample_rate: SR, bpm: 120.0, beat: i as f64 * bps, playing: true });
             out.extend_from_slice(&l);
             i += m;
         }
@@ -681,29 +626,16 @@ mod tests {
         let mut w = make(flat(), flat(), &[]);
         let sine = |i: usize| (i as f32 * 0.05).sin() * 0.5;
         let out = run(&mut w, sine, 48000);
-        for i in 1000..48000 {
-            assert!(
-                (out[i] - sine(i - LATENCY)).abs() < 2e-3,
-                "sample {i}: {} vs {}",
-                out[i],
-                sine(i - LATENCY)
-            );
+        for (i, &o) in out.iter().enumerate().take(48000).skip(1000) {
+            assert!((o - sine(i - LATENCY)).abs() < 2e-3, "sample {i}: {o} vs {}", sine(i - LATENCY));
         }
     }
 
     #[test]
     fn half_time_slope_plays_an_octave_down() {
         // v from 1 to 0.75 over the bar: two beats behind at the end → half speed
-        let mut w = make(
-            vec![AutoPoint::at(0.0, 1.0), AutoPoint::at(4.0, 0.75)],
-            flat(),
-            &[],
-        );
-        let out = run(
-            &mut w,
-            |i| (i as f32 * 440.0 * std::f32::consts::TAU / SR).sin(),
-            SPB * 4,
-        );
+        let mut w = make(vec![AutoPoint::at(0.0, 1.0), AutoPoint::at(4.0, 0.75)], flat(), &[]);
+        let out = run(&mut w, |i| (i as f32 * 440.0 * std::f32::consts::TAU / SR).sin(), SPB * 4);
         let f = freq(&out[SPB..SPB * 3]);
         assert!((f - 220.0).abs() < 1.0, "half speed: {f} Hz");
     }
@@ -723,21 +655,13 @@ mod tests {
         let out = run(&mut w, |i| (i % SPB) as f32 / SPB as f32 - 0.5, SPB * 4);
         let seg = &out[SPB * 2 + 100..SPB * 3 - 100];
         let falling = seg.windows(2).filter(|w| w[1] < w[0]).count();
-        assert!(
-            falling > seg.len() * 9 / 10,
-            "reverse: {falling} of {} samples fall",
-            seg.len()
-        );
+        assert!(falling > seg.len() * 9 / 10, "reverse: {falling} of {} samples fall", seg.len());
     }
 
     #[test]
     fn stutter_repeats_the_first_beat() {
         // Y = −floor(x): every beat replays beat 1 (hold steps)
-        let s = factory_maps()
-            .time
-            .into_iter()
-            .find(|s| s.name.starts_with("Stutter — 1."))
-            .unwrap();
+        let s = factory_maps().time.into_iter().find(|s| s.name.starts_with("Stutter — 1.")).unwrap();
         let mut w = make(s.points, flat(), &[]);
         let input = |i: usize| ((i / 4800) % 7) as f32 * 0.1; // a staircase that never repeats within a beat
         let out = run(&mut w, input, SPB * 4);
@@ -745,10 +669,7 @@ mod tests {
             for j in [500usize, 6000, 15000] {
                 let a = out[j];
                 let b = out[k * SPB + j];
-                assert!(
-                    (a - b).abs() < 1e-3,
-                    "beat {k} sample {j}: {b} should repeat {a}"
-                );
+                assert!((a - b).abs() < 1e-3, "beat {k} sample {j}: {b} should repeat {a}");
             }
         }
     }
@@ -756,30 +677,15 @@ mod tests {
     #[test]
     fn reaching_before_the_recorded_past_is_silent() {
         // from the very start, read 4 beats back: nothing was heard yet → silence, not garbage
-        let mut w = make(
-            vec![AutoPoint::at(0.0, 0.5), AutoPoint::at(4.0, 0.5)],
-            flat(),
-            &[],
-        );
+        let mut w = make(vec![AutoPoint::at(0.0, 0.5), AutoPoint::at(4.0, 0.5)], flat(), &[]);
         let out = run(&mut w, |_| 0.5, SPB * 6);
-        assert!(
-            out[..SPB * 3].iter().all(|x| x.abs() < 1e-3),
-            "silent while the buffer is short"
-        );
-        assert!(
-            out[SPB * 5..].iter().all(|x| (x - 0.5).abs() < 0.05),
-            "plays once 4 beats are buffered"
-        );
+        assert!(out[..SPB * 3].iter().all(|x| x.abs() < 1e-3), "silent while the buffer is short");
+        assert!(out[SPB * 5..].iter().all(|x| (x - 0.5).abs() < 0.05), "plays once 4 beats are buffered");
     }
 
     #[test]
     fn volume_map_gates_in_time() {
-        let gate = vec![
-            AutoPoint::at(0.0, 1.0),
-            AutoPoint::at(2.0, 1.0),
-            AutoPoint::at(2.0, 0.0),
-            AutoPoint::at(4.0, 0.0),
-        ];
+        let gate = vec![AutoPoint::at(0.0, 1.0), AutoPoint::at(2.0, 1.0), AutoPoint::at(2.0, 0.0), AutoPoint::at(4.0, 0.0)];
         let mut w = make(flat(), gate, &[]);
         let out = run(&mut w, |_| 0.5, SPB * 4);
         assert!((out[SPB] - 0.5).abs() < 1e-2);
@@ -789,33 +695,19 @@ mod tests {
     #[test]
     fn click_reduction_smooths_jumps() {
         // a sine with hold-jumps every 1/8: the largest sample step must stay near the sine's own
-        let pts = factory_maps()
-            .time
-            .into_iter()
-            .find(|s| s.name == "Stutter 1/8")
-            .unwrap()
-            .points;
+        let pts = factory_maps().time.into_iter().find(|s| s.name == "Stutter 1/8").unwrap().points;
         // 317 Hz: no whole number of periods in 1/8 beat, so each jump lands on another phase
         let sine = |i: usize| (i as f32 * 317.0 * std::f32::consts::TAU / SR).sin() * 0.5;
         let max_step = |click: f32| {
             let mut w = make(pts.clone(), flat(), &[(idx::CLICK, click), (idx::DC, 0.0)]);
             let out = run(&mut w, sine, SPB * 4);
-            out[SPB / 2..]
-                .windows(2)
-                .map(|w| (w[1] - w[0]).abs())
-                .fold(0f32, f32::max)
+            out[SPB / 2..].windows(2).map(|w| (w[1] - w[0]).abs()).fold(0f32, f32::max)
         };
         let smooth = max_step(1.0);
         let raw = max_step(0.0);
         let natural = 0.5 * 317.0 * std::f32::consts::TAU / SR;
-        assert!(
-            raw > natural * 4.0,
-            "the jumps click without reduction ({raw})"
-        );
-        assert!(
-            smooth < natural * 2.5,
-            "click reduction leaves a step of {smooth} (sine's own {natural})"
-        );
+        assert!(raw > natural * 4.0, "the jumps click without reduction ({raw})");
+        assert!(smooth < natural * 2.5, "click reduction leaves a step of {smooth} (sine's own {natural})");
     }
 
     #[test]
@@ -825,16 +717,7 @@ mod tests {
         w.set_params(&params(&[(idx::TRIG, 3.0)])); // 1/4: next beat
         let half = vec![AutoPoint::at(0.0, 1.0), AutoPoint::at(4.0, 0.75)];
         let maps = WarpMaps {
-            time: vec![
-                WarpSlot {
-                    name: "a".into(),
-                    points: flat(),
-                },
-                WarpSlot {
-                    name: "b".into(),
-                    points: half,
-                },
-            ],
+            time: vec![WarpSlot { name: "a".into(), points: flat() }, WarpSlot { name: "b".into(), points: half }],
             vol: vec![],
         };
         w.swap_data(Box::new(maps));
@@ -856,54 +739,21 @@ mod tests {
             let i = start + b * 256;
             let mut l: Vec<f32> = (i..i + 256).map(|_| 0.9).collect();
             let mut r = l.clone();
-            w.process(
-                &mut l,
-                &mut r,
-                &ProcessCtx {
-                    sample_rate: SR,
-                    bpm: 120.0,
-                    beat: i as f64 * bps,
-                    playing: true,
-                },
-            );
+            w.process(&mut l, &mut r, &ProcessCtx { sample_rate: SR, bpm: 120.0, beat: i as f64 * bps, playing: true });
             out.extend_from_slice(&l);
         }
         // the new input (0.9) is never heard: the previous bar (0.2) plays again
-        let bad: Vec<(usize, f32)> = out
-            .iter()
-            .copied()
-            .enumerate()
-            .skip(1000)
-            .filter(|(_, x)| (x - 0.2).abs() >= 0.01)
-            .take(5)
-            .collect();
-        assert!(
-            bad.is_empty(),
-            "hold must loop the old bar: {bad:?} hold {:?}",
-            w.hold
-        );
+        let bad: Vec<(usize, f32)> = out.iter().copied().enumerate().skip(1000).filter(|(_, x)| (x - 0.2).abs() >= 0.01).take(5).collect();
+        assert!(bad.is_empty(), "hold must loop the old bar: {bad:?} hold {:?}", w.hold);
         assert!(w.tail_samples().is_none(), "a looping hold never parks");
     }
 
     #[test]
     fn stopped_transport_passes_through() {
-        let mut w = make(
-            vec![AutoPoint::at(0.0, 0.5), AutoPoint::at(4.0, 0.5)],
-            flat(),
-            &[],
-        );
+        let mut w = make(vec![AutoPoint::at(0.0, 0.5), AutoPoint::at(4.0, 0.5)], flat(), &[]);
         let mut l = vec![0.3; 64];
         let mut r = l.clone();
-        w.process(
-            &mut l,
-            &mut r,
-            &ProcessCtx {
-                sample_rate: SR,
-                bpm: 120.0,
-                beat: 0.0,
-                playing: false,
-            },
-        );
+        w.process(&mut l, &mut r, &ProcessCtx { sample_rate: SR, bpm: 120.0, beat: 0.0, playing: false });
         assert_eq!(l[LATENCY], 0.3);
     }
 
@@ -936,18 +786,8 @@ mod tests {
         assert_eq!(m.time.len(), 16);
         assert_eq!(m.vol.len(), 16);
         for s in m.time.iter().chain(m.vol.iter()) {
-            assert!(
-                s.points.windows(2).all(|w| w[0].t <= w[1].t),
-                "{} is sorted",
-                s.name
-            );
-            assert!(
-                s.points
-                    .iter()
-                    .all(|p| (0.0..=1.0).contains(&p.v) && (0.0..=WARP_BAR).contains(&p.t)),
-                "{}",
-                s.name
-            );
+            assert!(s.points.windows(2).all(|w| w[0].t <= w[1].t), "{} is sorted", s.name);
+            assert!(s.points.iter().all(|p| (0.0..=1.0).contains(&p.v) && (0.0..=WARP_BAR).contains(&p.t)), "{}", s.name);
         }
         let _ = CurveShape::Pulse;
     }

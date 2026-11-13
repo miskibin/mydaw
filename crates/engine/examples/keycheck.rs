@@ -23,12 +23,20 @@ fn main() {
         }
         s / (a2 * b2).sqrt()
     };
-    let mut keys: Vec<(f32, String)> = (0..12).flat_map(|k| [(corr(&maj, k), format!("{} major", names[k])), (corr(&min, k), format!("{} minor", names[k]))]).collect();
+    let mut keys: Vec<(f32, String)> =
+        (0..12).flat_map(|k| [(corr(&maj, k), format!("{} major", names[k])), (corr(&min, k), format!("{} minor", names[k]))]).collect();
     keys.sort_by(|a, b| b.0.total_cmp(&a.0));
     let dev = v.iter().map(|m| ((m - m.round()) * 100.0).abs()).sum::<f32>() / v.len().max(1) as f32;
     let mut s = v.clone();
     s.sort_by(f32::total_cmp);
-    println!("voiced {:.1} s, notes {}, median midi {:.1}, range {:.1}–{:.1}", v.len() as f32 / an.rate, an.notes.len(), s[s.len() / 2], s[s.len() / 20], s[s.len() * 19 / 20]);
+    println!(
+        "voiced {:.1} s, notes {}, median midi {:.1}, range {:.1}–{:.1}",
+        v.len() as f32 / an.rate,
+        an.notes.len(),
+        s[s.len() / 2],
+        s[s.len() / 20],
+        s[s.len() * 19 / 20]
+    );
     println!("pitch classes: {}", (0..12).map(|i| format!("{}:{}", names[i], pc[i] as u32)).collect::<Vec<_>>().join(" "));
     println!("mean |deviation| from semitone grid: {dev:.1} cents");
     println!("best keys (frames): {:?}", &keys[..4]);
@@ -51,7 +59,12 @@ fn main() {
         if !ps.is_empty() {
             let med = ps[ps.len() / 2];
             let far = an.notes.iter().filter(|n| (n.pitch - med).abs() > 9.0).count();
-            println!("notes pitch min {:.1} max {:.1} median {:.1}; outlier notes (>9 st from median): {far}", ps[0], ps[ps.len() - 1], med);
+            println!(
+                "notes pitch min {:.1} max {:.1} median {:.1}; outlier notes (>9 st from median): {far}",
+                ps[0],
+                ps[ps.len() - 1],
+                med
+            );
         }
     }
     // intonation of the notes themselves (median of each note, ignoring glides into it)
@@ -67,10 +80,16 @@ fn main() {
     }
     nd.sort_by(f32::total_cmp);
     if !nd.is_empty() {
-        println!("note medians: {} notes, median |off| {:.1} cents, 80th pct {:.1} cents", nd.len(), nd[nd.len() / 2], nd[nd.len() * 4 / 5]);
+        println!(
+            "note medians: {} notes, median |off| {:.1} cents, 80th pct {:.1} cents",
+            nd.len(),
+            nd[nd.len() / 2],
+            nd[nd.len() * 4 / 5]
+        );
     }
     let major = [0usize, 2, 4, 5, 7, 9, 11];
-    let mut fit: Vec<(f32, &str)> = (0..12).map(|k| (major.iter().map(|d| w[(k + d) % 12]).sum::<f32>() / total.max(1e-6), names[k])).collect();
+    let mut fit: Vec<(f32, &str)> =
+        (0..12).map(|k| (major.iter().map(|d| w[(k + d) % 12]).sum::<f32>() / total.max(1e-6), names[k])).collect();
     fit.sort_by(|a, b| b.0.total_cmp(&a.0));
     println!("note weights (s): {}", (0..12).map(|i| format!("{}:{:.1}", names[i], w[i])).collect::<Vec<_>>().join(" "));
     println!("major scales by share of sung time in scale (relative minor = 6th degree): {:?}", &fit[..4]);

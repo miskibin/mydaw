@@ -12,6 +12,7 @@ import { commit } from '../state/edit';
 import {
   addBar, addKeys, addSampler, addSamplerFiles, addSynth, audition, chanKindLabel, channels, clonePattern, cloneChannel, curPat, deleteChannel,
   deletePattern, type InstrumentPick, newPattern, nextEmptyPattern, openPattern, openRack, openRoll, putNotes, recolorPattern, removeBar, renamePattern, replaceChannel, replaceWithFile, setChannel, setCurPattern, splitByChannel,
+  rollMoved,
 } from '../state/pattern';
 import { arrVersion, S } from '../state/store';
 import { openMenu, openRename, say, setU, type MenuItem, type PatWin } from '../state/ui';
@@ -65,16 +66,22 @@ export function PatFrame(props: {
 }) {
   let root!: HTMLDivElement;
   const W = () => props.win;
+  // a move or resize the user makes takes the Piano roll out of full screen (it then stays where they put it)
+  const put = (g: Partial<PatWin>) => {
+    const w = W(); if (Object.entries(g).every(([k, v]) => w[k as keyof PatWin] === v)) return;
+    if (props.key === 'rollWin') rollMoved();
+    setU(props.key, o => o && { ...o, ...g });
+  };
   const resize = (e: PointerEvent) => {
     if (e.button !== 0) return; e.preventDefault(); e.stopPropagation();
     const sx = e.clientX, sy = e.clientY, o = { ...W() };
-    track(ev => setU(props.key, w => w && { ...w, w: clamp(o.w + ev.clientX - sx, props.minW, window.innerWidth - 20), h: clamp(o.h + ev.clientY - sy, props.minH, window.innerHeight - 20) }), null, 'nwse-resize');
+    track(ev => put({ w: clamp(o.w + ev.clientX - sx, props.minW, window.innerWidth - 20), h: clamp(o.h + ev.clientY - sy, props.minH, window.innerHeight - 20) }), null, 'nwse-resize');
   };
   return (
     <div ref={root} tabIndex={0} class={'win patwin ' + props.class} style={{ left: W().x + 'px', top: W().y + 'px', width: W().w + 'px', height: W().h + 'px', 'z-index': props.z }}
       onPointerDown={e => { props.front(); const tg = (e.target as HTMLElement).tagName; if (tg !== 'SELECT' && tg !== 'INPUT') root.focus({ preventScroll: true }); }}
       onKeyDown={e => guardKeys(e, props.onKey)}>
-      <div class="winhd" onPointerDown={e => moveWindow(e, () => W(), (x, y) => setU(props.key, w => w && { ...w, x, y }))} onWheel={e => props.onHeadWheel?.(e)}
+      <div class="winhd" onPointerDown={e => moveWindow(e, () => W(), (x, y) => put({ x, y }))} onWheel={e => props.onHeadWheel?.(e)}
         onDblClick={e => { if (!(e.target as HTMLElement).closest('button, select, input, .numf, .seg')) props.onHeadDbl?.(); }}>{props.head}</div>
       {props.children}
       <div class="resizer" onPointerDown={resize} title={t('b.pe.resize')} />

@@ -6,24 +6,32 @@
 import { createEffect, createMemo, createSignal, For, on, onCleanup, onMount, Show, untrack } from 'solid-js';
 import { unwrap } from 'solid-js/store';
 import { be } from '../api/backend';
-import { t } from '../lib/i18n';
+import { t, type TranslationKey } from '../lib/i18n';
 import { cloneNotes } from '../lib/noteClone';
 import { zoomAround, type ZRange } from '../lib/zoomBar';
 import { ZoomScrollbar } from '../ui/ZoomScrollbar';
 import { TOTAL_BEATS, type Note } from '../api/types';
 import { clamp } from '../lib/format';
-import { duplicateRight, keyOf, moveNotes, noteAt, notesText, resizeNotes, ROLL_SNAPS, SCALES, snapStep, stepsOf, transpose, velOf } from '../lib/pattern';
+import { duplicateRight, keyOf, moveNotes, noteAt, notesText, resizeNotes, ROLL_SNAPS, SCALES, scaleMask, snapStep, stepsOf, transpose, velOf } from '../lib/pattern';
 import { NOTE_NAMES, noteName } from '../lib/pitch';
 import {
   applyProps, fitRange, fmtLen, fmtStart, followPage, invertSelection, legato, notesOfKey, nudgeVelocity,
   parseKey, parseLen, parseStart, parseVel, quantizeStarts, readProps, wheelNotches,
 } from '../lib/rollEdit';
 import { commit, Gesture, wheelEdit } from '../state/edit';
+import type { TransformSelect, TransformVerb } from '../api/types';
+
+/** The project key/scale as a setKey op (the roll header's key selectors commit it). */
+const setKeyOp = (key: number, scale: number) => ({ op: 'setKey' as const, key, scale });
 import { audition, chanKindLabel, channels, closeRoll, curPat, moveNotesToNewPattern, patPlayhead, putNotes, rollFront, selChan, selectChannel, toggleRollMax } from '../state/pattern';
 import { arrVersion, S } from '../state/store';
-import { say, U } from '../state/ui';
+import { openMenu, say, U } from '../state/ui';
+import { selectionSpan, vocalsUnder } from '../lib/melody';
+import { fmtPos } from '../lib/format';
+import { openPitchEditor } from '../state/actions';
 import { dblCheck, edgeScroller, panDrag, track, trackFrame } from '../ui/drag';
 import { typingHeld } from '../state/typingKeys';
+import { noteClip, setNoteClip } from '../state/noteClipboard';
 import { addFrameTask, fitCanvas, fonts, Layer } from '../ui/frameLoop';
 import { Icon } from '../ui/icons';
 import { drawLane, drawRoll, rollX, rollY, type RollGeo } from './patternDraw';
@@ -45,9 +53,6 @@ const TOOLS: { id: Tool; key: string; label: Parameters<typeof t>[0]; icon: stri
   { id: 'select', key: 'e', label: 'b.pe.tool.select', icon: 'M4 4h4 M12 4h4 M20 4v4 M20 12v4 M20 20h-4 M12 20H8 M4 20v-4 M4 12V8', tip: 'b.pe.tool.select.tip' },
   { id: 'erase', key: 'd', label: 'b.pe.tool.erase', icon: 'M8 20h12 M4.5 15.5L14 6l5 5-7.5 7.5H8z', tip: 'b.pe.tool.erase.tip' },
 ];
-/** Piano-roll note clipboard (shared across patterns); `noteClipAt` = where the next paste lands. */
-let noteClip: Note[] = [];
-let noteClipAt: number | null = null;
 
 /** The Piano roll window (shown while `U.rollWin` is set and there is a pattern and a channel). */
 export function PianoRoll(props: { z: number }) {
@@ -63,10 +68,26 @@ const [rollSnap, setRollSnap] = createSignal(1);
 const [rollKey, setRollKey] = createSignal<number | null>(null);
 const [rollScale, setRollScale] = createSignal(0);
 
-/** Key and scale to highlight: chosen here, else the project's Pitch Correct (where a detected key is applied), else C major. */
+/** The note tools the roll header offers: [A, B] are the two params' defaults; the
+ * meaning of A/B is per tool (timing/velocity, grid/amount, hits/slots, width/ramp,
+ * hits/slots, density/motif-bars). */
+const TOOL_META: Record<'humanize' | 'quantize' | 'euclid' | 'strum' | 'drums' | 'melody', { label: TranslationKey; labelA: TranslationKey; labelB: TranslationKey; defA: number; defB: number }> = {
+  humanize: { label: 'b.pr.tool.humanize', labelA: 'b.pr.tool.humanizeA', labelB: 'b.pr.tool.humanizeB', defA: 0.3, defB: 0.2 },
+  quantize: { label: 'b.pr.tool.quantize', labelA: 'b.pr.tool.quantizeA', labelB: 'b.pr.tool.quantizeB', defA: 1, defB: 1 },
+  euclid: { label: 'b.pr.tool.euclid', labelA: 'b.pr.tool.euclidA', labelB: 'b.pr.tool.euclidB', defA: 4, defB: 16 },
+  strum: { label: 'b.pr.tool.strum', labelA: 'b.pr.tool.strumA', labelB: 'b.pr.tool.strumB', defA: 0.5, defB: 0.05 },
+  drums: { label: 'b.pr.tool.drums', labelA: 'b.pr.tool.drumsA', labelB: 'b.pr.tool.drumsB', defA: 4, defB: 16 },
+  melody: { label: 'b.pr.tool.melody', labelA: 'b.pr.tool.melodyA', labelB: 'b.pr.tool.melodyB', defA: 0.5, defB: 2 },
+};
+type ToolId = keyof typeof TOOL_META;
+
+/** Key and scale to highlight: chosen here (the project key — also what scale-aware
+ * transforms use), else the project's Pitch Correct (a detected key), else C major.
+ * `scale` is the engine's scale id (pitch::scale_mask), not the list position. */
 function projectKey(): { root: number; scale: number } {
-  for (const m of S.project.inserts) for (const f of m.fx) if (f.type === 'tune' && (f.params.scale ?? 0) > 0) return { root: Math.round(f.params.key ?? 0), scale: (f.params.scale ?? 1) === 2 ? 1 : 0 };
-  return { root: 0, scale: 0 };
+  if (S.project.key != null) return { root: S.project.key, scale: S.project.scale ?? 1 };
+  for (const m of S.project.inserts) for (const f of m.fx) if (f.type === 'tune' && (f.params.scale ?? 0) > 0) return { root: Math.round(f.params.key ?? 0), scale: f.params.scale ?? 1 };
+  return { root: 0, scale: 1 };
 }
 
 function Roll(props: { z: number }) {
@@ -88,10 +109,42 @@ function Roll(props: { z: number }) {
   const [propsFor, setPropsFor] = createSignal<number[] | null>(null);
   const [view, setViewS] = createSignal({ sx: 0, sy: 0, zoom: 1, rowH: ROW_H });
   const pk = createMemo(projectKey, undefined, { equals: (a, b) => a.root === b.root && a.scale === b.scale });
+  // the note tools strip: verb + two params (meaning per verb) + an optional seed
+  const [toolId, setToolId] = createSignal<'humanize' | 'quantize' | 'euclid' | 'strum' | 'drums' | 'melody'>('humanize');
+  const [toolA, setToolA] = createSignal(0.3);
+  const [toolB, setToolB] = createSignal(0.2);
+  const [toolSeed, setToolSeed] = createSignal('');
+  const applyTool = () => {
+    const p = pt();
+    const chan = ch().id;
+    const seed = toolSeed().trim() === '' ? undefined : Math.max(0, Math.floor(+toolSeed() || 0));
+    const id = toolId(), a = toolA(), b = toolB();
+    const verb: TransformVerb = id === 'humanize' ? { kind: 'humanize', timing: a, velocity: b }
+      : id === 'quantize' ? { kind: 'quantize', grid: a || 1, amount: Math.min(1, Math.max(0, b)), scaleAware: false }
+      : id === 'euclid' ? { kind: 'euclidFill', ch: chan, k: Math.max(1, Math.round(a)), n: Math.max(1, Math.round(b)), rotate: 0 }
+      : id === 'strum' ? { kind: 'strum', width: a, ramp: b }
+      : id === 'drums' ? { kind: 'euclidDrums', voices: [{ ch: chan, k: Math.max(1, Math.round(a)), n: Math.max(1, Math.round(b)) }], bars: Math.max(1, Math.round(p.len / 4)) }
+      : { kind: 'melody', ch: chan, bars: Math.max(1, Math.round(p.len / 4)), density: Math.min(1, Math.max(0.05, a)), repeat: Math.max(1, Math.round(b)) };
+    const op: { op: 'transformNotes'; pattern: number; verb: TransformVerb; seed?: number; select?: TransformSelect } = {
+      op: 'transformNotes', pattern: p.id, verb,
+      ...(seed !== undefined ? { seed } : {}),
+      // scope: the selection, else the channel the roll is showing — never the whole
+      // pattern (a pattern is multi-channel; humanize with Hat shown must not jitter
+      // the kick). Generators target their channel anyway, so they stay unscoped.
+      ...(sel().size > 0
+        ? { select: { kind: 'indices' as const, indices: [...sel()].sort((x, y) => x - y) } }
+        : id === 'humanize' || id === 'quantize' || id === 'strum'
+          ? { select: { kind: 'range' as const, from: 0, to: 1e9, ch: chan } }
+          : {}),
+    };
+    commit([op], t(TOOL_META[id].label));
+    setSel(new Set<number>());
+    say(t('b.pr.toolApplied', { verb: t(TOOL_META[id].label) }));
+  };
   const root = () => rollKey() ?? pk().root;
   const scaleIdx = () => (rollKey() != null ? rollScale() : pk().scale);
   const chansMap = createMemo(() => { arrVersion(); return new Map(unwrap(channels()).map(c => [c.id, c])); });
-  const mask = () => SCALES[scaleIdx()][1];
+  const mask = () => scaleMask(scaleIdx());
   const unit = (alt = false) => (alt ? 0 : rollSnap());
   /** After a pick in a toolbar list the keyboard goes back to the roll (arrows transpose, Delete deletes) instead of staying in the list. */
   const backToRoll = (el: HTMLElement) => el.closest<HTMLElement>('.win')?.focus({ preventScroll: true });
@@ -116,12 +169,14 @@ function Roll(props: { z: number }) {
   const hTotal = () => Math.min(MAX_STEPS, stepsOf(pt()) + ROOM);
   const maxSxAt = (pps: number) => Math.max(0, hTotal() * pps - gridW());
   const maxSx = () => maxSxAt(geo().pps);
+  /** Zoom-out limit: half the fitted width, or further when that is needed to see all the steps the view scrolls over (pattern + room). */
+  const zMin = () => Math.min(Z_MIN, gridW() / hTotal() / basePps());
   const maxSyAt = (rowH: number) => Math.max(0, 128 * rowH - size().h);
   // the zoom scrollbars, in steps (time) and keys from the top (key height)
   const hRange = (): ZRange => { const G = geo(); return { pos: G.sx / G.pps, len: gridW() / G.pps }; };
-  const hLimits = () => ({ total: hTotal(), minLen: gridW() / (basePps() * Z_MAX), maxLen: gridW() / (basePps() * Z_MIN) });
+  const hLimits = () => ({ total: hTotal(), minLen: gridW() / (basePps() * Z_MAX), maxLen: gridW() / (basePps() * zMin()) });
   const applyH = (r: ZRange) => {
-    const zoom = clamp(gridW() / r.len / basePps(), Z_MIN, Z_MAX), pps = basePps() * zoom;
+    const zoom = clamp(gridW() / r.len / basePps(), zMin(), Z_MAX), pps = basePps() * zoom;
     setViewS(v => ({ ...v, zoom, sx: clamp(r.pos * pps, 0, maxSxAt(pps)) }));
   };
   // Follow the playhead (the app-wide Follow toggle): the frame task flips the view a page when
@@ -528,7 +583,7 @@ function Roll(props: { z: number }) {
       if (i >= 0) return velWheel(e, i);
     }
     if (e.ctrlKey || e.metaKey) {
-      const p = pos(e), z = clamp(view().zoom * Math.pow(1.0015, -d), Z_MIN, Z_MAX);
+      const p = pos(e), z = clamp(view().zoom * Math.pow(1.0015, -d), zMin(), Z_MAX);
       const pps = basePps() * z;
       setViewS(v => ({ ...v, zoom: z, sx: clamp(p.step * pps - (p.x - KW), 0, maxSxAt(pps)) }));
     } else if (e.altKey) {
@@ -558,6 +613,23 @@ function Roll(props: { z: number }) {
     };
     apply(e);
     track(apply, () => g.end(), 'ns-resize');
+  };
+  // ---- "Vocal reference": the melody (the selection, else the channel's notes) becomes the target of a vocal sung over it
+  const vocals = createMemo(() => { void arrVersion(); return vocalsUnder(S.project, pt().id); });
+  const vocalName = (id: number) => { const c = S.project.clips.find(x => x.id === id)!; return (S.project.sources.find(x => x.id === c.ref)?.name ?? '?') + ' · ' + (S.project.tracks[c.track]?.name ?? '') + ' · ' + fmtPos(c.start); };
+  const toVocal = (clipId: number) => {
+    const c = S.project.clips.find(x => x.id === clipId); if (!c) return;
+    const idx = [...sel()].filter(i => notesRaw()[i]?.ch === ch().id);
+    const span = idx.length ? selectionSpan(S.project, c, ch().id, pt().id, idx) : null;
+    if (idx.length && !span) { say(t('b.pr.vocalNoSel')); return; }
+    openPitchEditor(clipId, { channel: ch().id, span });
+    say(t('b.pr.vocalOpened', { x: idx.length ? notesText(idx.length) : ch().name, name: vocalName(clipId) }));
+  };
+  const vocalRef = (e: MouseEvent) => {
+    const vs = vocals();
+    if (vs.length === 1) return toVocal(vs[0].id);
+    const r = (e.currentTarget as HTMLElement).getBoundingClientRect();
+    openMenu(r.left, r.bottom + 4, vs.map(v => ({ t: 'item' as const, label: vocalName(v.id), act: () => toVocal(v.id) })));
   };
   const moveSelToPattern = () => { const idx = [...sel()]; setSel(new Set<number>()); moveNotesToNewPattern(pt(), idx); };
   const onKey = (e: KeyboardEvent) => {
@@ -608,19 +680,20 @@ function Roll(props: { z: number }) {
     if (m && e.shiftKey && k === 'x') { stop(); if (s.length) moveSelToPattern(); else say(t('b.pe.noSel')); return; }
     if (m && (k === 'c' || k === 'x') && !e.shiftKey) {
       stop(); if (!s.length) return;
-      noteClip = s.map(i => notesRaw()[i]); noteClipAt = null;
+      setNoteClip(s.map(i => notesRaw()[i]));
       if (k === 'x') { const del = new Set(s); commitNotes(notesRaw().filter((_, i) => !del.has(i)), t('b.pe.cutNotes')); setSel(new Set<number>()); }
       say(t(k === 'x' ? 'b.pe.cutX' : 'b.pe.copiedX', { x: notesText(s.length) }));
       return;
     }
     if (m && k === 'v' && !e.shiftKey) {
-      stop(); if (!noteClip.length) return;
-      const a = Math.min(...noteClip.map(n => n.step)), b = Math.max(...noteClip.map(n => n.step + n.len));
-      const at = noteClipAt ?? a + Math.max(4, Math.ceil((b - a) / 4 - 1e-9) * 4); // first paste lands after the copied block, further ones chain on
-      const copies = noteClip.map(n => ({ ...n, ch: ch().id, step: n.step - a + at }));
+      stop(); const clip = noteClip.notes; if (!clip.length) return;
+      const a = noteClip.from ?? Math.min(...clip.map(n => n.step)), b = Math.max(...clip.map(n => n.step + n.len));
+      const at = noteClip.at ?? a + Math.max(4, Math.ceil((b - a) / 4 - 1e-9) * 4); // first paste lands after the copied block, further ones chain on
+      const copies = clip.map(n => ({ ...n, ch: ch().id, step: n.step - a + at }));
       const base = notesRaw().length;
       commitNotes([...notesRaw(), ...copies], t('b.pe.pasteNotes')); setSel(new Set(copies.map((_, j) => base + j)));
-      noteClipAt = at + (b - a);
+      // the next paste chains on: right after the block, or a whole bar on when the block keeps its place in the bar
+      noteClip.at = at + (noteClip.from != null ? Math.max(1, Math.ceil((b - a) / 16 - 1e-9)) * 16 : b - a);
       say(t('b.pe.pastedX', { x: notesText(copies.length) }));
       return;
     }
@@ -740,18 +813,33 @@ function Roll(props: { z: number }) {
         </label>
         <label class="plab">{t('b.pe.lblKey')}
           <span class="row" style={{ gap: '4px' }}>
-            <select class="sel" title={rollKey() == null ? t('b.pe.keyAuto') : t('b.pe.keyScale')} value={String(root())} onChange={e => { setRollKey(+e.currentTarget.value); setRollScale(scaleIdx()); backToRoll(e.currentTarget); }}>
+            <select class="sel" title={rollKey() == null ? t('b.pe.keyAuto') : t('b.pe.keyScale')} value={String(root())} onChange={e => { const sc = scaleIdx(); setRollKey(+e.currentTarget.value); setRollScale(sc); commit([setKeyOp(+e.currentTarget.value, sc)], t('b.pr.keySet')); backToRoll(e.currentTarget); }}>
               <For each={NOTE_NAMES}>{(n, i) => <option value={String(i())}>{n}</option>}</For>
             </select>
-            <select class="sel" value={String(scaleIdx())} onChange={e => { if (rollKey() == null) setRollKey(root()); setRollScale(+e.currentTarget.value); backToRoll(e.currentTarget); }}>
-              <For each={SCALES}>{([l], i) => <option value={String(i())}>{t(l)}</option>}</For>
+            <select class="sel" value={String(scaleIdx())} onChange={e => { if (rollKey() == null) setRollKey(root()); setRollScale(+e.currentTarget.value); commit([setKeyOp(rollKey() ?? root(), +e.currentTarget.value)], t('b.pr.keySet')); backToRoll(e.currentTarget); }}>
+              <For each={SCALES}>{([l, id]) => <option value={String(id)}>{t(l)}</option>}</For>
             </select>
           </span>
         </label>
         <div style={{ flex: 1 }} />
+        <Show when={vocals().length > 0 && chanNotes().length > 0}>
+          <button class="smallbtn" style={{ 'align-self': 'center' }} title={t('b.pr.vocalTip')} onClick={vocalRef}>♪ {t('b.pr.vocal')}{vocals().length > 1 ? ' …' : ''}</button>
+        </Show>
         <Show when={sel().size > 0}>
           <button class="smallbtn" style={{ 'align-self': 'center' }} title={t('b.pe.toNewPatTip')} onClick={e => { moveSelToPattern(); backToRoll(e.currentTarget); }}>{t('b.pe.toNewPat')}</button>
         </Show>
+        <label class="plab" title={t('b.pr.toolsTip')}>
+          {t('b.pr.tools')}
+          <span class="row" style={{ gap: '4px', 'align-items': 'center' }}>
+            <select class="sel" value={toolId()} onChange={e => { setToolId(e.currentTarget.value as ToolId); const m = TOOL_META[e.currentTarget.value as ToolId]; setToolA(m.defA); setToolB(m.defB); backToRoll(e.currentTarget); }}>
+              <For each={Object.keys(TOOL_META) as ToolId[]}>{v => <option value={v}>{t(TOOL_META[v].label)}</option>}</For>
+            </select>
+            <input class="textin" style={{ width: '52px' }} title={t(TOOL_META[toolId()].labelA)} type="number" step="0.1" value={toolA()} onInput={e => setToolA(+e.currentTarget.value)} onKeyDown={e => e.stopPropagation()} />
+            <input class="textin" style={{ width: '52px' }} title={t(TOOL_META[toolId()].labelB)} type="number" step="0.1" value={toolB()} onInput={e => setToolB(+e.currentTarget.value)} onKeyDown={e => e.stopPropagation()} />
+            <input class="textin" style={{ width: '64px' }} title={t('b.pr.seedTip')} placeholder={t('b.pr.seed')} type="number" step="1" value={toolSeed()} onInput={e => setToolSeed(e.currentTarget.value)} onKeyDown={e => e.stopPropagation()} />
+            <button class="smallbtn" style={{ 'align-self': 'center' }} title={t('b.pr.applyTip')} onClick={e => { applyTool(); backToRoll(e.currentTarget); }}>{t('b.pr.apply')}</button>
+          </span>
+        </label>
         <span class="note mono" style={{ 'align-self': 'center', 'font-size': '10px', color: 'var(--fg5)' }}>{sel().size ? t('b.pe.nSel', { n: sel().size }) : notesText(chanNotes().length)}{t('b.pe.newNote', { len: lastLenText() })}</span>
       </div>
       <div class="rollgrid">

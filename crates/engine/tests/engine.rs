@@ -86,12 +86,17 @@ fn audio_clips_play_at_their_position() {
     std::fs::create_dir_all(&dir).unwrap();
     let wav = dir.join("tone.wav");
     // 0.5 s of 440 Hz at 44.1 kHz — a different rate than the render
-    let tone: Vec<f32> = (0..22050).flat_map(|i| { let v = (i as f32 * 440.0 * std::f32::consts::TAU / 44100.0).sin() * 0.5; [v, v] }).collect();
+    let tone: Vec<f32> = (0..22050)
+        .flat_map(|i| {
+            let v = (i as f32 * 440.0 * std::f32::consts::TAU / 44100.0).sin() * 0.5;
+            [v, v]
+        })
+        .collect();
     wave_engine::sources::write_wav(&wav, &tone, 44100).unwrap();
     let mut p = Project::routed();
     p.inserts[0].fx.clear(); // no limiter, so levels are exact
     let e = Engine::new(p, Arc::new(NoPlugins));
-    let (_, clips) = e.import_audio(&[wav.clone()], Some((0, 4.0))).unwrap();
+    let (_, clips) = e.import_audio(std::slice::from_ref(&wav), Some((0, 4.0))).unwrap();
     assert_eq!(clips.len(), 1);
     let out = e.render(0.0, 8.0, 0.0, 48000).unwrap();
     let spb = 60.0 / 128.0;
@@ -112,7 +117,12 @@ fn dry_wet_of_a_latent_effect_lines_up() {
     std::fs::create_dir_all(&dir).unwrap();
     let wav = dir.join("voice.wav");
     let sr = 48000.0f32;
-    let x: Vec<f32> = (0..96000).flat_map(|i| { let v = (1..8).map(|k| (std::f32::consts::TAU * 220.0 * k as f32 * i as f32 / sr).sin() / k as f32).sum::<f32>() * 0.2; [v, v] }).collect();
+    let x: Vec<f32> = (0..96000)
+        .flat_map(|i| {
+            let v = (1..8).map(|k| (std::f32::consts::TAU * 220.0 * k as f32 * i as f32 / sr).sin() / k as f32).sum::<f32>() * 0.2;
+            [v, v]
+        })
+        .collect();
     wave_engine::sources::write_wav(&wav, &x, 48000).unwrap();
     let mut p = Project::routed();
     p.inserts[0].fx.clear();
@@ -146,6 +156,18 @@ fn save_and_open_round_trip() {
     assert!(warnings.is_empty());
     assert_eq!(f.project(), e.project());
     let _ = std::fs::remove_dir_all(dir);
+}
+
+#[test]
+fn a_stale_open_does_not_replace_newer_edits() {
+    let e = Engine::new(Project::empty(), Arc::new(NoPlugins));
+    let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/demo_v1.wave");
+    let revision = e.revision();
+    e.apply(&[Op::SetBpm { bpm: 137.0 }], false, None).unwrap();
+    let error = e.open_at_revision(&path, Some(revision)).unwrap_err();
+    assert!(error.to_string().starts_with("REVISION_CONFLICT:"));
+    assert_eq!(e.project().bpm, 137.0);
+    assert!(e.state().path.is_none());
 }
 
 #[test]
@@ -226,6 +248,24 @@ fn feed(rt: &mut Rt, secs: f64) {
 
 fn takes(e: &Engine) -> Vec<Clip> {
     e.project().clips.into_iter().filter(|c| c.kind == ClipKind::Audio).collect()
+}
+
+#[test]
+fn opening_a_project_while_recording_keeps_the_take_in_its_project() {
+    let e = armed_engine();
+    let mut rt = e.create_rt(48000.0, 256);
+    e.set_transport(None, Some(false), Some(true), None);
+    e.play(0.0);
+    feed(&mut rt, 0.2);
+    let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/demo_v1.wave");
+    let error = e.open(&path).unwrap_err();
+    assert_eq!(error.to_string(), "recording: stop it first");
+    assert!(e.state().transport.playing);
+    assert!(e.state().path.is_none());
+    e.stop();
+    assert_eq!(takes(&e).len(), 1);
+    e.open(&path).unwrap();
+    assert!(takes(&e).is_empty());
 }
 
 #[test]
@@ -335,7 +375,26 @@ fn automation_moves_volume_and_effect_params() {
     for t in p.tracks.iter_mut().skip(1) {
         t.muted = true;
     }
-    p.clips.push(Clip { id: 8001, track: 7, start: 0.0, len: 8.0, offset: 0.0, kind: ClipKind::Auto, source: 8000, muted: false, gain: 0.0, fade_in: 0.0, fade_out: 0.0, pan: 0.0, norm: false, rev: false, tune: None, stretch: 1.0, resample: false });
+    p.clips.push(Clip {
+        id: 8001,
+        track: 7,
+        start: 0.0,
+        len: 8.0,
+        offset: 0.0,
+        kind: ClipKind::Auto,
+        source: 8000,
+        muted: false,
+        gain: 0.0,
+        fade_in: 0.0,
+        fade_out: 0.0,
+        pan: 0.0,
+        norm: false,
+        rev: false,
+        tune: None,
+        stretch: 1.0,
+        resample: false,
+        pitch: 0.0,
+    });
     let e = Engine::new(p, Arc::new(NoPlugins));
     let out = e.render(0.0, 4.0, 0.0, 48000).unwrap();
     let at = |b: f64| (b * 60.0 / 128.0 * 48000.0) as usize * 2;
@@ -380,6 +439,49 @@ fn export_writes_wav_that_round_trips() {
 }
 
 #[test]
+fn pcm24_export_round_trips_signed_samples_and_clamps_full_scale() {
+    let dir = std::env::temp_dir().join(format!("wave-pcm24-{}", std::process::id()));
+    let path = dir.join("mix.wav");
+    let lsb = 1.0 / 8_388_608.0;
+    let input = [0.25, -0.5, 1.25, -1.25, 1.0, -1.0, 0.49 * lsb, -0.75 * lsb, f32::NAN, f32::INFINITY];
+    wave_engine::sources::write_wav_pcm24(&path, &input, 44_100, false).unwrap();
+    let mut reader = hound::WavReader::open(&path).unwrap();
+    let spec = reader.spec();
+    assert_eq!((spec.channels, spec.sample_rate, spec.bits_per_sample), (2, 44_100, 24));
+    assert_eq!(spec.sample_format, hound::SampleFormat::Int);
+    assert_eq!(reader.duration(), 5);
+    assert_eq!(
+        reader.samples::<i32>().collect::<Result<Vec<_>, _>>().unwrap(),
+        [2_097_152, -4_194_304, 8_388_607, -8_388_608, 8_388_607, -8_388_608, 0, -1, 0, 0]
+    );
+    drop(reader);
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
+#[test]
+fn pcm24_dither_is_optional_and_limited_to_the_last_bit_on_silence() {
+    let dir = std::env::temp_dir().join(format!("wave-pcm24-dither-{}", std::process::id()));
+    let input = [0.0; 8192];
+    for dither in [false, true] {
+        let path = dir.join(format!("dither-{dither}.wav"));
+        wave_engine::sources::write_wav_pcm24(&path, &input, 48_000, dither).unwrap();
+        let mut reader = hound::WavReader::open(path).unwrap();
+        let samples: Vec<i32> = reader.samples().map(Result::unwrap).collect();
+        assert_eq!(samples.len(), input.len());
+        if dither {
+            assert_eq!(samples.iter().min(), Some(&-1));
+            assert_eq!(samples.iter().max(), Some(&1));
+            let nonzero = samples.iter().filter(|&&x| x != 0).count();
+            assert!((1600..2500).contains(&nonzero), "{nonzero} nonzero samples");
+            assert!(samples.iter().sum::<i32>().abs() < 220);
+        } else {
+            assert!(samples.iter().all(|&x| x == 0));
+        }
+    }
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
+#[test]
 fn export_tail_extends_length_and_cancel_aborts() {
     let e = Engine::new(Project::sketch(), Arc::new(NoPlugins));
     let no_tail = e.render(0.0, 4.0, 0.0, 48000).unwrap();
@@ -399,7 +501,7 @@ fn export_tail_extends_length_and_cancel_aborts() {
     let peak = silent.iter().fold(0f32, |a, b| a.max(b.abs()));
     assert!(peak < 1e-5, "empty project should be silent");
 }
- 
+
 #[test]
 fn music_analysis_excludes_vocal_insert_and_caches() {
     let dir = std::env::temp_dir().join(format!("wave-music-{}", std::process::id()));
@@ -534,7 +636,26 @@ fn an_arrangement_can_run_past_the_old_128_bar_limit() {
     let last = p.clips.iter().map(|c| c.id).max().unwrap_or(0);
     // bar 476: past the old 512-beat end, inside the new one
     let start = 1900.0;
-    p.clips.push(Clip { id: last + 1, track: 0, start, len, offset: 0.0, kind: ClipKind::Pat, source: pat, muted: false, gain: 0.0, fade_in: 0.0, fade_out: 0.0, pan: 0.0, norm: false, rev: false, tune: None, stretch: 1.0, resample: false });
+    p.clips.push(Clip {
+        id: last + 1,
+        track: 0,
+        start,
+        len,
+        offset: 0.0,
+        kind: ClipKind::Pat,
+        source: pat,
+        muted: false,
+        gain: 0.0,
+        fade_in: 0.0,
+        fade_out: 0.0,
+        pan: 0.0,
+        norm: false,
+        rev: false,
+        tune: None,
+        stretch: 1.0,
+        resample: false,
+        pitch: 0.0,
+    });
     let e = Engine::new(p, Arc::new(NoPlugins));
     let (from, to) = Engine::export_range(&e.project(), false);
     assert_eq!(from, 0.0);
@@ -547,4 +668,106 @@ fn an_arrangement_can_run_past_the_old_128_bar_limit() {
     let k = pat.notes.first().map(|n| n.ch).unwrap();
     pat.notes.push(Note::new(k, 600.0 * 4.0, 4.0, None));
     e.apply(&[Op::PutPattern { pattern: pat }], false, None).unwrap();
+}
+
+#[test]
+fn a_loop_does_not_play_the_downbeat_after_its_end() {
+    // one kick, on the first beat after the loop: looping [0, 4) must never play it (#57)
+    let mut p = Project::empty();
+    let [kick, ..] = p.add_starter_kit();
+    p.patterns[0].notes = vec![Note::new(kick, 16.0, 1.0, None)];
+    p.patterns[0].len = 8.0;
+    p.clips = vec![Clip {
+        id: 50,
+        track: 0,
+        start: 0.0,
+        len: 8.0,
+        offset: 0.0,
+        kind: ClipKind::Pat,
+        source: p.patterns[0].id,
+        muted: false,
+        gain: 0.0,
+        fade_in: 0.0,
+        fade_out: 0.0,
+        pan: 0.0,
+        norm: false,
+        rev: false,
+        tune: None,
+        stretch: 1.0,
+        resample: false,
+        pitch: 0.0,
+    }];
+    // at 44.1 kHz 4 beats are not a whole number of samples: the block that reaches the loop
+    // end runs past it by a fraction of a sample
+    let sr = 44100.0;
+    let loud = |p: &Project| {
+        let e = Engine::new(p.clone(), Arc::new(NoPlugins));
+        let mut rt = e.create_rt(sr, 256);
+        let (mut l, mut r) = (vec![0f32; 256], vec![0f32; 256]);
+        e.play(0.0);
+        let mut peak = 0f32;
+        // three passes of the loop (4 beats at 128 BPM = 1.875 s)
+        for _ in 0..((sr as f64 * 1.875 * 3.0) as usize / 256) {
+            rt.process(&mut l, &mut r, None);
+            peak = l.iter().chain(&r).fold(peak, |a, b| a.max(b.abs()));
+        }
+        peak
+    };
+    p.loop_range = None;
+    assert!(loud(&p) > 0.05, "the kick on beat 4 should play without a loop");
+    p.loop_range = Some(LoopRange { a: 0.0, b: 4.0 });
+    let peak = loud(&p);
+    assert!(peak < 1e-4, "the downbeat after the loop leaked into it: peak {peak}");
+}
+
+#[test]
+fn wrapped_mix_and_stem_keep_exactly_one_pass_with_the_echo_at_its_start() {
+    let mut p = Project::routed();
+    let [kick, ..] = p.add_starter_kit();
+    let insert = p.tracks[0].insert;
+    p.patterns[0].notes = vec![Note::new(kick, 15.0, 1.0, None)];
+    p.patterns[0].len = 8.0;
+    p.clips = vec![Clip {
+        id: 50,
+        track: 0,
+        start: 4.0,
+        len: 8.0,
+        offset: 0.0,
+        kind: ClipKind::Pat,
+        source: p.patterns[0].id,
+        muted: false,
+        gain: 0.0,
+        fade_in: 0.0,
+        fade_out: 0.0,
+        pan: 0.0,
+        norm: false,
+        rev: false,
+        tune: None,
+        stretch: 1.0,
+        resample: false,
+        pitch: 0.0,
+    }];
+    for mixer in &mut p.inserts {
+        mixer.fx.clear();
+    }
+    let mut delay = new_fx(7000, FxKind::Delay, p.bpm);
+    for (key, value) in [("sync", 1.0), ("time", 200.0), ("mix", 100.0), ("fb", 0.0)] {
+        delay.params.insert(key.into(), value);
+    }
+    p.inserts.iter_mut().find(|m| m.id == insert).unwrap().fx.push(delay);
+    let e = Engine::new(p, Arc::new(NoPlugins));
+    let cancel = AtomicBool::new(false);
+    for rate in [44_100, 48_000] {
+        let frames = (1.875 * f64::from(rate)).round() as usize;
+        for target in [None, Some(insert)] {
+            let cut = e.render_export(target, 4.0, 8.0, RenderTail::Seconds(0.0), rate, &cancel).unwrap();
+            let wrap = e.render_export(target, 4.0, 8.0, RenderTail::Wrap, rate, &cancel).unwrap();
+            let first = rate as usize / 4 * 2;
+            assert_eq!(wrap.len(), frames * 2);
+            assert!(rms(&cut[..first]) < 1e-6);
+            assert!(rms(&wrap[..first]) > 1e-3);
+        }
+    }
+    cancel.store(true, std::sync::atomic::Ordering::Relaxed);
+    assert!(matches!(e.render_export(None, 4.0, 8.0, RenderTail::Wrap, 48_000, &cancel), Err(EngineError::Cancelled)));
 }

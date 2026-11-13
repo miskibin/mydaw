@@ -1,7 +1,7 @@
 //! The project the program starts with (eight tracks, the starter kit in the Channel Rack) and
 //! the small fixed song tests and benchmarks build on.
 
-use crate::catalog::{new_fx, load_preset};
+use crate::catalog::{load_preset, new_fx};
 use crate::model::*;
 
 const TC: [&str; 10] = ["#4f8ef7", "#5aa9e6", "#69c3d6", "#47b8a8", "#5fbf8a", "#7c8cf8", "#e0a44a", "#9a8cf0", "#d9678f", "#8b93a1"];
@@ -12,7 +12,17 @@ fn base(names: &[&str], ins_names: &[&str]) -> Project {
         version: 2,
         bpm: 128.0,
         tracks: vec![],
-        inserts: vec![Insert { id: 0, name: "Master".into(), color: "#d5dae2".into(), vol: VOL_UNITY, pan: 0.0, width: 1.0, muted: false, solo: false, fx: vec![] }],
+        inserts: vec![Insert {
+            id: 0,
+            name: "Master".into(),
+            color: "#d5dae2".into(),
+            vol: VOL_UNITY,
+            pan: 0.0,
+            width: 1.0,
+            muted: false,
+            solo: false,
+            fx: vec![],
+        }],
         patterns: vec![],
         sources: vec![],
         clips: vec![],
@@ -21,13 +31,36 @@ fn base(names: &[&str], ins_names: &[&str]) -> Project {
         comps: vec![],
         channels: vec![],
         notebook: Notebook::default(),
+        key: None,
+        scale: 1,
         next_id: 1000,
     };
     for (i, name) in ins_names.iter().enumerate() {
-        p.inserts.push(Insert { id: i as Id + 1, name: (*name).into(), color: TC[COLORS[i]].into(), vol: VOL_UNITY, pan: 0.0, width: 1.0, muted: false, solo: false, fx: vec![] });
+        p.inserts.push(Insert {
+            id: i as Id + 1,
+            name: (*name).into(),
+            color: TC[COLORS[i]].into(),
+            vol: VOL_UNITY,
+            pan: 0.0,
+            width: 1.0,
+            muted: false,
+            solo: false,
+            fx: vec![],
+        });
     }
     for (i, name) in names.iter().enumerate() {
-        p.tracks.push(Track { id: i as Id + 1, name: (*name).into(), color: TC[COLORS[i]].into(), muted: false, solo: false, arm: false, vol: VOL_UNITY, h: 56.0, insert: i as Id + 1, icon: None });
+        p.tracks.push(Track {
+            id: i as Id + 1,
+            name: (*name).into(),
+            color: TC[COLORS[i]].into(),
+            muted: false,
+            solo: false,
+            arm: false,
+            vol: VOL_UNITY,
+            h: 56.0,
+            insert: i as Id + 1,
+            icon: None,
+        });
     }
     let limiter = new_fx(900, FxKind::Limit, p.bpm);
     p.inserts[0].fx.push(limiter);
@@ -57,7 +90,6 @@ pub fn empty_project() -> Project {
     }
     p
 }
-
 
 /// A sketch of a song: three short patterns (beat, hats, bass line) on the starter kit plus
 /// a gated 808 bass, with a vocal chain and a drum-bus compressor. Small and fixed: tests,
@@ -105,16 +137,43 @@ pub fn sketch_project() -> Project {
             color: "#7c8cf8".into(),
             len: 8.0,
             min_len: 4.0,
-            notes: [(0., 3., 33), (4., 2., 33), (6., 2., 40), (8., 4., 36), (14., 2., 38), (16., 3., 29), (20., 2., 29), (22., 2., 36), (24., 6., 31), (30., 2., 34)]
-                .iter()
-                .map(|&(s, l, k)| n(bass, s, l, Some(k)))
-                .collect(),
+            notes: [
+                (0., 3., 33),
+                (4., 2., 33),
+                (6., 2., 40),
+                (8., 4., 36),
+                (14., 2., 38),
+                (16., 3., 29),
+                (20., 2., 29),
+                (22., 2., 36),
+                (24., 6., 31),
+                (30., 2., 34),
+            ]
+            .iter()
+            .map(|&(s, l, k)| n(bass, s, l, Some(k)))
+            .collect(),
             swing: 0.0,
         },
     ];
     let clip = |id, track, start, len, pat| Clip {
-        id, track, start, len, offset: 0.0, kind: ClipKind::Pat, source: pat, muted: false, gain: 0.0,
-        fade_in: 0.0, fade_out: 0.0, pan: 0.0, norm: false, rev: false, tune: None, stretch: 1.0, resample: false,
+        id,
+        track,
+        start,
+        len,
+        offset: 0.0,
+        kind: ClipKind::Pat,
+        source: pat,
+        muted: false,
+        gain: 0.0,
+        fade_in: 0.0,
+        fade_out: 0.0,
+        pan: 0.0,
+        norm: false,
+        rev: false,
+        tune: None,
+        stretch: 1.0,
+        resample: false,
+        pitch: 0.0,
     };
     p.clips = vec![clip(1, 0, 0.0, 16.0, 1), clip(2, 0, 16.0, 16.0, 1), clip(3, 1, 8.0, 24.0, 2), clip(4, 2, 0.0, 32.0, 3)];
     // Vocal chain: EQ (custom) → comp → reverb, drum bus comp.

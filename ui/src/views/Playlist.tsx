@@ -540,7 +540,7 @@ export function Playlist() {
       // narrow clips keep a body to grab: the trim zones shrink, and vanish on a sliver
       const ez = cwid < 14 ? 0 : Math.min(6, cwid / 4);
       if (!edge) edge = x - cx < ez ? 'l' : cx + cwid - x < ez ? 'r' : null;
-      // the icon in the clip's top-left corner opens its menu (FL): right-click deletes instead
+      // the icon in the clip's top-left corner opens its menu (FL), with either button
       if (!edge && cwid >= 36 && x - cx < 20 && y - cy < 15) edge = 'menu';
       return { c, edge };
     }
@@ -599,6 +599,7 @@ export function Playlist() {
       return;
     }
     if (U.compSel && e.button === 0) setU('compSel', null);
+    if (e.button === 2 && h?.edge === 'menu') { e.preventDefault(); closeMenu(); return openClipMenu(e.clientX, e.clientY, h.c, p); }
     if (e.button === 2) return rightDown(e, h, p);
     if (e.button !== 0) return;
     e.preventDefault(); closeMenu();
@@ -1074,12 +1075,14 @@ export function Playlist() {
         { t: 'sec', label: 'Audio' } as MenuItem,
         { t: 'gain', clipId: c.id } as MenuItem,
         ...(c.kind === 'audio' ? [
+          { t: 'item', label: tl('a.pl.makeUnique'), title: tl('a.pl.makeUniqueAudioTip'), act: () => A.makeUnique(c) } as MenuItem,
           { t: 'item', label: tl('a.pl.editSample'), kbd: tl('a.pl.dblClick'), act: () => A.openEditor(c.id) } as MenuItem,
           { t: 'item', label: tl('a.pl.editPitch'), kbd: c.tune?.notes.length ? tl('a.pl.edited') : '', act: () => A.openPitchEditor(c.id) } as MenuItem,
           // how a stretch plays (the clip's stretch factor in the label: set it in Stretch mode)
           { t: 'chips', label: tl('a.pl.stretchMethod', { k: (c.stretch ?? 1).toFixed(2) }), options: [tl('a.pl.keepPitch'), tl('a.pl.resample')], active: c.resample ? 1 : 0, pick: (i: number) => A.setStretchMethod(c, i === 1) } as MenuItem,
           ...(S.stretching[c.id] ? [{ t: 'item', label: tl('a.pl.stretchFailed'), title: S.stretching[c.id], disabled: true, act: () => {} } as MenuItem] : []),
           { t: 'item', label: tl('a.pl.detectTempoKey'), act: () => A.openMusicAnalysis({ clipId: c.id }) } as MenuItem,
+          { t: 'item', label: tl('a.pl.trimRegion'), title: tl('d.smp.trim.tip'), act: () => void A.trimClip(c.id) } as MenuItem,
           { t: 'sub', label: tl('a.pl.autoVocal'), items: [
             { t: 'item', label: tl('a.pl.autoVocalSing'), act: () => void A.autoVocal(c.id, 'natural'), title: tl('a.pl.autoVocalSingTip') },
             { t: 'item', label: tl('a.pl.autoVocalRap'), act: () => void A.autoVocal(c.id, 'hard'), title: tl('a.pl.autoVocalRapTip') },
@@ -1313,12 +1316,14 @@ export function Playlist() {
 // ---------- lane headers & routing ----------
 export function openRouteMenu(i: number, x: number, y: number) {
   const t = S.project.tracks[i]; if (!t) return;
-  openMenu(x, y, [
-    { t: 'title', label: tl('a.pl.toMixer', { name: t.name }) },
-    ...S.project.inserts.map(m => ({ t: 'item', label: insLabel(m.id), kbd: t.insert === m.id ? '●' : '', act: () => {
-      A.setTrack(i, { insert: m.id }, 'Routing'); A.selectInsert(m.id); say(t.name + ' → ' + insLabel(m.id));
-    } }) as MenuItem),
-  ], 340);
+  openMenu(x, y, [{ t: 'title', label: tl('a.pl.toMixer', { name: t.name }) }, ...routeItems(i)], 340);
+}
+/** Where track `i` plays: the master (the default) or a mixer insert the user picks. */
+function routeItems(i: number): MenuItem[] {
+  const t = S.project.tracks[i]; if (!t) return [];
+  return S.project.inserts.map(m => ({ t: 'item', label: insLabel(m.id), kbd: t.insert === m.id ? '●' : '', act: () => {
+    A.setTrack(i, { insert: m.id }, 'Routing'); A.selectInsert(m.id); say(t.name + ' → ' + insLabel(m.id));
+  } }) as MenuItem);
 }
 const insLabel = (id: Id) => { const i = S.project.inserts.findIndex(m => m.id === id); const m = S.project.inserts[i]; return !m ? '?' : id === 0 ? 'Master' : 'Ins ' + i + ' · ' + m.name; };
 
@@ -1333,6 +1338,7 @@ function openLaneMenu(x: number, y: number, i: number) {
     { t: 'item', label: t.muted ? tl('a.pl.unmute') : tl('a.pl.mute'), act: () => A.toggleTrackMute(i) },
     { t: 'item', label: t.solo ? tl('a.pl.soloOff') : 'Solo', act: () => A.toggleTrackSolo(i) },
     { t: 'item', label: t.arm ? tl('a.pl.disarm') : tl('a.pl.arm'), act: () => A.armTrack(i) },
+    { t: 'sub', label: tl('a.pl.routeItem'), items: routeItems(i) },
     { t: 'item', label: tl('a.pl.selTrackClips'), act: () => setU('sel', S.project.clips.filter(c => c.track === i).map(c => c.id)) },
     ...(CA.activeComp(i) ? [
       { t: 'item', label: U.takesOpen[t.id] ? tl('a.pl.hideTakes') : tl('a.pl.showTakes'), kbd: CA.takesLabel(CA.activeComp(i)!.comp.takes.length), act: () => CA.toggleTakes(i) } as MenuItem,
@@ -1399,7 +1405,10 @@ function LaneHeader(props: { t: Track; i: number }) {
                 <svg width="7" height="7" viewBox="0 0 8 8" style={{ transform: U.takesOpen[t().id] ? 'rotate(90deg)' : 'none' }}><path d="M2 1l4 3-4 3z" fill="currentColor" /></svg>{r().comp.takes.length}
               </button>
             )}</Show>
-            <button class="mini route" title={tl('a.pl.routeTip', { out: routeIdx() <= 0 ? 'Master' : 'Insert ' + routeIdx() })} onPointerDown={stop} onClick={e => openRouteMenu(props.i, e.clientX, e.clientY)}>{routeIdx() <= 0 ? 'M' : 'Ins ' + routeIdx()}</button>
+            {/* tracks play into the master unless the user sends one to a mixer channel (lane menu); only then is it shown */}
+            <Show when={routeIdx() > 0}>
+              <button class="mini route" title={tl('a.pl.routeTip', { out: 'Insert ' + routeIdx() })} onPointerDown={stop} onClick={e => openRouteMenu(props.i, e.clientX, e.clientY)}>{'Ins ' + routeIdx()}</button>
+            </Show>
             <button class="mini m" classList={{ on: t().muted }} title={tl('a.pl.muteTip')} onPointerDown={stop} onClick={() => A.toggleTrackMute(props.i)}>M</button>
             <button class="mini s" classList={{ on: t().solo }} title={tl('a.pl.soloTip')} onPointerDown={stop} onClick={e => A.toggleTrackSolo(props.i, e.ctrlKey || e.metaKey)}>S</button>
             <button class="mini r" classList={{ on: t().arm }} title={tl('a.pl.arm')} onPointerDown={stop} onClick={() => A.armTrack(props.i)}>

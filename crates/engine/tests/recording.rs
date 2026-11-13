@@ -242,3 +242,48 @@ fn punch_in_with_an_input_opened_at_the_punch_lines_up() {
     let off = onset as i64 - want;
     assert!(off.abs() <= MS1, "punch-in hit lands {off} frames off");
 }
+
+#[test]
+fn stopping_on_the_wrap_keeps_the_delayed_last_sample_of_each_pass() {
+    let mut p = armed();
+    p.bpm = 120.0;
+    p.loop_range = Some(LoopRange { a: 8.0, b: 12.0 });
+    let e = engine(p, "loop-stop");
+    let mut rt = e.create_rt(SR as f32, BLOCK);
+    let io = 2048;
+    e.shared().set_io_latency(io as u32);
+    e.set_transport(None, Some(false), Some(true), None);
+    e.play(9.0); // the second pass must also capture beats 8..9
+    let partial = frames(3.0, 120.0);
+    let full = frames(4.0, 120.0);
+    let input = |f| match f {
+        f if f == io => 0.5,
+        f if f == io + partial - 1 => 0.6,
+        f if f == io + partial => 0.7,
+        f if f == io + partial + full - 1 => 0.8,
+        f if f >= io + partial + full => 0.9,
+        _ => 0.0,
+    };
+    let mut at = 0;
+    feed(&mut rt, &mut at, partial + full, &input);
+    std::thread::scope(|scope| {
+        let stop = scope.spawn(|| e.stop());
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(1);
+        while e.state().transport.playing {
+            assert!(std::time::Instant::now() < deadline, "Stop was not sent");
+            std::thread::yield_now();
+        }
+        feed(&mut rt, &mut at, io + BLOCK, &input);
+        stop.join().unwrap();
+    });
+    let p = e.project();
+    let takes = &p.comps[0].takes;
+    assert_eq!(takes.len(), 2);
+    assert_eq!(takes[0].len, 3.0);
+    assert_eq!(takes[1].len, 4.0);
+    for (take, expected) in takes.iter().zip([(partial, 0.5, 0.6), (full, 0.7, 0.8)]) {
+        let audio = take_audio(&p, take.source);
+        assert_eq!((audio.len(), audio[0], *audio.last().unwrap()), expected);
+        assert!(audio[1..audio.len() - 1].iter().all(|&sample| sample == 0.0));
+    }
+}

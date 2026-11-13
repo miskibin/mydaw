@@ -1,10 +1,11 @@
 // A TS port of crates/engine/src/ops.rs `apply` — used by the in-browser mock backend.
 // The real engine is the source of truth; this only has to agree on the happy path and
 // reject the same obviously-invalid batches.
-import { MAX_BANDS, STRETCH_MAX, STRETCH_MIN, type Id, type Op, type Project } from '../api/types';
+import { CLIP_PITCH, MAX_BANDS, STRETCH_MAX, STRETCH_MIN, type Id, type Op, type Project } from '../api/types';
 import { applyCompOp } from './comp';
 import { applyNotebookOp } from './notebook';
-import { applyPatternOp, PatternOpError } from './pattern';
+import { applyPatternOp, fitLen as fitPatternLen, followPatternLength, PatternOpError } from './pattern';
+import { applyTransform } from './transforms';
 
 export class OpError extends Error {}
 
@@ -19,11 +20,16 @@ export function applyOp(p: Project, op: Op): void {
         const s = c.stretch ?? 1;
         if (!(Number.isFinite(s) && s >= STRETCH_MIN - 1e-9 && s <= STRETCH_MAX + 1e-9)) throw new OpError(`clip ${c.id}: stretch must be ${STRETCH_MIN}..${STRETCH_MAX}`);
         if (c.kind !== 'audio' && (s !== 1 || c.resample)) throw new OpError(`clip ${c.id}: only audio clips can be stretched`);
+        const pt = c.pitch ?? 0;
+        if (!(Number.isFinite(pt) && Math.abs(pt) <= CLIP_PITCH + 1e-4)) throw new OpError(`clip ${c.id}: pitch must be within ±${CLIP_PITCH} semitones`);
+        if (c.kind !== 'audio' && pt !== 0) throw new OpError(`clip ${c.id}: only audio clips can be transposed`);
         const known = c.kind === 'pat' ? p.patterns.some(x => x.id === c.ref) : c.kind === 'auto' ? (p.automations ?? []).some(x => x.id === c.ref) : c.kind === 'comp' ? (p.comps ?? []).some(x => x.id === c.ref) : p.sources.some(x => x.id === c.ref);
         if (!known) throw new OpError(`no clip source with id ${c.ref}`);
         const r = c.tune?.reference;
         if (r) {
-          if (!p.sources.some(x => x.id === r.source)) throw new OpError(`no reference source with id ${r.source}`);
+          if (!r.melody && !p.sources.some(x => x.id === r.source)) throw new OpError(`no reference source with id ${r.source}`);
+          if (r.melody?.notes.some(n => !(n.end > n.start) || n.key < 0 || n.key > 127)) throw new OpError(`clip ${c.id}: melody notes need end > start and a key 0..127`);
+          if (r.speed != null && !(r.speed >= 0 && r.speed <= 1000)) throw new OpError(`clip ${c.id}: reference speed must be 0..1000 ms`);
           if ([r.correction, r.vibrato, r.influence].some(v => !(v >= 0 && v <= 1))) throw new OpError(`clip ${c.id}: reference correction, vibrato and influence must be 0..1`);
           if ((r.octave != null && (r.octave % 12 !== 0 || Math.abs(r.octave) > 36)) || (r.key ?? 0) > 11 || (r.scale ?? 0) > 4) throw new OpError(`clip ${c.id}: reference octave must be a multiple of 12 within ±36, key 0..11, scale 0..4`);
         }
@@ -34,6 +40,7 @@ export function applyOp(p: Project, op: Op): void {
         // the engine writes the defaults out (stretch 1, not resampled)
         if (nc.stretch === 1) delete nc.stretch;
         if (nc.resample === false) delete nc.resample;
+        if (nc.pitch === 0) delete nc.pitch;
         const i = p.clips.findIndex(x => x.id === c.id);
         if (i >= 0) p.clips[i] = nc; else p.clips.push(nc);
       }
@@ -123,7 +130,7 @@ export function applyOp(p: Project, op: Op): void {
       applyPatternOp(p, op, true);
       p.sources = p.sources.filter(s => s.id !== op.id);
       p.clips = p.clips.filter(c => !(c.kind === 'audio' && c.ref === op.id));
-      for (const c of p.clips) if (c.tune?.reference?.source === op.id) c.tune.reference = null;
+      for (const c of p.clips) if (c.tune?.reference && !c.tune.reference.melody && c.tune.reference.source === op.id) c.tune.reference = null;
       applyCompOp(p, op);
       return;
     case 'putComp':
@@ -139,6 +146,45 @@ export function applyOp(p: Project, op: Op): void {
     case 'setLoop':
       if (op.loop && !(op.loop.b > op.loop.a && op.loop.a >= 0)) throw new OpError('loop end must be after its start');
       p.loop = op.loop ? { ...op.loop } : null; return;
+    case 'transformNotes': {
+      const pt = p.patterns.find(x => x.id === op.pattern);
+      if (!pt) throw new OpError(`no pattern with id ${op.pattern}`);
+      // generator sizes are bounded exactly like the engine, before anything allocates
+      const sizeOk = (x: unknown) => typeof x === 'number' && Number.isInteger(x) && x >= 1 && x <= 512;
+      const v = op.verb;
+      if (v.kind === 'euclidFill' && (!sizeOk(v.k) || !sizeOk(v.n))) throw new OpError('euclidFill k/n must be 1..=512');
+      if (v.kind === 'melody') {
+        const bars = v.bars ?? 2;
+        if (!Number.isInteger(bars) || bars < 1 || bars > 32) throw new OpError('melody bars must be 1..=32');
+      }
+      if (v.kind === 'euclidDrums') {
+        const bars = v.bars ?? 2;
+        if (!Number.isInteger(bars) || bars < 1 || bars > 32) throw new OpError('drums bars must be 1..=32');
+        if (v.voices.some(x => !sizeOk(x.k) || !sizeOk(x.n))) throw new OpError('drums voice k/n must be 1..=512');
+      }
+      const roots = (p.channels ?? []).map(c => ({ id: c.id, root: c.root ?? 60 }));
+      const notes = structuredClone(pt.notes);
+      applyTransform(notes, op.verb, op.seed ?? 0, op.select ?? null, roots, p.key ?? null, p.scale ?? 1, Math.max(16, Math.round(pt.len * 4)));
+      for (const n of notes) {
+        if (!(isFinite(n.step) && n.step >= 0 && isFinite(n.len) && n.len > 0)) throw new OpError(`pattern ${op.pattern}: a note has an invalid step/len`);
+        const vel = n.v ?? 1;
+        if (!(isFinite(vel) && vel >= 0 && vel <= 1)) throw new OpError('note velocity `v` must be 0..1');
+      }
+      const known = new Set((p.channels ?? []).map(c => c.id));
+      if (notes.some(n => !known.has(n.ch))) throw new OpError(`pattern ${op.pattern}: a note refers to a missing channel`);
+      const oldLen = pt.len;
+      pt.notes = notes;
+      fitPatternLen(pt);
+      // a generator can push notes past the pattern's end: whole-pass clips follow, like putPattern
+      if (Math.abs(oldLen - pt.len) > 1e-9) followPatternLength(p, op.pattern, oldLen, pt.len);
+      return;
+    }
+    case 'setKey':
+      if (op.key != null && (!Number.isInteger(op.key) || op.key < 0 || op.key > 11)) throw new OpError('key must be 0..11 (0 = C)');
+      if (!Number.isInteger(op.scale ?? 1) || (op.scale ?? 1) < 0 || (op.scale ?? 1) > 4) throw new OpError('scale must be 0..4');
+      p.key = op.key;
+      p.scale = op.scale ?? 1;
+      return;
     case 'putAutomation': {
       const a = structuredClone(op.automation);
       if (a.points.some(q => !isFinite(q.t) || !isFinite(q.v) || (q.tension != null && !isFinite(q.tension)))) throw new OpError('automation points must be numbers');

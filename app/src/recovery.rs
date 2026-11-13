@@ -39,17 +39,11 @@ pub struct Recovery {
 }
 
 pub fn default_dir() -> PathBuf {
-    wave_engine::engine::scratch_dir()
-        .parent()
-        .map(Path::to_path_buf)
-        .unwrap_or_else(std::env::temp_dir)
-        .join("Recovery")
+    wave_engine::engine::scratch_dir().parent().map(Path::to_path_buf).unwrap_or_else(std::env::temp_dir).join("Recovery")
 }
 
 fn now_ms(t: SystemTime) -> u64 {
-    t.duration_since(UNIX_EPOCH)
-        .map(|d| d.as_millis() as u64)
-        .unwrap_or(0)
+    t.duration_since(UNIX_EPOCH).map(|d| d.as_millis() as u64).unwrap_or(0)
 }
 
 /// Ids are file stems this module made: digits and dashes. Anything else is refused,
@@ -75,11 +69,7 @@ impl Recovery {
                 None
             }
         };
-        Self {
-            dir,
-            file,
-            lock: Mutex::new(lock),
-        }
+        Self { dir, file, lock: Mutex::new(lock) }
     }
 
     fn enabled(&self) -> bool {
@@ -131,22 +121,13 @@ impl Recovery {
             if p.extension().and_then(|x| x.to_str()) != Some("wave") || p == self.file {
                 continue;
             }
-            let Some(id) = p
-                .file_stem()
-                .and_then(|s| s.to_str())
-                .filter(|s| valid_id(s))
-                .map(str::to_owned)
-            else {
+            let Some(id) = p.file_stem().and_then(|s| s.to_str()).filter(|s| valid_id(s)).map(str::to_owned) else {
                 continue;
             };
             if !self.owner_gone(&id) {
                 continue;
             }
-            let saved_ms = e
-                .metadata()
-                .and_then(|m| m.modified())
-                .map(now_ms)
-                .unwrap_or(0);
+            let saved_ms = e.metadata().and_then(|m| m.modified()).map(now_ms).unwrap_or(0);
             out.push(Orphan { id, saved_ms });
         }
         out.sort_by_key(|o| std::cmp::Reverse(o.saved_ms));
@@ -155,10 +136,7 @@ impl Recovery {
 
     /// True when no running WAVE holds `id`'s lock (or the lock file is gone).
     fn owner_gone(&self, id: &str) -> bool {
-        match File::options()
-            .write(true)
-            .open(self.dir.join(format!("{id}.lock")))
-        {
+        match File::options().write(true).open(self.dir.join(format!("{id}.lock"))) {
             Ok(f) => f.try_lock().is_ok(),
             Err(_) => true,
         }
@@ -216,11 +194,7 @@ mod tests {
     use wave_engine::{NoPlugins, Op, Project};
 
     fn tmp(tag: &str) -> PathBuf {
-        let d = std::env::temp_dir().join(format!(
-            "wave-recovery-{tag}-{}-{}",
-            std::process::id(),
-            now_ms(SystemTime::now())
-        ));
+        let d = std::env::temp_dir().join(format!("wave-recovery-{tag}-{}-{}", std::process::id(), now_ms(SystemTime::now())));
         std::fs::create_dir_all(&d).unwrap();
         d
     }
@@ -248,10 +222,7 @@ mod tests {
         b.restore(&e2, &o[0].id).unwrap();
         let st = e2.state();
         assert_eq!(st.project.bpm, 137.0);
-        assert!(
-            st.path.is_none(),
-            "a recovered project must not pretend to have a file"
-        );
+        assert!(st.path.is_none(), "a recovered project must not pretend to have a file");
         assert!(st.dirty, "a recovered project has unsaved changes");
         // the copy is now this session's own: offered to nobody, still on disk
         assert!(b.orphans().is_empty());
@@ -297,10 +268,7 @@ mod tests {
         assert!(a.write(&e).unwrap());
         e.save(&dir.join("Song.wave")).unwrap();
         assert!(!a.write(&e).unwrap());
-        assert!(
-            !a.file.is_file(),
-            "the copy goes once the project has a file"
-        );
+        assert!(!a.file.is_file(), "the copy goes once the project has a file");
         let clean = Engine::new(Project::empty(), Arc::new(NoPlugins));
         assert!(!a.write(&clean).unwrap());
         a.close();

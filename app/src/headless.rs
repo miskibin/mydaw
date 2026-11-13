@@ -204,6 +204,28 @@ mod tests {
     }
 
     #[test]
+    fn a_saved_project_renders_a_wrapped_24_bit_wav() {
+        let dir = tmp("wrapped-pcm24");
+        let project = dir.join("song.wave");
+        Files.create("sketch").unwrap().save(&project).unwrap();
+        let (doc, _) = Files.open(&project).unwrap();
+
+        let out = dir.join("loop.wav");
+        let result = doc
+            .call("render", &json!({"out": out, "from": 0, "to": 4, "rate": 44100, "wrapTail": true, "wavBits": 24, "dither": true}), None)
+            .unwrap();
+        assert_eq!(result["wrapTail"], true);
+        assert_eq!(result["tail"], 0.0);
+        assert_eq!(result["stats"]["silent"], false);
+        let wav = std::fs::read(out).unwrap();
+        assert_eq!(u16::from_le_bytes(wav[34..36].try_into().unwrap()), 24);
+        let seconds = result["stats"]["seconds"].as_f64().unwrap();
+        assert!((seconds - 4.0 * 60.0 / 128.0).abs() < 1.0 / 44100.0);
+        assert!(!doc.dirty());
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
     fn plugin_access_starts_live_instances_without_breaking_edits_or_bounces() {
         let d = tmp("live");
         let doc = Files.create("sketch").unwrap();

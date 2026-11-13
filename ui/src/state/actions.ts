@@ -8,7 +8,7 @@ import { clamp, fmtPos } from '../lib/format';
 import { loadPreset as loadPresetFx, newFx, presetInfo, presetList } from '../lib/presets';
 import { snapName, snapRes } from '../lib/snap';
 import { deletePoints } from '../lib/envEdit';
-import { acceptReply, commit, endWheelGestures, enqueue, resync } from './edit';
+import { acceptReply, commit, endWheelGestures, enqueue, inGesture, projectRevision, resync } from './edit';
 import { flushNotebook } from './notebook';
 import { clearPeaks } from './peaks';
 import { modePattern, openRack, patMode, setPatMode, stopPreview, togglePreview } from './pattern';
@@ -61,6 +61,18 @@ export function togglePlay() {
   return play();
 }
 /**
+ * The PAT / SONG switch (L): while something plays, what plays switches with it (FL) — the song
+ * hands over to the current pattern's loop, the loop to the song from its start marker. A
+ * recording keeps going.
+ */
+export function switchMode(on: boolean) {
+  if (on === patMode()) return;
+  setPatMode(on);
+  if (S.transport.rec && U.playing) return;
+  if (on && U.playing) { const p = modePattern(); if (p) void togglePreview(p.id); }
+  else if (!on && U.patPlaying) void play(U.start);
+}
+/**
  * A click on the playlist's time ruler (FL): SONG mode from there. A pattern loop that is
  * playing hands over to the song at that position, so moving between them needs no L key.
  */
@@ -69,6 +81,14 @@ export function seekSong(b: number) {
   if (patMode()) setPatMode(false);
   if (U.patPlaying) { setU('start', from); void play(from); return; }
   seek(from);
+}
+/** Play / stop the song from the start marker, whatever PAT / SONG says (the pitch editor: a vocal is
+ *  heard in its song, never alone in a pattern loop). */
+export function toggleSong() {
+  if (U.playing) return stop();
+  if (U.patPlaying) void stopPreview();
+  if (patMode()) setPatMode(false);
+  return play(U.start);
 }
 export function seek(b: number) {
   setU('start', Math.max(0, b));
@@ -99,26 +119,41 @@ export async function undo() { if (!S.canUndo) return say(t('d.act.noUndo')); fl
 export async function redo() { if (!S.canRedo) return say(t('d.act.noRedo')); flushNotebook(); endWheelGestures(); acceptReply(await enqueue(() => be().redo())); say(t('d.act.redone')); }
 /** Ask about unsaved changes; false = the user cancelled (or the save failed). */
 export async function guardUnsaved(what: string): Promise<boolean> {
+  if (U.openingProject) return false;
+  flushNotebook();
   const a = await confirmUnsaved(what);
+  if (a === 'busy') { say(t('d.act.guard.busy')); return false; }
   if (a === 'cancel') return false;
   if (a === 'save') return projectSave(false);
   return true;
 }
 export async function projectNew() {
   if (!(await guardUnsaved(t('d.act.guard.new')))) return;
-  flushNotebook();
   try { acceptReply(await enqueue(() => be().projectNew())); afterProjectLoad(); if (!S.project.clips.length) openRack(); say(t('d.act.newproj')); } catch (e) { say(t('d.act.newfail', { err: String(e) })); }
 }
-export async function projectOpen() {
-  if (!(await guardUnsaved(t('d.act.guard.open')))) return;
+export async function projectOpen(path?: string) {
+  if (path && path === S.path) return;
+  endWheelGestures();
   flushNotebook();
+  await enqueue(() => Promise.resolve());
+  if (U.openingProject || inGesture()) { say(t('d.act.guard.busy')); return; }
+  const revision = projectRevision();
+  const answer = await confirmUnsaved(t('d.act.guard.open'));
+  if (answer === 'busy') { say(t('d.act.guard.busy')); return; }
+  if (answer === 'cancel' || U.openingProject) return;
+  if (inGesture()) { say(t('d.act.guard.busy')); return; }
+  setU('openingProject', true);
   try {
-    const r = await enqueue(() => be().projectOpen());
+    if (answer === 'save' && !(await projectSave(false))) return;
+    if (answer === 'save' && S.dirty) { say(t('d.act.guard.busy')); return; }
+    const approvedRevision = answer === 'save' ? projectRevision() : revision;
+    const r = await enqueue(() => be().projectOpen(path, approvedRevision));
     if (r.cancelled) return;
     acceptReply(r.state); afterProjectLoad();
-    const path = S.path ?? '';
-    say(r.warnings.length ? t('d.act.openedwarn', { path, n: r.warnings.length, first: r.warnings[0] }) : t('d.act.opened', { path }));
+    const openedPath = S.path ?? '';
+    say(r.warnings.length ? t('d.act.openedwarn', { path: openedPath, n: r.warnings.length, first: r.warnings[0] }) : t('d.act.opened', { path: openedPath }));
   } catch (e) { say(t('d.act.openfail', { err: String(e) })); }
+  finally { setU('openingProject', false); }
 }
 export async function projectSave(saveAs = false): Promise<boolean> {
   flushNotebook();
@@ -144,7 +179,6 @@ export async function offerRecovery() {
     if (a === 'later') return;
     if (a === 'discard') { await be().recoveryDiscard(r.id).catch(e => say(t('d.act.err', { err: String(e) }))); continue; }
     if (!(await guardUnsaved(t('d.act.guard.open')))) return;
-    flushNotebook();
     try {
       const res = await enqueue(() => be().recoveryRestore(r.id));
       acceptReply(res.state); afterProjectLoad();
@@ -259,6 +293,7 @@ export function sliceAt(id: Id, b: number, withSel = true) {
 }
 export function selectAll() { setU('sel', S.project.clips.map(c => c.id)); }
 export function makeUnique(clip: Clip) {
+  if (clip.kind === 'audio') return void makeUniqueAudio(clip);
   const p = S.project.patterns.find(x => x.id === clip.ref); if (!p) return;
   const baseName = p.name.replace(/ #\d+$/, '');
   const count = S.project.patterns.filter(x => x.name.startsWith(baseName)).length;
@@ -266,6 +301,28 @@ export function makeUnique(clip: Clip) {
   commit([{ op: 'putPattern', pattern: np }, { op: 'putClips', clips: [{ ...plain(clip), ref: np.id }] }], 'Make unique');
   setU('cur', { kind: 'pat', ref: np.id });
   say(t('d.act.newpat', { name: np.name }));
+}
+/**
+ * FL's "Make unique" for audio: the clip — with the selected clips of the same sample on its
+ * track, when it is selected — gets its own copy of the sample on a new track right below,
+ * playing where the old track does (no mixer insert is claimed). One undo step (`Backend.makeUnique`).
+ */
+async function makeUniqueAudio(clip: Clip) {
+  const ids = U.sel.includes(clip.id)
+    ? S.project.clips.filter(c => U.sel.includes(c.id) && c.kind === 'audio' && c.ref === clip.ref && c.track === clip.track).map(c => c.id)
+    : [clip.id];
+  endWheelGestures();
+  try {
+    // queued behind pending edits; then the new state, so the names below are the engine's
+    const r = await enqueue(() => be().makeUnique(ids));
+    await resync();
+    setU({ sel: ids, cur: { kind: 'audio', ref: r.sourceId } });
+    const name = S.project.sources.find(s => s.id === r.sourceId)?.name ?? '';
+    say(t('d.act.madeUnique', { name }));
+  } catch (e) {
+    say(t('d.act.uniqueFail', { err: String(e) }));
+    void resync();
+  }
 }
 export function setSrcProp(clip: Clip, patch: { name?: string; color?: string }) {
   if (clip.kind === 'auto') {
@@ -420,6 +477,17 @@ const PLUG_W: Partial<Record<string, number>> = { eq: 780, reverb: 640, vst3: 52
 export function playlistFront() { if ((U.plugs.length || U.rackWin || U.rollWin) && !U.plugsHidden) setU('plugsHidden', true); }
 export function showPlugs() { setU('plugsHidden', false); }
 
+/** The real-time Pitch Correct effect onto insert `insId` (key and scale from the caller, e.g. the pitch editor's). */
+export function addPitchCorrect(insId: Id, ks?: { key: number; scale: number }) {
+  if (!S.catalog || insId === 0) return;
+  const f = newFx(S.catalog, allocId(), 'tune', S.project.bpm);
+  if (ks) f.params = { ...f.params, key: ks.key, scale: ks.scale };
+  commit([{ op: 'putFx', insertId: insId, fx: f }], t('d.act.op.addfx'));
+  setU({ mixSel: insId, fxSel: f.id });
+  openPlug(f.id);
+  const m = S.project.inserts.find(x => x.id === insId);
+  say(t('d.pc.added', { name: m ? insName(m) : '' }));
+}
 export function openPlug(fxId: Id) {
   if (U.plugsHidden) setU('plugsHidden', false);
   const ex = U.plugs.find(p => p.fxId === fxId);
@@ -447,12 +515,26 @@ export function openEditor(id: Id) {
   const w = Math.min(780, window.innerWidth - 40), h = Math.min(420, window.innerHeight - 100);
   setU({ editor: { clipId: id, x: Math.max(20, (window.innerWidth - w) / 2), y: 64, w, h }, sel: [id] });
 }
+/** Writes a new file with only the part the clip plays; the clip plays it (one undo step). */
+export async function trimClip(id: Id) {
+  try { await enqueue(() => be().trimClip(id)); say(t('d.smp.trimmed')); }
+  catch (e) { say(t('d.smp.trimfail', { err: String(e) })); void resync(); }
+}
 export function closeEditor() { if (U.previewing) void be().previewStop(); setU('editor', null); }
 /** The note-based pitch editor of an audio clip. */
-export function openPitchEditor(id: Id) {
+export function openPitchEditor(id: Id, melody?: { channel: Id; span?: [number, number] | null }) {
   const c = S.project.clips.find(x => x.id === id); if (!c || c.kind !== 'audio') return;
-  const w = Math.min(1100, window.innerWidth - 40), h = Math.min(560, window.innerHeight - 90);
-  setU({ pitchEd: { clipId: id, x: Math.max(20, (window.innerWidth - w) / 2), y: Math.max(44, (window.innerHeight - h) / 2 - 20), w, h }, sel: [id] });
+  // already open on this clip: keep its place, only pass the melody on
+  const z = U.zTop + 1;
+  if (U.pitchEd?.clipId === id) { setU({ zTop: z }); setU('pitchEd', ed => ed && { ...ed, z, ...(melody ? { melody } : {}) }); return; }
+  const w = Math.min(1180, window.innerWidth - 40), h = Math.min(600, window.innerHeight - 90);
+  setU({ zTop: z, pitchEd: { clipId: id, x: Math.max(20, (window.innerWidth - w) / 2), y: Math.max(44, (window.innerHeight - h) / 2 - 20), w, h, z, melody }, sel: [id] });
+}
+/** The pitch editor over the plugin / pattern windows (it is used last). */
+export function pitchFront() {
+  if (!U.pitchEd || (U.pitchEd.z ?? 0) === U.zTop) return;
+  const z = U.zTop + 1;
+  setU('zTop', z); setU('pitchEd', ed => ed && { ...ed, z });
 }
 export const closePitchEditor = () => setU('pitchEd', null);
 

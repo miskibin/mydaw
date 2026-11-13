@@ -74,41 +74,13 @@ struct Space {
 
 const SPACES: [Space; 4] = [
     // Plate: dense from the first millisecond, no discrete reflections
-    Space {
-        lines: (11.0, 47.0),
-        t_ref: 1.5,
-        er_ms: 0.0,
-        er_gain: 0.0,
-        diff: 0.72,
-        late_gain: 1.0,
-    },
+    Space { lines: (11.0, 47.0), t_ref: 1.5, er_ms: 0.0, er_gain: 0.0, diff: 0.72, late_gain: 1.0 },
     // Room: strong short reflections, small network
-    Space {
-        lines: (7.0, 31.0),
-        t_ref: 0.6,
-        er_ms: 45.0,
-        er_gain: 0.7,
-        diff: 0.55,
-        late_gain: 0.9,
-    },
+    Space { lines: (7.0, 31.0), t_ref: 0.6, er_ms: 45.0, er_gain: 0.7, diff: 0.55, late_gain: 0.9 },
     // Hall: wide reflections, long lines
-    Space {
-        lines: (23.0, 97.0),
-        t_ref: 2.0,
-        er_ms: 110.0,
-        er_gain: 0.45,
-        diff: 0.65,
-        late_gain: 1.0,
-    },
+    Space { lines: (23.0, 97.0), t_ref: 2.0, er_ms: 110.0, er_gain: 0.45, diff: 0.65, late_gain: 1.0 },
     // Ambience: mostly early energy, a short soft tail
-    Space {
-        lines: (5.0, 23.0),
-        t_ref: 0.5,
-        er_ms: 35.0,
-        er_gain: 1.0,
-        diff: 0.5,
-        late_gain: 0.6,
-    },
+    Space { lines: (5.0, 23.0), t_ref: 0.5, er_ms: 35.0, er_gain: 1.0, diff: 0.5, late_gain: 0.6 },
 ];
 
 const DIFF_MS: [[f32; DIFF]; 2] = [[3.13, 4.71, 7.93, 11.27], [3.41, 5.29, 7.13, 10.69]];
@@ -154,18 +126,10 @@ struct Ring {
 impl Ring {
     fn new(min_len: usize) -> Self {
         let n = (min_len + 4).next_power_of_two();
-        Self {
-            buf: vec![0.0; n],
-            mask: n - 1,
-            w: 0,
-        }
+        Self { buf: vec![0.0; n], mask: n - 1, w: 0 }
     }
     fn empty() -> Self {
-        Self {
-            buf: vec![0.0; 4],
-            mask: 3,
-            w: 0,
-        }
+        Self { buf: vec![0.0; 4], mask: 3, w: 0 }
     }
     #[inline]
     fn at(&self, d: usize) -> f32 {
@@ -175,13 +139,7 @@ impl Ring {
     fn read_cubic(&self, d: f32) -> f32 {
         let di = d as usize;
         let f = d - di as f32;
-        hermite(
-            f,
-            self.at(di - 1),
-            self.at(di),
-            self.at(di + 1),
-            self.at(di + 2),
-        )
+        hermite(f, self.at(di - 1), self.at(di), self.at(di + 1), self.at(di + 2))
     }
     #[inline]
     fn read_lin(&self, d: f32) -> f32 {
@@ -289,11 +247,7 @@ pub fn derive(v: &[f32; crate::processor::MAX_PARAMS]) -> Derived {
     let t_mid = v[idx::SIZE].clamp(0.2, MAX_DECAY);
     let tone = (v[idx::TONE] / 100.0).clamp(-1.0, 1.0);
     // dark ↔ bright: highs die at 0.25 … 0.5 … 0.85 of the mid decay, crossover 1.5 … 3 … 6 kHz
-    let hf_ratio = if tone < 0.0 {
-        0.5 + 0.25 * tone
-    } else {
-        0.5 + 0.35 * tone
-    };
+    let hf_ratio = if tone < 0.0 { 0.5 + 0.25 * tone } else { 0.5 + 0.35 * tone };
     let bass = v[idx::BASS].clamp(0.5, 1.5);
     Derived {
         t_mid,
@@ -306,16 +260,58 @@ pub fn derive(v: &[f32; crate::processor::MAX_PARAMS]) -> Derived {
     }
 }
 
+/// What the UI draws a space from (`ui/src/api/reverbSpaces.json`, checked by
+/// `tests/reverb_spaces.rs`): its delay lines at scale 1, the decay at scale 1 and its early
+/// reflections.
+#[derive(Clone, Debug, PartialEq, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SpaceInfo {
+    pub name: &'static str,
+    /// The 16 network lines at scale 1 (ms).
+    pub line_ms: Vec<f32>,
+    pub t_ref: f32,
+    pub er_ms: f32,
+    pub er_gain: f32,
+    pub late_gain: f32,
+}
+
+pub const SPACE_NAMES: [&str; 4] = ["Plate", "Room", "Hall", "Ambience"];
+/// Network scale limits (the size stops following the decay past them).
+pub const SCALE_LIMITS: (f32, f32) = (MIN_SCALE, MAX_SCALE);
+
+pub fn space_info() -> Vec<SpaceInfo> {
+    SPACES
+        .iter()
+        .zip(SPACE_NAMES)
+        .map(|(sp, name)| SpaceInfo {
+            name,
+            line_ms: (0..N).map(|k| ReverbV2::line_ms(sp, k)).collect(),
+            t_ref: sp.t_ref,
+            er_ms: sp.er_ms,
+            er_gain: sp.er_gain,
+            late_gain: sp.late_gain,
+        })
+        .collect()
+}
+
+/// The size of a room whose echoes recur as often as the network's (m): the mean line delay is
+/// the mean free path, `4V/S`, which for a cube of side `L` is `2L/3`. A plate has no room; the
+/// number still compares spaces with each other.
+pub fn equivalent_room_m(v: &[f32; crate::processor::MAX_PARAMS]) -> f32 {
+    const SOUND_M_PER_S: f32 = 343.0;
+    let d = derive(v);
+    let sp = &SPACES[d.space];
+    let mean_ms = (0..N).map(|k| ReverbV2::line_ms(sp, k)).sum::<f32>() / N as f32;
+    1.5 * mean_ms * d.scale / 1000.0 * SOUND_M_PER_S
+}
+
 /// How long the effect keeps sounding after its input goes silent (s): down to −140 dB
 /// (2.33 × the longest band RT60, rounded up) plus pre-delay, early reflections, diffusers
 /// and the ducking release.
 pub fn tail_seconds(v: &[f32; crate::processor::MAX_PARAMS]) -> f32 {
     let d = derive(v);
     let sp = SPACES[d.space];
-    v[idx::PRE].clamp(0.0, MAX_PRE_MS) / 1000.0
-        + sp.er_ms / 1000.0
-        + 2.5 * d.t_mid.max(d.t_low)
-        + 0.3
+    v[idx::PRE].clamp(0.0, MAX_PRE_MS) / 1000.0 + sp.er_ms / 1000.0 + 2.5 * d.t_mid.max(d.t_low) + 0.3
 }
 
 /// The RT60 the network is designed to have at frequency `f` (s): the mean over lines of
@@ -424,12 +420,7 @@ impl Default for ReverbV2 {
             er_lvl: 0.0,
             er_lp: [0.0; 2],
             er_lp_k: 1.0,
-            diff: std::array::from_fn(|_| {
-                std::array::from_fn(|_| Allpass {
-                    ring: Ring::empty(),
-                    d: 1,
-                })
-            }),
+            diff: std::array::from_fn(|_| std::array::from_fn(|_| Allpass { ring: Ring::empty(), d: 1 })),
             diff_g: 0.6,
             lines: std::array::from_fn(|_| Ring::empty()),
             len_target: [2.0; N],
@@ -518,8 +509,7 @@ impl ReverbV2 {
         // early reflections: one velvet pulse per segment, sign random, level falls ~20 dB over the span
         let er_len = sp.er_ms / 1000.0 * sr;
         for c in 0..2 {
-            let mut s =
-                0x9E37_79B9u32 ^ (c as u32 + 1).wrapping_mul(0x85EB_CA6B) ^ (d.space as u32) << 7;
+            let mut s = 0x9E37_79B9u32 ^ (c as u32 + 1).wrapping_mul(0x85EB_CA6B) ^ (d.space as u32) << 7;
             let mut sum = 0f32;
             for t in 0..ER_TAPS {
                 let pos = (t as f32 + rng(&mut s)) / ER_TAPS as f32;
@@ -575,22 +565,14 @@ impl Processor for ReverbV2 {
     fn prepare(&mut self, sr: f32, max: usize) {
         self.sr = sr;
         let ms = |x: f32| (x / 1000.0 * sr) as usize;
-        self.pre = [
-            Ring::new(ms(MAX_PRE_MS + MAX_ER_MS) + 8),
-            Ring::new(ms(MAX_PRE_MS + MAX_ER_MS) + 8),
-        ];
+        self.pre = [Ring::new(ms(MAX_PRE_MS + MAX_ER_MS) + 8), Ring::new(ms(MAX_PRE_MS + MAX_ER_MS) + 8)];
         for c in 0..2 {
             for (i, a) in self.diff[c].iter_mut().enumerate() {
                 let d = ms(DIFF_MS[c][i]).max(1);
-                *a = Allpass {
-                    ring: Ring::new(d + 2),
-                    d,
-                };
+                *a = Allpass { ring: Ring::new(d + 2), d };
             }
         }
-        let longest = SPACES.iter().map(|s| s.lines.1).fold(0.0, f32::max) * 1.04 * MAX_SCALE
-            + MAX_MOD_MS
-            + 1.0;
+        let longest = SPACES.iter().map(|s| s.lines.1).fold(0.0, f32::max) * 1.04 * MAX_SCALE + MAX_MOD_MS + 1.0;
         for ln in self.lines.iter_mut() {
             *ln = Ring::new(ms(longest) + 8);
         }
@@ -638,11 +620,7 @@ impl Processor for ReverbV2 {
             let (xl, xr) = (l[i], r[i]);
             // ducking side-chain from the dry input
             let pk = xl.abs().max(xr.abs());
-            let ka = if pk > self.env {
-                self.k_env_att
-            } else {
-                self.k_env_rel
-            };
+            let ka = if pk > self.env { self.k_env_att } else { self.k_env_rel };
             self.env += (pk - self.env) * ka;
             // the duck target moves slowly: recompute it every 16 samples
             if i % 16 == 0 {
@@ -655,18 +633,11 @@ impl Processor for ReverbV2 {
                 };
             }
             let duck_t = self.duck_t;
-            let kd = if duck_t < self.duck_cur {
-                self.k_duck_att
-            } else {
-                self.k_duck_rel
-            };
+            let kd = if duck_t < self.duck_cur { self.k_duck_att } else { self.k_duck_rel };
             self.duck_cur += (duck_t - self.duck_cur) * kd;
 
             // wet input: band-limit, pre-delay
-            let inp = [
-                self.lp[0].tick(self.hp[0].tick(xl)),
-                self.lp[1].tick(self.hp[1].tick(xr)),
-            ];
+            let inp = [self.lp[0].tick(self.hp[0].tick(xl)), self.lp[1].tick(self.hp[1].tick(xr))];
             self.pre[0].push(flush(inp[0]));
             self.pre[1].push(flush(inp[1]));
             self.pre_cur += (self.pre_target - self.pre_cur) * kp;
@@ -796,10 +767,7 @@ mod tests {
 
     fn preset(name: &str) -> ParamBlock {
         let mut fx = new_fx(1, FxKind::Reverb, 120.0);
-        let i = presets(FxKind::Reverb)
-            .iter()
-            .position(|p| p.name == name)
-            .unwrap();
+        let i = presets(FxKind::Reverb).iter().position(|p| p.name == name).unwrap();
         load_preset(&mut fx, i, 120.0);
         param_block(&fx)
     }
@@ -812,12 +780,7 @@ mod tests {
     }
 
     fn ctx(sr: f32, frame: usize) -> ProcessCtx {
-        ProcessCtx {
-            sample_rate: sr,
-            bpm: 120.0,
-            beat: frame as f64 / sr as f64 * 2.0,
-            playing: true,
-        }
+        ProcessCtx { sample_rate: sr, bpm: 120.0, beat: frame as f64 / sr as f64 * 2.0, playing: true }
     }
 
     /// Wet-only impulse response (mono sum).
@@ -862,10 +825,7 @@ mod tests {
             .filter(|p| p.1 <= -5.0 && p.1 >= -35.0)
             .collect();
         let n = pts.len() as f64;
-        let (mx, my) = (
-            pts.iter().map(|p| p.0).sum::<f64>() / n,
-            pts.iter().map(|p| p.1).sum::<f64>() / n,
-        );
+        let (mx, my) = (pts.iter().map(|p| p.0).sum::<f64>() / n, pts.iter().map(|p| p.1).sum::<f64>() / n);
         let sxy: f64 = pts.iter().map(|p| (p.0 - mx) * (p.1 - my)).sum();
         let sxx: f64 = pts.iter().map(|p| (p.0 - mx).powi(2)).sum();
         (-60.0 * sxx / sxy) as f32
@@ -884,10 +844,7 @@ mod tests {
                 for f in [250.0, 1000.0, 4000.0] {
                     let m = rt60(&bandpass(&h, f, sr), sr);
                     let d = design_rt60(&pb.values, f, sr);
-                    assert!(
-                        (m - d).abs() / d < 0.15,
-                        "sr {sr} space {space} {f} Hz: measured {m:.2} s, design {d:.2} s"
-                    );
+                    assert!((m - d).abs() / d < 0.15, "sr {sr} space {space} {f} Hz: measured {m:.2} s, design {d:.2} s");
                 }
                 // the mid band is the Decay knob itself
                 let mid = rt60(&bandpass(&h, 1000.0, sr), sr);
@@ -903,10 +860,7 @@ mod tests {
         let dark = design_rt60(&v, 8000.0, 48000.0);
         v[idx::TONE] = 100.0;
         let bright = design_rt60(&v, 8000.0, 48000.0);
-        assert!(
-            dark < 0.4 && bright > 0.7 && bright < v[idx::SIZE],
-            "dark {dark} bright {bright}"
-        );
+        assert!(dark < 0.4 && bright > 0.7 && bright < v[idx::SIZE], "dark {dark} bright {bright}");
     }
 
     #[test]
@@ -915,11 +869,7 @@ mod tests {
         // the tail is gone (below −140 dB) by the reported tail length, no denormals left
         for sr in [44100.0, 96000.0] {
             for space in 0..4 {
-                for (size, tone, bass, md) in [
-                    (0.2, -100.0, 0.5, 0.0),
-                    (6.0, 100.0, 1.5, 100.0),
-                    (6.0, -100.0, 1.5, 100.0),
-                ] {
+                for (size, tone, bass, md) in [(0.2, -100.0, 0.5, 0.0), (6.0, 100.0, 1.5, 100.0), (6.0, -100.0, 1.5, 100.0)] {
                     let mut pb = preset("Vocal Plate");
                     let v = &mut pb.values;
                     v[idx::SPACE] = space as f32;
@@ -959,15 +909,9 @@ mod tests {
                         frame += BLK;
                     }
                     assert!(peak < 4.0, "space {space} size {size}: peak {peak}");
-                    assert!(
-                        last < 1e-7,
-                        "space {space} size {size}: {last} still ringing after the tail"
-                    );
+                    assert!(last < 1e-7, "space {space} size {size}: {last} still ringing after the tail");
                     for ln in &p.lines {
-                        assert!(
-                            ln.buf.iter().all(|x| *x == 0.0 || x.is_normal()),
-                            "denormals left in a line"
-                        );
+                        assert!(ln.buf.iter().all(|x| *x == 0.0 || x.is_normal()), "denormals left in a line");
                     }
                 }
             }
@@ -998,10 +942,7 @@ mod tests {
         let e = |v: &[f32]| v[n / 2..].iter().map(|s| s * s).sum::<f32>();
         let wet: Vec<f32> = l.iter().zip(&x).map(|(o, d)| o - d).collect();
         let ratio_db = 10.0 * (e(&wet) / e(&x)).log10();
-        assert!(
-            ratio_db < -9.0 && ratio_db > -30.0,
-            "wet at {ratio_db} dB re dry"
-        );
+        assert!(ratio_db < -9.0 && ratio_db > -30.0, "wet at {ratio_db} dB re dry");
     }
 
     #[test]

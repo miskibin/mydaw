@@ -38,7 +38,24 @@ pub struct Fet {
 
 impl Default for Fet {
     fn default() -> Self {
-        Self { sr: 48000.0, input: 1.0, output: 1.0, ratio: 4.0, abi: false, att: 0.0, rel_fast: 0.0, rel_slow: 0.0, mix: 1.0, env: 0.0, slow: 0.0, dc_l: (0.0, 0.0), dc_r: (0.0, 0.0), gr: 0.0, in_db: -120.0, out_db: -120.0 }
+        Self {
+            sr: 48000.0,
+            input: 1.0,
+            output: 1.0,
+            ratio: 4.0,
+            abi: false,
+            att: 0.0,
+            rel_fast: 0.0,
+            rel_slow: 0.0,
+            mix: 1.0,
+            env: 0.0,
+            slow: 0.0,
+            dc_l: (0.0, 0.0),
+            dc_r: (0.0, 0.0),
+            gr: 0.0,
+            in_db: -120.0,
+            out_db: -120.0,
+        }
     }
 }
 
@@ -50,7 +67,13 @@ impl Fet {
     #[inline]
     fn static_gr(&self, x_db: f32) -> f32 {
         let over = x_db - FET_THRESHOLD_DB;
-        let knee = if self.abi { 2.0 } else if self.ratio <= 4.0 { 8.0 } else { 4.0 };
+        let knee = if self.abi {
+            2.0
+        } else if self.ratio <= 4.0 {
+            8.0
+        } else {
+            4.0
+        };
         let slope = 1.0 / self.ratio - 1.0;
         let mut gr = if over <= -knee / 2.0 {
             0.0
@@ -119,7 +142,8 @@ impl Processor for Fet {
             }
             self.slow += ((if self.env < -3.0 { 1.0 } else { 0.0 }) - self.slow) * 0.00002;
             let g = db_to_gain(self.env);
-            let (wa, wb) = (Self::color(a * g, drive, &mut self.dc_l) * self.output, Self::color(b * g, drive, &mut self.dc_r) * self.output);
+            let (wa, wb) =
+                (Self::color(a * g, drive, &mut self.dc_l) * self.output, Self::color(b * g, drive, &mut self.dc_r) * self.output);
             let (da, db) = (l[i], r[i]);
             l[i] = da * (1.0 - self.mix) + wa * self.mix;
             r[i] = db * (1.0 - self.mix) + wb * self.mix;
@@ -440,7 +464,36 @@ pub struct Tune {
 
 impl Default for Tune {
     fn default() -> Self {
-        Self { sr: 48000.0, det: None, psola_l: None, align: vec![], align_w: 0, key: 0, mask: 0xfff, retune_ms: 20.0, humanize: 0.0, flex: 0.0, vibrato: 0.0, transpose: 0.0, formant: 0.0, period: 0.0, corr: 0.0, center: 0.0, held: 0.0, last_note: 0.0, engaged: false, last_m: 0.0, jump_t: 0.0, smooth_m: 0.0, speed: 0.0, seg_t: 0.0, m: [0.0; 8], params: None, quiet: 0, dormant: true }
+        Self {
+            sr: 48000.0,
+            det: None,
+            psola_l: None,
+            align: vec![],
+            align_w: 0,
+            key: 0,
+            mask: 0xfff,
+            retune_ms: 20.0,
+            humanize: 0.0,
+            flex: 0.0,
+            vibrato: 0.0,
+            transpose: 0.0,
+            formant: 0.0,
+            period: 0.0,
+            corr: 0.0,
+            center: 0.0,
+            held: 0.0,
+            last_note: 0.0,
+            engaged: false,
+            last_m: 0.0,
+            jump_t: 0.0,
+            smooth_m: 0.0,
+            speed: 0.0,
+            seg_t: 0.0,
+            m: [0.0; 8],
+            params: None,
+            quiet: 0,
+            dormant: true,
+        }
     }
 }
 
@@ -588,8 +641,8 @@ impl Processor for Tune {
                         self.held += hop_s;
                     }
                     let err = note - follow; // semitones to correct
-                    // flex: only notes sung within ±(50 − 35·flex) cents of the target are corrected;
-                    // once a note engages it stays corrected (no flicker with vibrato)
+                                             // flex: only notes sung within ±(50 − 35·flex) cents of the target are corrected;
+                                             // once a note engages it stays corrected (no flicker with vibrato)
                     let half = 0.5 - 0.35 * self.flex; // semitones
                     if self.flex <= 0.0 || err.abs() <= half {
                         self.engaged = true;
@@ -607,7 +660,16 @@ impl Processor for Tune {
                     }
                     let k = if tau <= 0.0005 { 1.0 } else { 1.0 - (-hop_s / tau).exp() };
                     self.corr += (want - self.corr) * k;
-                    self.m = [det.hz, midi_to_hz(note + self.transpose), midi_to_hz(m + self.corr + self.transpose), det.confidence, (m - note) * 100.0, self.corr * 100.0, 0.0, 0.0];
+                    self.m = [
+                        det.hz,
+                        midi_to_hz(note + self.transpose),
+                        midi_to_hz(m + self.corr + self.transpose),
+                        det.confidence,
+                        (m - note) * 100.0,
+                        self.corr * 100.0,
+                        0.0,
+                        0.0,
+                    ];
                 } else {
                     self.period = 0.0;
                     self.corr *= 0.9;
@@ -911,7 +973,9 @@ mod tests {
     use crate::model::FxKind;
 
     fn voice(hz: f32, sr: f32, n: usize) -> Vec<f32> {
-        (0..n).map(|i| (1..8).map(|k| (std::f32::consts::TAU * hz * k as f32 * i as f32 / sr).sin() / k as f32).sum::<f32>() * 0.3).collect()
+        (0..n)
+            .map(|i| (1..8).map(|k| (std::f32::consts::TAU * hz * k as f32 * i as f32 / sr).sin() / k as f32).sum::<f32>() * 0.3)
+            .collect()
     }
 
     fn run(p: &mut dyn Processor, x: &[f32]) -> Vec<f32> {
@@ -964,7 +1028,13 @@ mod tests {
             p.set_params(&param_block(&fx));
             let amps = [0.03f32, 0.15, 0.9, 1.0, 0.7, 0.3, 0.2, 0.1, 0.08, 0.05];
             let x: Vec<f32> = (0..44100)
-                .map(|i| amps.iter().enumerate().map(|(k, a)| a * (std::f32::consts::TAU * f0 * (k + 1) as f32 * i as f32 / sr).sin()).sum::<f32>() * 0.08)
+                .map(|i| {
+                    amps.iter()
+                        .enumerate()
+                        .map(|(k, a)| a * (std::f32::consts::TAU * f0 * (k + 1) as f32 * i as f32 / sr).sin())
+                        .sum::<f32>()
+                        * 0.08
+                })
                 .collect();
             let y = run(&mut p, &x);
             let mut d = Detector::new(sr);
@@ -994,7 +1064,13 @@ mod tests {
         let x: Vec<f32> = (0..n)
             .map(|i| {
                 let t = i as f32 / sr;
-                let m = if t < 0.4 { a } else if t < 0.7 { a + (b - a) * (t - 0.4) / 0.3 } else { b };
+                let m = if t < 0.4 {
+                    a
+                } else if t < 0.7 {
+                    a + (b - a) * (t - 0.4) / 0.3
+                } else {
+                    b
+                };
                 pitch[i] = m;
                 ph += std::f32::consts::TAU * midi_to_hz(m) / sr;
                 (1..6).map(|k| (ph * k as f32).sin() / k as f32).sum::<f32>() * 0.3
@@ -1074,10 +1150,12 @@ mod tests {
         let mut seed = 3u32;
         let mut bp = Biquad::default();
         bp.set(FilterType::Bandpass, sr, 7500.0, 1.0, 0.0);
-        let s: Vec<f32> = (0..24000).map(|_| {
-            seed = seed.wrapping_mul(1664525).wrapping_add(1013904223);
-            bp.tick((seed as f32 / u32::MAX as f32 - 0.5) * 1.6)
-        }).collect();
+        let s: Vec<f32> = (0..24000)
+            .map(|_| {
+                seed = seed.wrapping_mul(1664525).wrapping_add(1013904223);
+                bp.tick((seed as f32 / u32::MAX as f32 - 0.5) * 1.6)
+            })
+            .collect();
         let mut d = mk();
         run(&mut d, &s);
         assert!(d.gain_reduction_db() < -3.0, "sibilant not ducked: {}", d.gain_reduction_db());

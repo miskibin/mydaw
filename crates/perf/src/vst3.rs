@@ -19,12 +19,7 @@ fn main() {
         return;
     }
     let args: Vec<String> = std::env::args().collect();
-    let arg = |k: &str| {
-        args.iter()
-            .position(|a| a == k)
-            .and_then(|i| args.get(i + 1))
-            .cloned()
-    };
+    let arg = |k: &str| args.iter().position(|a| a == k).and_then(|i| args.get(i + 1)).cloned();
     let max: usize = arg("--max").and_then(|v| v.parse().ok()).unwrap_or(3);
     let secs: f64 = arg("--secs").and_then(|v| v.parse().ok()).unwrap_or(6.0);
     let filter = arg("--match");
@@ -32,12 +27,7 @@ fn main() {
     eprintln!("scan: {} effects in {scan_ms:.0} ms", list.len());
     let mut out = vec![];
     let mut vendors = std::collections::HashSet::new();
-    for p in list.iter().filter(|p| {
-        filter
-            .as_ref()
-            .map(|f| p.name.to_lowercase().contains(&f.to_lowercase()))
-            .unwrap_or(true)
-    }) {
+    for p in list.iter().filter(|p| filter.as_ref().map(|f| p.name.to_lowercase().contains(&f.to_lowercase())).unwrap_or(true)) {
         if filter.is_none() && !vendors.insert(p.vendor.clone()) {
             continue; // one plugin per vendor unless asked for a specific one
         }
@@ -53,12 +43,7 @@ fn main() {
                 continue;
             }
         };
-        let ctx = ProcessCtx {
-            sample_rate: 48000.0,
-            bpm: 120.0,
-            beat: 0.0,
-            playing: true,
-        };
+        let ctx = ProcessCtx { sample_rate: 48000.0, bpm: 120.0, beat: 0.0, playing: true };
         let mut l = vec![0f32; 512];
         let mut r = vec![0f32; 512];
         let blocks = (secs * 48000.0 / 512.0) as usize;
@@ -67,8 +52,7 @@ fn main() {
         for b in 0..blocks + 40 {
             for i in 0..512 {
                 let t = (b * 512 + i) as f32 / 48000.0;
-                l[i] = (t * 220.0 * std::f32::consts::TAU).sin() * 0.3
-                    + (t * 1760.0 * std::f32::consts::TAU).sin() * 0.1;
+                l[i] = (t * 220.0 * std::f32::consts::TAU).sin() * 0.3 + (t * 1760.0 * std::f32::consts::TAU).sin() * 0.1;
                 r[i] = l[i];
             }
             let t0 = Instant::now();
@@ -87,9 +71,6 @@ fn main() {
     }
     println!(
         "{}",
-        serde_json::to_string_pretty(
-            &json!({ "scan_ms": scan_ms.round(), "effects_found": list.len(), "measured": out })
-        )
-        .unwrap()
+        serde_json::to_string_pretty(&json!({ "scan_ms": scan_ms.round(), "effects_found": list.len(), "measured": out })).unwrap()
     );
 }

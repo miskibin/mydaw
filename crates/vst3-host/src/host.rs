@@ -19,13 +19,12 @@ use std::sync::{Arc, OnceLock};
 
 use parking_lot::Mutex;
 use vst3::Steinberg::Vst::{
-    Event, IComponentHandler, IComponentHandlerTrait, IEventList, IEventListTrait,
-    IHostApplication, IHostApplicationTrait, IParamValueQueue, IParamValueQueueTrait,
-    IParameterChanges, IParameterChangesTrait, ParamID, ParamValue, String128,
+    Event, IComponentHandler, IComponentHandlerTrait, IEventList, IEventListTrait, IHostApplication, IHostApplicationTrait,
+    IParamValueQueue, IParamValueQueueTrait, IParameterChanges, IParameterChangesTrait, ParamID, ParamValue, String128,
 };
 use vst3::Steinberg::{
-    int32, int64, kInvalidArgument, kNotImplemented, kResultFalse, kResultOk, tresult, FUnknown,
-    IBStream, IBStreamTrait, IPlugFrame, IPlugFrameTrait, IPlugView, ViewRect, TUID,
+    int32, int64, kInvalidArgument, kNotImplemented, kResultFalse, kResultOk, tresult, FUnknown, IBStream, IBStreamTrait, IPlugFrame,
+    IPlugFrameTrait, IPlugView, ViewRect, TUID,
 };
 use vst3::{Class, ComWrapper};
 
@@ -94,15 +93,8 @@ impl ParamMailbox {
         let words = unique.len().div_ceil(64).max(1);
         let (producer, consumer) = rtrb::RingBuffer::new(UNLISTED_RING);
         let mailbox = Self {
-            slot_of: unique
-                .iter()
-                .enumerate()
-                .map(|(slot, id)| (*id, slot))
-                .collect(),
-            values: unique
-                .iter()
-                .map(|_| std::sync::atomic::AtomicU64::new(0))
-                .collect(),
+            slot_of: unique.iter().enumerate().map(|(slot, id)| (*id, slot)).collect(),
+            values: unique.iter().map(|_| std::sync::atomic::AtomicU64::new(0)).collect(),
             ids: unique,
             dirty: (0..words).map(|_| AtomicU64::new(0)).collect(),
             summary: (0..words.div_ceil(64)).map(|_| AtomicU64::new(0)).collect(),
@@ -130,10 +122,7 @@ impl ParamMailbox {
         if self.post_listed(id, value) {
             return true;
         }
-        self.unlisted
-            .lock()
-            .as_mut()
-            .is_some_and(|ring| ring.push((id, value)).is_ok())
+        self.unlisted.lock().as_mut().is_some_and(|ring| ring.push((id, value)).is_ok())
     }
 
     /// Hand at most `limit` pending `(id, value)` pairs to `sink`, latest
@@ -211,10 +200,7 @@ pub(crate) struct HostContext {
 
 impl HostContext {
     pub(crate) fn new(flags: Arc<HostFlags>) -> ComWrapper<Self> {
-        ComWrapper::new(Self {
-            inbox: OnceLock::new(),
-            flags,
-        })
+        ComWrapper::new(Self { inbox: OnceLock::new(), flags })
     }
 
     pub(crate) fn connect_inbox(&self, inbox: Arc<ParamMailbox>) {
@@ -235,12 +221,7 @@ impl IHostApplicationTrait for HostContext {
         kResultOk
     }
 
-    unsafe fn createInstance(
-        &self,
-        _cid: *mut TUID,
-        _iid: *mut TUID,
-        obj: *mut *mut c_void,
-    ) -> tresult {
+    unsafe fn createInstance(&self, _cid: *mut TUID, _iid: *mut TUID, obj: *mut *mut c_void) -> tresult {
         if !obj.is_null() {
             *obj = std::ptr::null_mut();
         }
@@ -279,11 +260,7 @@ impl IComponentHandlerTrait for HostContext {
 
 /// The `FUnknown` a plugin's `initialize` is given.
 pub(crate) fn host_context_ptr(context: &ComWrapper<HostContext>) -> *mut FUnknown {
-    context
-        .as_com_ref::<IHostApplication>()
-        .map_or(std::ptr::null_mut(), |host| {
-            host.as_ptr().cast::<FUnknown>()
-        })
+    context.as_com_ref::<IHostApplication>().map_or(std::ptr::null_mut(), |host| host.as_ptr().cast::<FUnknown>())
 }
 
 // ---------------------------------------------------------------------------
@@ -302,12 +279,7 @@ pub(crate) struct GuiRequests {
 
 impl GuiRequests {
     pub(crate) fn take_resize(&self) -> Option<(i32, i32)> {
-        self.pending.swap(false, Ordering::AcqRel).then(|| {
-            (
-                self.width.load(Ordering::Acquire),
-                self.height.load(Ordering::Acquire),
-            )
-        })
+        self.pending.swap(false, Ordering::AcqRel).then(|| (self.width.load(Ordering::Acquire), self.height.load(Ordering::Acquire)))
     }
 
     /// Forget a stale request so it cannot reach the next editor session.
@@ -336,12 +308,8 @@ impl IPlugFrameTrait for PlugFrame {
         let Some(rect) = new_size.as_ref() else {
             return kInvalidArgument;
         };
-        self.requests
-            .width
-            .store(rect.right - rect.left, Ordering::Release);
-        self.requests
-            .height
-            .store(rect.bottom - rect.top, Ordering::Release);
+        self.requests.width.store(rect.right - rect.left, Ordering::Release);
+        self.requests.height.store(rect.bottom - rect.top, Ordering::Release);
         self.requests.pending.store(true, Ordering::Release);
         kResultOk
     }
@@ -360,11 +328,7 @@ pub(crate) struct ValueQueue {
 
 impl ValueQueue {
     fn new() -> Self {
-        Self {
-            id: Cell::new(0),
-            count: Cell::new(0),
-            points: std::array::from_fn(|_| Cell::new((0, 0.0))),
-        }
+        Self { id: Cell::new(0), count: Cell::new(0), points: std::array::from_fn(|_| Cell::new((0, 0.0))) }
     }
 
     fn last(&self) -> Option<ParamValue> {
@@ -429,9 +393,7 @@ unsafe impl Sync for ParameterChanges {}
 impl ParameterChanges {
     pub(crate) fn new() -> ComWrapper<Self> {
         ComWrapper::new(Self {
-            queues: (0..MAX_CHANGES_PER_BLOCK)
-                .map(|_| ComWrapper::new(ValueQueue::new()))
-                .collect(),
+            queues: (0..MAX_CHANGES_PER_BLOCK).map(|_| ComWrapper::new(ValueQueue::new())).collect(),
             count: Cell::new(0),
         })
     }
@@ -453,11 +415,7 @@ impl ParameterChanges {
     /// Refill from the mailbox and its overflow ring. RT-safe: atomics and
     /// lock-free pops into preallocated queues. Whatever does not fit stays
     /// pending for the next block.
-    pub(crate) fn fill(
-        &self,
-        mailbox: &ParamMailbox,
-        unlisted: &mut rtrb::Consumer<(ParamID, ParamValue)>,
-    ) {
+    pub(crate) fn fill(&self, mailbox: &ParamMailbox, unlisted: &mut rtrb::Consumer<(ParamID, ParamValue)>) {
         self.clear();
         mailbox.drain(self.queues.len(), |id, value| {
             let used = self.count.get();
@@ -469,10 +427,7 @@ impl ParameterChanges {
         });
         while let Ok(&(id, value)) = unlisted.peek() {
             let used = self.count.get();
-            let queue = match self.queues[..used]
-                .iter()
-                .find(|queue| queue.id.get() == id)
-            {
+            let queue = match self.queues[..used].iter().find(|queue| queue.id.get() == id) {
                 Some(queue) => queue,
                 None if used < self.queues.len() => {
                     let queue = &self.queues[used];
@@ -511,24 +466,15 @@ impl IParameterChangesTrait for ParameterChanges {
         if index < 0 || index as usize >= self.count.get() {
             return std::ptr::null_mut();
         }
-        self.queues[index as usize]
-            .as_com_ref::<IParamValueQueue>()
-            .map_or(std::ptr::null_mut(), |queue| queue.as_ptr())
+        self.queues[index as usize].as_com_ref::<IParamValueQueue>().map_or(std::ptr::null_mut(), |queue| queue.as_ptr())
     }
 
-    unsafe fn addParameterData(
-        &self,
-        id: *const ParamID,
-        index: *mut int32,
-    ) -> *mut IParamValueQueue {
+    unsafe fn addParameterData(&self, id: *const ParamID, index: *mut int32) -> *mut IParamValueQueue {
         let (Some(&id), false) = (id.as_ref(), index.is_null()) else {
             return std::ptr::null_mut();
         };
         let used = self.count.get();
-        let position = match self.queues[..used]
-            .iter()
-            .position(|queue| queue.id.get() == id)
-        {
+        let position = match self.queues[..used].iter().position(|queue| queue.id.get() == id) {
             Some(position) => position,
             None if used < self.queues.len() => {
                 self.queues[used].id.set(id);
@@ -597,10 +543,7 @@ impl MemoryStream {
     }
 
     pub(crate) fn reading(bytes: &[u8]) -> ComWrapper<Self> {
-        ComWrapper::new(Self {
-            buffer: RefCell::new(bytes.to_vec()),
-            cursor: Cell::new(0),
-        })
+        ComWrapper::new(Self { buffer: RefCell::new(bytes.to_vec()), cursor: Cell::new(0) })
     }
 
     pub(crate) fn contents(&self) -> Vec<u8> {
@@ -622,12 +565,7 @@ impl Class for MemoryStream {
 }
 
 impl IBStreamTrait for MemoryStream {
-    unsafe fn read(
-        &self,
-        buffer: *mut c_void,
-        num_bytes: int32,
-        num_bytes_read: *mut int32,
-    ) -> tresult {
+    unsafe fn read(&self, buffer: *mut c_void, num_bytes: int32, num_bytes_read: *mut int32) -> tresult {
         if buffer.is_null() || num_bytes < 0 {
             return kInvalidArgument;
         }
@@ -635,11 +573,7 @@ impl IBStreamTrait for MemoryStream {
         let start = self.cursor.get().min(source.len());
         let available = (source.len() - start).min(num_bytes as usize);
         if available > 0 {
-            std::ptr::copy_nonoverlapping(
-                source.as_ptr().add(start),
-                buffer.cast::<u8>(),
-                available,
-            );
+            std::ptr::copy_nonoverlapping(source.as_ptr().add(start), buffer.cast::<u8>(), available);
         }
         self.cursor.set(start + available);
         if !num_bytes_read.is_null() {
@@ -648,12 +582,7 @@ impl IBStreamTrait for MemoryStream {
         kResultOk
     }
 
-    unsafe fn write(
-        &self,
-        buffer: *mut c_void,
-        num_bytes: int32,
-        num_bytes_written: *mut int32,
-    ) -> tresult {
+    unsafe fn write(&self, buffer: *mut c_void, num_bytes: int32, num_bytes_written: *mut int32) -> tresult {
         if buffer.is_null() || num_bytes < 0 {
             return kInvalidArgument;
         }
@@ -732,12 +661,7 @@ mod tests {
         out
     }
 
-    fn context() -> (
-        ComWrapper<HostContext>,
-        Arc<ParamMailbox>,
-        Unlisted,
-        Arc<HostFlags>,
-    ) {
+    fn context() -> (ComWrapper<HostContext>, Arc<ParamMailbox>, Unlisted, Arc<HostFlags>) {
         let (inbox, unlisted) = mailbox(&[7]);
         let flags = Arc::new(HostFlags::default());
         let context = HostContext::new(Arc::clone(&flags));
@@ -766,26 +690,14 @@ mod tests {
         unsafe {
             assert_eq!(handler.beginEdit(7), kResultOk);
             assert_eq!(handler.performEdit(7, 0.25), kResultOk);
-            assert_eq!(
-                handler.performEdit(7, 1.5),
-                kResultOk,
-                "clamped, not refused"
-            );
+            assert_eq!(handler.performEdit(7, 1.5), kResultOk, "clamped, not refused");
             assert_eq!(handler.endEdit(7), kResultOk);
-            assert_eq!(
-                handler.performEdit(99, 0.5),
-                kResultOk,
-                "an unlisted id still arrives"
-            );
+            assert_eq!(handler.performEdit(99, 0.5), kResultOk, "an unlisted id still arrives");
             assert_eq!(handler.performEdit(7, f64::NAN), kInvalidArgument);
             assert_eq!(handler.restartComponent(2), kResultOk);
             assert_eq!(handler.restartComponent(8), kResultOk);
         }
-        assert_eq!(
-            drained(&inbox, 64),
-            vec![(7, 1.0)],
-            "moves of one knob coalesce to the latest"
-        );
+        assert_eq!(drained(&inbox, 64), vec![(7, 1.0)], "moves of one knob coalesce to the latest");
         assert_eq!(unlisted.pop(), Ok((99, 0.5)));
         assert!(flags.dirty.load(Ordering::Acquire));
         assert_eq!(flags.restart.load(Ordering::Acquire), 2 | 8);
@@ -814,10 +726,7 @@ mod tests {
         got.sort_by_key(|(id, _)| *id);
         assert_eq!(got, vec![(ids[0], 0.25), (ids[3], 0.9999), (ids[999], 0.5)]);
         assert!(drained(&inbox, 64).is_empty());
-        assert!(
-            !inbox.post_listed(12345, 0.5),
-            "the RT path never takes unlisted ids"
-        );
+        assert!(!inbox.post_listed(12345, 0.5), "the RT path never takes unlisted ids");
     }
 
     #[test]
@@ -846,12 +755,7 @@ mod tests {
     fn a_plug_frame_records_the_size_asked_for_and_refuses_null() {
         let requests = Arc::new(GuiRequests::default());
         let frame: ComPtr<IPlugFrame> = PlugFrame::new(Arc::clone(&requests)).to_com_ptr().unwrap();
-        let mut rect = ViewRect {
-            left: 10,
-            top: 20,
-            right: 810,
-            bottom: 620,
-        };
+        let mut rect = ViewRect { left: 10, top: 20, right: 810, bottom: 620 };
         // SAFETY: `rect` is live for the call; the view is unused.
         unsafe {
             assert_eq!(frame.resizeView(std::ptr::null_mut(), &mut rect), kResultOk);
@@ -859,15 +763,8 @@ mod tests {
             assert_eq!(requests.take_resize(), None, "reading clears it");
             let _ = frame.resizeView(std::ptr::null_mut(), &mut rect);
             requests.clear();
-            assert_eq!(
-                requests.take_resize(),
-                None,
-                "a stale request must not survive"
-            );
-            assert_eq!(
-                frame.resizeView(std::ptr::null_mut(), std::ptr::null_mut()),
-                kInvalidArgument
-            );
+            assert_eq!(requests.take_resize(), None, "a stale request must not survive");
+            assert_eq!(frame.resizeView(std::ptr::null_mut(), std::ptr::null_mut()), kInvalidArgument);
         }
     }
 
@@ -900,11 +797,7 @@ mod tests {
         changes.fill(&inbox, &mut unlisted);
         assert_eq!(changes.len(), MAX_CHANGES_PER_BLOCK);
         changes.fill(&inbox, &mut unlisted);
-        assert_eq!(
-            changes.len(),
-            5,
-            "the overflow arrives a block later, not never"
-        );
+        assert_eq!(changes.len(), 5, "the overflow arrives a block later, not never");
         changes.fill(&inbox, &mut unlisted);
         assert_eq!(changes.len(), 0);
     }
@@ -916,8 +809,7 @@ mod tests {
         // SAFETY: live out-params; the queue pointer is used within this scope.
         unsafe {
             let mut index = -1;
-            let queue = ComRef::<IParamValueQueue>::from_raw(list.addParameterData(&9, &mut index))
-                .unwrap();
+            let queue = ComRef::<IParamValueQueue>::from_raw(list.addParameterData(&9, &mut index)).unwrap();
             assert_eq!(index, 0);
             let mut point = -1;
             assert_eq!(queue.addPoint(0, 0.1, &mut point), kResultOk);
@@ -954,14 +846,7 @@ mod tests {
         let mut written = 0;
         // SAFETY: buffers and out-params are live locals.
         unsafe {
-            assert_eq!(
-                stream.write(
-                    blob.as_ptr() as *mut c_void,
-                    blob.len() as int32,
-                    &mut written
-                ),
-                kResultOk
-            );
+            assert_eq!(stream.write(blob.as_ptr() as *mut c_void, blob.len() as int32, &mut written), kResultOk);
         }
         assert_eq!(written as usize, blob.len());
         assert_eq!(sink.contents(), blob);
@@ -973,15 +858,8 @@ mod tests {
         let mut at: int64 = -1;
         // SAFETY: as above.
         unsafe {
-            assert_eq!(
-                stream.read(out.as_mut_ptr().cast(), out.len() as int32, &mut read),
-                kResultOk
-            );
-            assert_eq!(
-                read as usize,
-                blob.len(),
-                "a short read at the end is normal"
-            );
+            assert_eq!(stream.read(out.as_mut_ptr().cast(), out.len() as int32, &mut read), kResultOk);
+            assert_eq!(read as usize, blob.len(), "a short read at the end is normal");
             assert_eq!(stream.seek(4, SEEK_SET, &mut at), kResultOk);
             assert_eq!(at, 4);
             assert_eq!(stream.seek(2, SEEK_CUR, &mut at), kResultOk);
@@ -1008,14 +886,8 @@ mod tests {
         let (mut at, mut written) = (0, -1);
         // SAFETY: live locals.
         unsafe {
-            assert_eq!(
-                stream.seek(MAX_STATE_BYTES as i64, SEEK_SET, &mut at),
-                kResultOk
-            );
-            assert_eq!(
-                stream.write(chunk.as_ptr() as *mut c_void, 16, &mut written),
-                kInvalidArgument
-            );
+            assert_eq!(stream.seek(MAX_STATE_BYTES as i64, SEEK_SET, &mut at), kResultOk);
+            assert_eq!(stream.write(chunk.as_ptr() as *mut c_void, 16, &mut written), kInvalidArgument);
         }
         assert_eq!(written, 0);
         assert!(sink.is_empty(), "nothing may have been allocated");

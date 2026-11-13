@@ -1,3 +1,4 @@
+#![recursion_limit = "512"]
 //! WAVE desktop app: Tauri commands around the engine, the audio device, the
 //! sample library, VST3 plugins and the live session the `wave` CLI talks to.
 
@@ -9,6 +10,7 @@ mod keys;
 mod library;
 mod models;
 mod plugins;
+mod project_launch;
 mod recovery;
 mod settings;
 mod updater;
@@ -176,7 +178,14 @@ async fn transport_stop(app: St<'_>) -> R<()> {
 }
 
 #[tauri::command]
-async fn transport_set(app: St<'_>, metro: Option<bool>, count_in: Option<bool>, rec: Option<bool>, monitor: Option<bool>, start_beat: Option<f64>) -> R<wave_engine::TransportDto> {
+async fn transport_set(
+    app: St<'_>,
+    metro: Option<bool>,
+    count_in: Option<bool>,
+    rec: Option<bool>,
+    monitor: Option<bool>,
+    start_beat: Option<f64>,
+) -> R<wave_engine::TransportDto> {
     let e = app.engine.clone();
     let t = tauri::async_runtime::spawn_blocking(move || {
         if let Some(b) = start_beat {
@@ -242,7 +251,23 @@ async fn pitch_analyze(app: St<'_>, clip_id: u64) -> R<std::sync::Arc<wave_engin
 }
 
 #[tauri::command]
-async fn pitch_target(app: St<'_>, clip_id: u64, reference: Option<wave_engine::RefTune>) -> R<std::sync::Arc<wave_engine::reference::PitchTarget>> {
+async fn melody_channels(app: St<'_>, clip_id: u64) -> R<Value> {
+    let e = app.engine.clone();
+    tauri::async_runtime::spawn_blocking(move || crate::actions::melody_channels(&e, clip_id)).await.map_err(es)?
+}
+
+#[tauri::command]
+async fn melody_reference(app: St<'_>, clip_id: u64, channel: u64, span: Option<[f64; 2]>) -> R<Value> {
+    let e = app.engine.clone();
+    tauri::async_runtime::spawn_blocking(move || crate::actions::melody_reference(&e, clip_id, channel, span)).await.map_err(es)?
+}
+
+#[tauri::command]
+async fn pitch_target(
+    app: St<'_>,
+    clip_id: u64,
+    reference: Option<wave_engine::RefTune>,
+) -> R<std::sync::Arc<wave_engine::reference::PitchTarget>> {
     let e = app.engine.clone();
     tauri::async_runtime::spawn_blocking(move || e.pitch_target(clip_id, reference)).await.map_err(es)?.map_err(es)
 }
@@ -282,9 +307,20 @@ async fn music_analyze(app: St<'_>, clip_id: Option<u64>, exclude_fx: Option<u64
 /// `bake_rider: true`: the rider is left out of `chain` and returned as `riderBake`, for
 /// `bake_rider` (then the chain goes on the insert with no live look-ahead delay).
 #[tauri::command]
-async fn auto_vocal_plan(app: St<'_>, clip_id: u64, beat_clip_id: Option<u64>, style: Option<wave_engine::autovocal::Style>, bake_rider: Option<bool>) -> R<wave_engine::autovocal::AutoVocalPlan> {
+async fn auto_vocal_plan(
+    app: St<'_>,
+    clip_id: u64,
+    beat_clip_id: Option<u64>,
+    style: Option<wave_engine::autovocal::Style>,
+    bake_rider: Option<bool>,
+) -> R<wave_engine::autovocal::AutoVocalPlan> {
     let e = app.engine.clone();
-    tauri::async_runtime::spawn_blocking(move || e.auto_vocal_plan(clip_id, beat_clip_id, style.unwrap_or_default(), bake_rider.unwrap_or(false))).await.map_err(es)?.map_err(es)
+    tauri::async_runtime::spawn_blocking(move || {
+        e.auto_vocal_plan(clip_id, beat_clip_id, style.unwrap_or_default(), bake_rider.unwrap_or(false))
+    })
+    .await
+    .map_err(es)?
+    .map_err(es)
 }
 
 /// Renders the Vocal Rider (`params`, e.g. a plan's `riderBake.params`) into an audio clip's
@@ -315,6 +351,13 @@ async fn trim_clip(app: St<'_>, clip_id: u64) -> R<Value> {
 }
 
 #[tauri::command]
+async fn make_unique(app: St<'_>, clip_ids: Vec<u64>) -> R<Value> {
+    let e = app.engine.clone();
+    let r = tauri::async_runtime::spawn_blocking(move || e.make_unique_audio(&clip_ids)).await.map_err(es)?.map_err(es)?;
+    Ok(json!(r))
+}
+
+#[tauri::command]
 async fn flatten_comp(app: St<'_>, clip_id: u64) -> R<Value> {
     let e = app.engine.clone();
     let id = tauri::async_runtime::spawn_blocking(move || e.flatten_comp(clip_id)).await.map_err(es)?.map_err(es)?;
@@ -327,8 +370,10 @@ async fn comp_audition(app: St<'_>, comp_id: u64, take_id: Option<u64>) -> R<()>
 }
 
 #[tauri::command]
-async fn preview_clip(app: St<'_>, clip_id: u64) -> R<()> {
-    app.engine.preview_clip(clip_id).map_err(es)
+async fn preview_clip(app: St<'_>, clip_id: u64, from: Option<f64>) -> R<()> {
+    let e = app.engine.clone();
+    // a start inside the clip may render its pitch edits first: off the IPC thread
+    tauri::async_runtime::spawn_blocking(move || e.preview_clip(clip_id, from)).await.map_err(es)?.map_err(es)
 }
 
 #[tauri::command]
@@ -527,6 +572,13 @@ async fn library_remove_folder(app: St<'_>, path: String) -> R<Vec<String>> {
 
 // ---------------------------------------------------------------- project files
 
+struct ProjectOpenRequests(Mutex<Vec<String>>);
+
+#[tauri::command]
+fn take_project_open_requests(requests: State<'_, ProjectOpenRequests>) -> Vec<String> {
+    std::mem::take(&mut *requests.0.lock())
+}
+
 #[tauri::command]
 async fn project_new(app: St<'_>) -> R<StateDto> {
     app.engine.new_project(Project::empty());
@@ -541,7 +593,8 @@ fn open_reply(state: StateDto, warnings: Vec<String>) -> Value {
 }
 
 #[tauri::command]
-async fn project_open(app: St<'_>, handle: AppHandle, path: Option<String>) -> R<Value> {
+async fn project_open(app: St<'_>, handle: AppHandle, path: Option<String>, if_revision: Option<u64>) -> R<Value> {
+    let revision = if_revision.unwrap_or_else(|| app.engine.revision());
     let path = match path {
         Some(p) => Some(PathBuf::from(p)),
         None => handle.dialog().file().add_filter("WAVE project", &["wave"]).blocking_pick_file().and_then(|p| p.into_path().ok()),
@@ -549,7 +602,7 @@ async fn project_open(app: St<'_>, handle: AppHandle, path: Option<String>) -> R
     let Some(path) = path else { return Ok(json!({ "cancelled": true })) };
     let e = app.engine.clone();
     let p2 = path.clone();
-    let warnings = tauri::async_runtime::spawn_blocking(move || e.open(&p2)).await.map_err(es)?.map_err(es)?;
+    let warnings = tauri::async_runtime::spawn_blocking(move || e.open_at_revision(&p2, Some(revision))).await.map_err(es)?.map_err(es)?;
     app.recovery.clear();
     let mut s = app.settings.lock();
     s.last_project = Some(path.display().to_string());
@@ -562,7 +615,13 @@ async fn project_save(app: St<'_>, handle: AppHandle, save_as: Option<bool>) -> 
     let cur = app.engine.state().path.map(PathBuf::from);
     let path = match (cur, save_as.unwrap_or(false)) {
         (Some(p), false) => Some(p),
-        _ => handle.dialog().file().add_filter("WAVE project", &["wave"]).set_file_name("Song.wave").blocking_save_file().and_then(|p| p.into_path().ok()),
+        _ => handle
+            .dialog()
+            .file()
+            .add_filter("WAVE project", &["wave"])
+            .set_file_name("Song.wave")
+            .blocking_save_file()
+            .and_then(|p| p.into_path().ok()),
     };
     let Some(mut path) = path else { return Ok(json!({ "cancelled": true })) };
     if path.extension().is_none() {
@@ -606,14 +665,30 @@ async fn recovery_discard(app: St<'_>, id: String) -> R<()> {
     app.recovery.discard(&id)
 }
 
-/// Bounce the master mix to a 32-bit float stereo WAV, or a CBR MP3 (`format: "mp3"`,
+/// Bounce the master mix to a 32-bit float or 24-bit PCM stereo WAV, or a CBR MP3 (`format: "mp3"`,
 /// `mp3_kbps` 128/192/256/320, default 320), song or loop + tail.
 ///
 /// Opens a native save dialog first. The render runs off the UI thread so playback
 /// keeps going; call `export_cancel` to abort before a file is written.
 #[tauri::command]
-async fn export_audio(app: St<'_>, handle: AppHandle, use_loop: bool, tail: f64, sample_rate: u32, format: Option<String>, mp3_kbps: Option<u32>) -> R<Value> {
-    let fmt = actions::ExportFormat::parse(format.as_deref(), mp3_kbps)?;
+#[allow(clippy::too_many_arguments)]
+async fn export_audio(
+    app: St<'_>,
+    handle: AppHandle,
+    use_loop: bool,
+    tail: f64,
+    sample_rate: u32,
+    format: Option<String>,
+    mp3_kbps: Option<u32>,
+    wav_bits: Option<u32>,
+    dither: Option<bool>,
+    wrap_tail: Option<bool>,
+) -> R<Value> {
+    let fmt = actions::ExportFormat::parse(format.as_deref(), mp3_kbps, wav_bits, dither.unwrap_or(false))?;
+    let wrap = wrap_tail.unwrap_or(false);
+    if wrap && !matches!(fmt, actions::ExportFormat::Wav(_)) {
+        return Err("wrap tail requires WAV export".into());
+    }
     let ext = fmt.extension();
     if !(sample_rate == 44_100 || sample_rate == 48_000) {
         return Err("sample rate must be 44100 or 48000".into());
@@ -622,7 +697,11 @@ async fn export_audio(app: St<'_>, handle: AppHandle, use_loop: bool, tail: f64,
         return Err("tail must be 0, 2 or 8 seconds".into());
     }
     let st = app.engine.state();
+    if wrap && (!use_loop || st.project.loop_range.is_none_or(|l| l.b <= l.a)) {
+        return Err("select a loop to wrap its tail".into());
+    }
     let (from, to) = Engine::export_range(&st.project, use_loop);
+    let bounce = actions::Bounce { from, to, tail, rate: sample_rate, wrap };
     let suggested = st
         .path
         .as_deref()
@@ -644,11 +723,9 @@ async fn export_audio(app: St<'_>, handle: AppHandle, use_loop: bool, tail: f64,
     app.export_cancel.store(false, Ordering::Relaxed);
     let a = app.inner().clone();
     let out = path.clone();
-    let result = tauri::async_runtime::spawn_blocking(move || {
-        actions::render_to_file(&*a, &out, from, to, tail, sample_rate, &a.export_cancel, fmt)
-    })
-    .await
-    .map_err(es)?;
+    let result = tauri::async_runtime::spawn_blocking(move || actions::render_to_file(a.as_ref(), &out, bounce, &a.export_cancel, fmt))
+        .await
+        .map_err(es)?;
     match result {
         Ok(v) => Ok(v),
         Err(e) if e == "cancelled" => Ok(json!({ "cancelled": true })),
@@ -656,13 +733,14 @@ async fn export_audio(app: St<'_>, handle: AppHandle, use_loop: bool, tail: f64,
     }
 }
 
-/// Stem export (FL Studio's *Split mixer tracks*): one 32-bit float WAV per mixer insert that has
+/// Stem export (FL Studio's *Split mixer tracks*): one WAV per mixer insert that has
 /// sound, named after the insert, plus `Master.wav` when `include_master`. Opens a native folder
 /// dialog first and writes the files straight into the chosen folder.
 ///
 /// Progress goes out as `export-progress` events `{ done, total, name }`; call `export_cancel` to
 /// abort (no file is left behind, see `actions::render_stems_to_dir`).
 #[tauri::command]
+#[allow(clippy::too_many_arguments)]
 async fn export_stems(
     app: St<'_>,
     handle: AppHandle,
@@ -670,20 +748,25 @@ async fn export_stems(
     tail: f64,
     sample_rate: u32,
     include_master: bool,
+    wav_bits: Option<u32>,
+    dither: Option<bool>,
+    wrap_tail: Option<bool>,
 ) -> R<Value> {
+    let encoding = actions::WavEncoding::parse(wav_bits, dither.unwrap_or(false))?;
+    let wrap = wrap_tail.unwrap_or(false);
     if !(sample_rate == 44_100 || sample_rate == 48_000) {
         return Err("sample rate must be 44100 or 48000".into());
     }
     if !(tail == 0.0 || tail == 2.0 || tail == 8.0) {
         return Err("tail must be 0, 2 or 8 seconds".into());
     }
-    let (from, to) = Engine::export_range(&app.engine.state().project, use_loop);
-    let Some(dir) = handle
-        .dialog()
-        .file()
-        .blocking_pick_folder()
-        .and_then(|p| p.into_path().ok())
-    else {
+    let project = app.engine.project();
+    if wrap && (!use_loop || project.loop_range.is_none_or(|l| l.b <= l.a)) {
+        return Err("select a loop to wrap its tail".into());
+    }
+    let (from, to) = Engine::export_range(&project, use_loop);
+    let bounce = actions::Bounce { from, to, tail, rate: sample_rate, wrap };
+    let Some(dir) = handle.dialog().file().blocking_pick_folder().and_then(|p| p.into_path().ok()) else {
         return Ok(json!({ "cancelled": true }));
     };
     app.export_cancel.store(false, Ordering::Relaxed);
@@ -691,24 +774,11 @@ async fn export_stems(
     let h = handle.clone();
     let result = tauri::async_runtime::spawn_blocking(move || {
         let progress = |done: usize, total: usize, name: &str| {
-            let _ = h.emit(
-                "export-progress",
-                json!({ "done": done, "total": total, "name": name }),
-            );
+            let _ = h.emit("export-progress", json!({ "done": done, "total": total, "name": name }));
         };
         // a stem export must not start while the piano is still loading (its stems would be silent)
         keys::wait(&a);
-        actions::render_stems_to_dir(
-            &a.engine,
-            &dir,
-            from,
-            to,
-            tail,
-            sample_rate,
-            &a.export_cancel,
-            include_master,
-            &progress,
-        )
+        actions::render_stems_to_dir(&a.engine, &dir, bounce, &a.export_cancel, include_master, encoding, &progress)
     })
     .await
     .map_err(es)?;
@@ -757,7 +827,12 @@ async fn vst3_set_param(app: St<'_>, fx_id: u64, id: u32, value: f64) -> R<()> {
 #[tauri::command]
 async fn app_info(app: St<'_>, handle: AppHandle) -> R<updater::AppInfo> {
     let s = app.settings.lock();
-    Ok(updater::AppInfo { version: handle.package_info().version.to_string(), seen_version: s.seen_version.clone(), auto_update: !s.no_auto_update, plugin_editors: cfg!(windows) })
+    Ok(updater::AppInfo {
+        version: handle.package_info().version.to_string(),
+        seen_version: s.seen_version.clone(),
+        auto_update: !s.no_auto_update,
+        plugin_editors: cfg!(windows),
+    })
 }
 
 #[tauri::command]
@@ -839,18 +914,150 @@ fn shutdown(h: &AppHandle, app: &App) {
     app.recovery.close();
 }
 
-pub fn run() {
+/// Keeps `LC_NUMERIC` in the C locale. `gtk_init` runs `setlocale(LC_ALL, "")`,
+/// so on comma-decimal locales (de, da, pl, …) every C-side text parse of a
+/// VST3 preset — `atof` inside DPF-style state restore — reads `0.4` as `0`,
+/// which some plugins turn into division-by-zero NaNs. Hosts keep numeric
+/// formatting themselves (the UI formats for the user), so nothing else sees
+/// the change. Call once before any plugin work and again after `gtk_init`.
+pub fn ensure_c_numeric_locale() {
+    // SAFETY: `setlocale` with a valid category and NUL-terminated string; the
+    // returned locale string is ignored. `LC_NUMERIC` and "C" are C-ABI constants.
+    unsafe extern "C" {
+        fn setlocale(category: i32, locale: *const std::ffi::c_char) -> *mut std::ffi::c_char;
+    }
+    unsafe {
+        setlocale(libc::LC_NUMERIC, c"C".as_ptr());
+    }
+}
+
+pub fn run(project_arg: Option<&str>) {
     let boot = boot::Boot::new();
     boot.mark("run() entered");
+    let setup_boot = boot.clone();
+    let cwd = std::env::current_dir().ok();
+    let launch_project = project_arg.and_then(|arg| project_launch::project_path(arg, cwd.as_deref()));
+    let reopen_last = launch_project.is_none();
+    let requests = ProjectOpenRequests(Mutex::new(launch_project.into_iter().collect()));
+
+    let builder = tauri::Builder::default().manage(requests);
+    #[cfg(windows)]
+    let builder = builder.plugin(tauri_plugin_single_instance::init(|app, args, cwd| {
+        if let Some(window) = app.get_webview_window("main") {
+            let _ = window.unminimize();
+            let _ = window.set_focus();
+        }
+        let cwd = std::path::Path::new(&cwd);
+        if let Some(path) = args.get(1).and_then(|arg| project_launch::project_path(arg, Some(cwd))) {
+            app.state::<ProjectOpenRequests>().0.lock().push(path);
+            let _ = app.emit("project-open-requested", ());
+        }
+    }));
+
+    let tapp = builder
+        .plugin(tauri_plugin_dialog::init())
+        .plugin(tauri_plugin_updater::Builder::new().build())
+        .setup(move |tapp| {
+            start_app(tapp, setup_boot, reopen_last);
+            Ok(())
+        })
+        .invoke_handler(tauri::generate_handler![
+            get_state,
+            apply_ops,
+            begin_gesture,
+            end_gesture,
+            undo,
+            redo,
+            fx_catalog,
+            transport_play,
+            transport_stop,
+            transport_set,
+            telemetry_subscribe,
+            watch_fx,
+            import_audio,
+            source_peaks,
+            clip_peaks,
+            pitch_analyze,
+            pitch_target,
+            melody_channels,
+            melody_reference,
+            f0_model_status,
+            f0_model_install,
+            music_analyze,
+            auto_vocal_plan,
+            bake_rider,
+            trim_clip,
+            make_unique,
+            flatten_comp,
+            comp_audition,
+            preview_clip,
+            preview_file,
+            preview_stop,
+            note_audition,
+            typing_note,
+            pattern_play,
+            audio_hosts,
+            audio_devices,
+            audio_get_config,
+            audio_set_config,
+            audio_measure_latency,
+            midi_list_devices,
+            midi_select_device,
+            midi_status,
+            midi_set_target,
+            library_list,
+            library_install,
+            keys_status,
+            library_files,
+            library_add_folder,
+            library_remove_folder,
+            project_new,
+            project_open,
+            take_project_open_requests,
+            project_save,
+            recovery_write,
+            recovery_list,
+            recovery_restore,
+            recovery_discard,
+            export_audio,
+            export_stems,
+            export_cancel,
+            vst3_scan,
+            vst3_add,
+            vst3_editor,
+            vst3_params,
+            vst3_set_param,
+            cli_status,
+            app_info,
+            update_set_auto,
+            update_mark_seen,
+            update_check,
+            update_download,
+            update_install,
+            open_release_page
+        ])
+        .build(tauri::generate_context!())
+        .expect("error while building WAVE");
+    boot.mark("tauri built, entering the event loop");
+    tapp.run(|h, ev| {
+        if let tauri::RunEvent::Exit = ev {
+            if let Some(app) = h.try_state::<Arc<App>>() {
+                shutdown(h, &app);
+            }
+        }
+    });
+}
+
+fn start_app(tapp: &mut tauri::App, boot: Arc<boot::Boot>, reopen_last: bool) {
+    // gtk_init pulled the user locale back over LC_NUMERIC; plugin state
+    // text parsing must stay in the C locale (see ensure_c_numeric_locale)
+    ensure_c_numeric_locale();
     let plugins = plugins::Plugins::new();
     let settings = settings::Settings::load();
     // reopened on a thread of its own once the window exists (decoding its audio is slow)
-    let last_project = settings
-        .last_project
-        .as_ref()
-        .filter(|p| std::path::Path::new(p).is_file())
-        .cloned();
+    let last_project = settings.last_project.as_ref().filter(|p| reopen_last && std::path::Path::new(p).is_file()).cloned();
     let engine = Engine::new(Project::empty(), plugins.factory());
+    let startup_revision = engine.revision();
     let loading = boot.loading();
     let events: Arc<std::sync::OnceLock<AppHandle>> = Arc::new(std::sync::OnceLock::new());
     // an output the device or driver stopped is reopened by the audio thread: tell the UI
@@ -910,100 +1117,78 @@ pub fn run() {
         }
     });
 
-    let app_setup = app.clone();
-    let app_exit = app.clone();
-    let tapp = tauri::Builder::default()
-        .plugin(tauri_plugin_dialog::init())
-        .plugin(tauri_plugin_updater::Builder::new().build())
-        .manage(app.clone())
-        .setup(move |tapp| {
-            // plugin work that must happen on the UI thread is posted here
-            let mh = tapp.handle().clone();
-            wave_vst3::set_main_thread_executor(move |job| {
-                let _ = mh.run_on_main_thread(job);
-            });
-            tapp.manage(wave_plugin_windows::Service::new());
-            // open the audio device off the UI thread
-            let a = app_setup.clone();
-            std::thread::spawn(move || {
-                let cfg = a.settings.lock().audio.clone();
-                let st = a.audio.start(cfg);
-                *a.status.lock() = st;
-            });
-            let _ = events.set(tapp.handle().clone());
-            let _ = app_setup.handle.set(tapp.handle().clone());
-            keys::ensure(&app_setup, app_setup.engine.uses_keys());
-            // reopen the saved keyboard (it may be unplugged: the status says so, and it opens when it returns)
-            let a = app_setup.clone();
-            std::thread::spawn(move || {
-                let saved = a.settings.lock().midi_device.clone();
-                if let Some(d) = saved {
-                    a.midi.select(Some(&d.id), Some(&d.name));
-                }
-            });
-            let h = tapp.handle().clone();
-            let a = app_setup.clone();
-            engine.on_change(move |dto| {
-                keys::ensure(&a, dto.project.channels.iter().any(|c| matches!(c.src, wave_engine::ChannelSrc::Keys { .. })));
-                let _ = h.emit("state", dto);
-            });
-            if let Some(w) = tapp.get_webview_window("main") {
-                let _ = w.set_title("WAVE");
-            }
-            app_setup.boot.mark("tauri setup done");
-            // the last project and the CLI session come in off the critical path: the UI's first
-            // state reply (see `get_state`) is the only thing that waits for them
-            let a = app_setup.clone();
-            
-            std::thread::Builder::new()
-                .name("wave-boot".into())
-                .spawn(move || {
-                    let _loading = loading; // released when this thread ends, however it ends
-                    if let Some(p) = last_project {
-                        match a.engine.open(std::path::Path::new(&p)) {
-                            Ok(_) => {}
-                            Err(e) => log::warn!("could not reopen {p}: {e}"),
-                        }
-                        a.boot.mark("last project loaded");
-                    }
-                    let weak = Arc::downgrade(&a);
-                    let handler: Arc<wave_session::Handler> = Arc::new(move |req: &wave_session::Request| {
-                        let Some(app) = weak.upgrade() else { return Err(wave_session::ErrorBody::new("GONE", "the app is closing")) };
-                        let res = actions::control(&*app, &req.command, &req.args, req.if_revision);
-                        let rev = app.engine.revision();
-                        res.map(|d| (d, rev)).map_err(|m| {
-                            let code = m.split(':').next().filter(|c| c.chars().all(|ch| ch.is_ascii_uppercase() || ch == '_') && c.len() > 2).unwrap_or("REFUSED").to_string();
-                            wave_session::ErrorBody::new(&code, m)
-                        })
-                    });
-                    match wave_session::Server::start(handler) {
-                        Ok(s) => *a.session.lock() = Some(s),
-                        Err(e) => log::warn!("CLI session unavailable: {e}"),
-                    }
-                    a.boot.mark("CLI session up");
-                })
-                .expect("spawn boot thread");
-            Ok(())
-        })
-        .invoke_handler(tauri::generate_handler![
-            get_state, apply_ops, begin_gesture, end_gesture, undo, redo, fx_catalog,
-            transport_play, transport_stop, transport_set, telemetry_subscribe, watch_fx,
-            import_audio, source_peaks, clip_peaks, pitch_analyze, pitch_target, f0_model_status, f0_model_install, music_analyze, auto_vocal_plan, bake_rider, trim_clip, flatten_comp, comp_audition, preview_clip, preview_file, preview_stop, note_audition, typing_note, pattern_play,
-            audio_hosts, audio_devices, audio_get_config, audio_set_config, audio_measure_latency,
-            midi_list_devices, midi_select_device, midi_status, midi_set_target,
-            library_list, library_install, keys_status, library_files, library_add_folder, library_remove_folder,
-            project_new, project_open, project_save, recovery_write, recovery_list, recovery_restore, recovery_discard, export_audio, export_stems, export_cancel,
-            vst3_scan, vst3_add, vst3_editor, vst3_params, vst3_set_param, cli_status,
-            app_info, update_set_auto, update_mark_seen, update_check, update_download, update_install, open_release_page
-        ])
-        .build(tauri::generate_context!())
-        .expect("error while building WAVE");
-    app_exit.boot.mark("tauri built, entering the event loop");
-    tapp.run(move |h, ev| {
-        if let tauri::RunEvent::Exit = ev {
-            shutdown(h, &app_exit);
+    tapp.manage(app.clone());
+    // plugin work that must happen on the UI thread is posted here
+    let mh = tapp.handle().clone();
+    wave_vst3::set_main_thread_executor(move |job| {
+        let _ = mh.run_on_main_thread(job);
+    });
+    tapp.manage(wave_plugin_windows::Service::new());
+    // open the audio device off the UI thread
+    let a = app.clone();
+    std::thread::spawn(move || {
+        let cfg = a.settings.lock().audio.clone();
+        let st = a.audio.start(cfg);
+        *a.status.lock() = st;
+    });
+    let _ = events.set(tapp.handle().clone());
+    let _ = app.handle.set(tapp.handle().clone());
+    keys::ensure(&app, app.engine.uses_keys());
+    // reopen the saved keyboard (it may be unplugged: the status says so, and it opens when it returns)
+    let a = app.clone();
+    std::thread::spawn(move || {
+        let saved = a.settings.lock().midi_device.clone();
+        if let Some(d) = saved {
+            a.midi.select(Some(&d.id), Some(&d.name));
         }
     });
+    let h = tapp.handle().clone();
+    let a = app.clone();
+    engine.on_change(move |dto| {
+        keys::ensure(&a, dto.project.channels.iter().any(|c| matches!(c.src, wave_engine::ChannelSrc::Keys { .. })));
+        let _ = h.emit("state", dto);
+    });
+    if let Some(w) = tapp.get_webview_window("main") {
+        let _ = w.set_title("WAVE");
+    }
+    app.boot.mark("tauri setup done");
+    // the last project and the CLI session come in off the critical path: the UI's first
+    // state reply (see `get_state`) is the only thing that waits for them
+    let a = app.clone();
+
+    std::thread::Builder::new()
+        .name("wave-boot".into())
+        .spawn(move || {
+            let _loading = loading; // released when this thread ends, however it ends
+            if let Some(p) = last_project {
+                match a.engine.open_at_revision(std::path::Path::new(&p), Some(startup_revision)) {
+                    Ok(_) => {}
+                    Err(e) => log::warn!("could not reopen {p}: {e}"),
+                }
+                a.boot.mark("last project loaded");
+            }
+            let weak = Arc::downgrade(&a);
+            let handler: Arc<wave_session::Handler> = Arc::new(move |req: &wave_session::Request| {
+                let Some(app) = weak.upgrade() else { return Err(wave_session::ErrorBody::new("GONE", "the app is closing")) };
+                let res = actions::control(app.as_ref(), &req.command, &req.args, req.if_revision);
+                let rev = app.engine.revision();
+                res.map(|d| (d, rev)).map_err(|m| {
+                    let code = m
+                        .split(':')
+                        .next()
+                        .filter(|c| c.chars().all(|ch| ch.is_ascii_uppercase() || ch == '_') && c.len() > 2)
+                        .unwrap_or("REFUSED")
+                        .to_string();
+                    wave_session::ErrorBody::new(&code, m)
+                })
+            });
+            match wave_session::Server::start(handler) {
+                Ok(s) => *a.session.lock() = Some(s),
+                Err(e) => log::warn!("CLI session unavailable: {e}"),
+            }
+            a.boot.mark("CLI session up");
+        })
+        .expect("spawn boot thread");
 }
 
 #[cfg(test)]
@@ -1033,5 +1218,67 @@ mod tests {
         assert!(state["path"].as_str().is_some_and(|p| p.ends_with("Song.wave")));
         assert!(v["warnings"].is_array());
         assert!(v.get("cancelled").is_none());
+    }
+}
+
+#[cfg(test)]
+mod locale_tests {
+    use super::ensure_c_numeric_locale;
+
+    /// `gtk_init` pulls `LC_NUMERIC` to the user's locale; plugin preset text
+    /// (`atof` in state restore) must keep parsing `0.4` as 0.4 regardless.
+    /// Skips silently when no comma-decimal locale is installed.
+    ///
+    /// The locale swap runs in a dedicated child process: `setlocale` is
+    /// process-global and glibc documents it as thread-unsafe, and the test
+    /// harness runs tests on parallel threads, so unrelated tests or native
+    /// dependencies must not observe the temporary comma locale.
+    #[test]
+    fn numeric_parsing_survives_the_user_locale() {
+        const CHILD_ENV: &str = "WAVE_LOCALE_TEST_CHILD";
+        if std::env::var_os(CHILD_ENV).is_none() {
+            // parent: rerun this binary for just this test with the child
+            // marker set (keep the --exact name in sync with the fn name)
+            let exe = std::env::current_exe().expect("test executable path");
+            let out = std::process::Command::new(exe)
+                .args(["--exact", "locale_tests::numeric_parsing_survives_the_user_locale", "--nocapture"])
+                .env(CHILD_ENV, "1")
+                .output()
+                .expect("spawn the locale test child process");
+            let stdout = String::from_utf8_lossy(&out.stdout);
+            assert!(out.status.success() && stdout.contains("1 passed"), "locale child process failed: {}\n{stdout}", out.status);
+            return;
+        }
+
+        // child process only from here on: the swap stays out of the shared
+        // test process
+        // SAFETY: setlocale/strtod with valid NUL-terminated strings; this
+        // test is all the child runs, so no other thread reads the locale.
+        unsafe extern "C" {
+            fn setlocale(category: i32, locale: *const std::ffi::c_char) -> *mut std::ffi::c_char;
+            fn strtod(s: *const std::ffi::c_char, end: *mut *mut std::ffi::c_char) -> f64;
+        }
+        let parse = |s: &str| unsafe {
+            let c = std::ffi::CString::new(s).unwrap();
+            strtod(c.as_ptr(), std::ptr::null_mut())
+        };
+
+        // find an installed comma-decimal locale; the machine's own locale set
+        // decides, the test only needs one
+        let mut found = None;
+        for loc in ["de_DE.UTF-8", "da_DK.UTF-8", "fr_FR.UTF-8", "pl_PL.UTF-8"] {
+            let c = std::ffi::CString::new(loc).unwrap();
+            let set = unsafe { setlocale(libc::LC_NUMERIC, c.as_ptr()) };
+            if !set.is_null() && parse("0.4") != 0.4 {
+                found = Some(loc);
+                break;
+            }
+        }
+        let Some(loc) = found else {
+            return; // no comma-decimal locale installed: nothing to guard against
+        };
+
+        ensure_c_numeric_locale();
+        assert_eq!(parse("0.4"), 0.4, "after ensure_c_numeric_locale, {loc} must not break decimal parsing");
     }
 }

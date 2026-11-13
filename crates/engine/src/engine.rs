@@ -78,6 +78,17 @@ pub struct StateDto {
     pub stretch_errors: HashMap<Id, String>,
 }
 
+/// What `Engine::make_unique_audio` made.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct MadeUnique {
+    pub source_id: Id,
+    /// Index of the new track (right below the clips' old one).
+    pub track: u32,
+    /// The insert the new track plays into: the old track's (the master unless routed).
+    pub insert_id: Id,
+}
+
 #[derive(Debug, thiserror::Error)]
 pub enum EngineError {
     #[error(transparent)]
@@ -87,6 +98,13 @@ pub enum EngineError {
     /// Offline render was aborted by the caller before a file was written.
     #[error("cancelled")]
     Cancelled,
+}
+
+#[derive(Clone, Copy, Debug)]
+pub enum RenderTail {
+    Seconds(f64),
+    /// Let one full pass initialize effects, then keep a second pass of the same length.
+    Wrap,
 }
 
 impl From<String> for EngineError {
@@ -266,6 +284,8 @@ pub struct Engine {
     skip_silent: std::sync::atomic::AtomicBool,
     midi_fast: MidiFast,
     midi_take: Mutex<MidiTake>,
+    /// Serializes transport changes while the callback drains a stopped take.
+    transport_control: Mutex<()>,
     /// Threads an offline render may use for the insert chains.
     render_workers: std::sync::atomic::AtomicUsize,
 }
@@ -307,9 +327,17 @@ impl Engine {
             listeners: Mutex::new(vec![]),
             sink: Mutex::new(None),
             skip_silent: std::sync::atomic::AtomicBool::new(true),
-            midi_fast: MidiFast { live: AtomicBool::new(false), chan: std::sync::atomic::AtomicU64::new(u64::MAX), ins: std::sync::atomic::AtomicUsize::new(usize::MAX), tx: Mutex::new(None) },
+            midi_fast: MidiFast {
+                live: AtomicBool::new(false),
+                chan: std::sync::atomic::AtomicU64::new(u64::MAX),
+                ins: std::sync::atomic::AtomicUsize::new(usize::MAX),
+                tx: Mutex::new(None),
+            },
             midi_take: Mutex::new(MidiTake::default()),
-            render_workers: std::sync::atomic::AtomicUsize::new(std::thread::available_parallelism().map(|n| n.get().saturating_sub(2).clamp(1, 8)).unwrap_or(1)),
+            transport_control: Mutex::new(()),
+            render_workers: std::sync::atomic::AtomicUsize::new(
+                std::thread::available_parallelism().map(|n| n.get().saturating_sub(2).clamp(1, 8)).unwrap_or(1),
+            ),
         });
         let weak = Arc::downgrade(&e);
         thread::Builder::new()
@@ -397,7 +425,14 @@ impl Engine {
         c.synths.clear();
         // the old stream is gone: keep what it captured instead of orphaning the take
         self.finalize_take(&mut c);
-        c.wires = Some(Wires { cmds: cmd_tx, garbage: gb_rx, record: rec_rx, analyzer: Analyzer::new(ain, aout, sample_rate), sr: sample_rate, max_block });
+        c.wires = Some(Wires {
+            cmds: cmd_tx,
+            garbage: gb_rx,
+            record: rec_rx,
+            analyzer: Analyzer::new(ain, aout, sample_rate),
+            sr: sample_rate,
+            max_block,
+        });
         self.sync(&mut c, Dirty { timeline: true, mixer: true, params: true });
         let flags = Cmd::Flags { metro: c.transport.metro, monitor: c.transport.monitor };
         let watch = watch_cmd(&c.watch);
@@ -469,7 +504,16 @@ impl Engine {
     /// Applies a batch. `transient` edits (inside a gesture) do not create undo steps.
     /// With `if_revision`, fails if the project changed since that revision.
     pub fn apply(&self, ops: &[Op], transient: bool, if_revision: Option<u64>) -> Result<u64, EngineError> {
-        let mut c = self.core.lock();
+        self.apply_locked(self.core.lock(), ops, transient, if_revision)
+    }
+
+    fn apply_locked(
+        &self,
+        mut c: parking_lot::MutexGuard<'_, Core>,
+        ops: &[Op],
+        transient: bool,
+        if_revision: Option<u64>,
+    ) -> Result<u64, EngineError> {
         if let Some(r) = if_revision {
             if r != c.revision {
                 return Err(EngineError::Msg(format!("REVISION_CONFLICT: project is at revision {}, not {r}", c.revision)));
@@ -483,9 +527,7 @@ impl Engine {
                 if let AutoTarget::Plugin { fx_id, param_id } = &automation.target {
                     let in_project = c.project.find_fx(*fx_id).is_some_and(|(_, f)| f.kind == FxKind::Vst3);
                     if !in_project || !self.factory.has_plugin_param(*fx_id, *param_id) {
-                        return Err(EngineError::Msg(format!(
-                            "effect {fx_id} has no VST3 parameter {param_id} to automate"
-                        )));
+                        return Err(EngineError::Msg(format!("effect {fx_id} has no VST3 parameter {param_id} to automate")));
                     }
                 }
             }
@@ -564,6 +606,7 @@ impl Engine {
     // ------------------------------------------------------------ transport
 
     pub fn play(&self, from: f64) {
+        let control = self.transport_control.lock();
         let mut c = self.core.lock();
         if c.take.is_some() || self.midi_take.lock().rec.is_some() {
             return;
@@ -590,19 +633,26 @@ impl Engine {
         c.transport.start_beat = from;
         c.transport.playing = true;
         send(&mut c, Cmd::Play { from, count_in, rec: rec_track.is_some(), rec_loop: lap.is_some() });
+        drop(control);
         self.changed(c);
     }
 
     pub fn stop(&self) {
+        let control = self.transport_control.lock();
         let mut c = self.core.lock();
-        send(&mut c, Cmd::Stop);
+        let drain = self.end_take(&mut c, true);
+        if drain.is_none() {
+            send(&mut c, Cmd::Stop);
+        }
         c.transport.playing = false;
         drop(c);
-        // give the callback a moment to flush the last input
-        thread::sleep(Duration::from_millis(30));
+        if let Some((shared, timeout)) = drain {
+            wait_for_take_input(&shared, timeout);
+        }
         self.finish_take();
         self.finish_midi_take();
         let c = self.core.lock();
+        drop(control);
         self.changed(c);
     }
 
@@ -613,6 +663,7 @@ impl Engine {
     }
 
     pub fn set_transport(&self, metro: Option<bool>, count_in: Option<bool>, rec: Option<bool>, monitor: Option<bool>) -> TransportDto {
+        let control = self.transport_control.lock();
         let mut c = self.core.lock();
         if let Some(v) = metro {
             c.transport.metro = v;
@@ -627,9 +678,7 @@ impl Engine {
             c.transport.monitor = v;
         }
         let punch_out = !c.transport.rec && (c.take.is_some() || self.midi_take.lock().rec.is_some());
-        if punch_out {
-            send(&mut c, Cmd::PunchOut);
-        }
+        let drain = if punch_out { self.end_take(&mut c, false) } else { None };
         // arming while the song plays punches in right away (on the first armed track)
         if c.transport.rec && c.transport.playing && c.take.is_none() {
             if let Some(track) = c.project.tracks.iter().position(|t| t.arm) {
@@ -652,14 +701,30 @@ impl Engine {
         let t = c.transport.clone();
         if punch_out {
             drop(c);
-            thread::sleep(Duration::from_millis(30));
+            if let Some((shared, timeout)) = drain {
+                wait_for_take_input(&shared, timeout);
+            }
             self.finish_take();
             self.finish_midi_take();
-            self.changed(self.core.lock());
+            let c = self.core.lock();
+            drop(control);
+            self.changed(c);
         } else {
+            drop(control);
             self.changed(c);
         }
         t
+    }
+
+    fn end_take(&self, c: &mut Core, stop: bool) -> Option<(Arc<Shared>, Duration)> {
+        let take = c.take.as_ref()?;
+        let shared = self.shared();
+        let frames = take.skip.max(shared.take_latency().unwrap_or_else(|| shared.io_latency()) as usize + take.pdc);
+        let timeout = Duration::from_millis(100) + Duration::from_secs_f64((frames as f64 / f64::from(take.sr)).min(2.0));
+        let cmd = Cmd::EndTake { stop, fallback_skip: take.skip, pdc: take.pdc };
+        shared.finishing_take.store(true, Release);
+        send(c, cmd);
+        Some((shared, timeout))
     }
 
     /// An empty take buffer for the live device (`None` without one). Its start is `start`
@@ -671,7 +736,20 @@ impl Engine {
         let shared = self.shared();
         let skip = shared.io_latency() as usize + pdc;
         shared.reset_take_latency();
-        Some(RecBuf { track, start, skip, pdc, lap, sr, data: Vec::with_capacity(sr as usize * 2 * 60), marks: vec![], nans: 0, peaks: vec![], peaks_sent: 0, acc: (0.0, 0.0, 0) })
+        Some(RecBuf {
+            track,
+            start,
+            skip,
+            pdc,
+            lap,
+            sr,
+            data: Vec::with_capacity(sr as usize * 2 * 60),
+            marks: vec![],
+            nans: 0,
+            peaks: vec![],
+            peaks_sent: 0,
+            acc: (0.0, 0.0, 0),
+        })
     }
 
     pub fn watch_fx(&self, ids: &[Id]) {
@@ -692,7 +770,12 @@ impl Engine {
         // channel and audio clips share it), stored by its portable `lib:` path.
         let known: HashMap<String, Id> = {
             let c = self.core.lock();
-            c.project.sources.iter().filter(|s| s.path.starts_with(crate::factory::SCHEME) && c.sources.get(s.id).is_some()).map(|s| (s.path.clone(), s.id)).collect()
+            c.project
+                .sources
+                .iter()
+                .filter(|s| s.path.starts_with(crate::factory::SCHEME) && c.sources.get(s.id).is_some())
+                .map(|s| (s.path.clone(), s.id))
+                .collect()
         };
         for p in paths {
             let stored = match p.to_str() {
@@ -717,7 +800,8 @@ impl Engine {
         let mut clip_ids = vec![];
         let bpm = c.project.bpm;
         for (k, (path, stored, audio)) in loaded.into_iter().enumerate() {
-            let reuse = c.project.sources.iter().find(|s| s.path == stored && s.path.starts_with(crate::factory::SCHEME)).map(|s| (s.id, s.dur));
+            let reuse =
+                c.project.sources.iter().find(|s| s.path == stored && s.path.starts_with(crate::factory::SCHEME)).map(|s| (s.id, s.dur));
             let (id, seconds) = match (reuse, audio) {
                 (Some(r), _) if c.sources.get(r.0).is_some() => r,
                 (_, None) => continue,
@@ -731,7 +815,16 @@ impl Engine {
                     let colors = ["#69c3d6", "#47b8a8", "#5fbf8a", "#7c8cf8", "#e0a44a", "#9a8cf0", "#d9678f", "#5aa9e6"];
                     let color = factory.map(crate::factory::color).unwrap_or(colors[c.project.sources.len() % colors.len()]).to_string();
                     let seconds = audio.seconds();
-                    let src = Source { id, name, color, path: stored, dur: seconds, sr: audio.sr, ch: audio.channels, peak_db: crate::dsp::gain_to_db(audio.peak()) };
+                    let src = Source {
+                        id,
+                        name,
+                        color,
+                        path: stored,
+                        dur: seconds,
+                        sr: audio.sr,
+                        ch: audio.channels,
+                        peak_db: crate::dsp::gain_to_db(audio.peak()),
+                    };
                     c.sources.insert(id, Arc::new(audio));
                     c.project.sources.push(src);
                     (id, seconds)
@@ -765,6 +858,7 @@ impl Engine {
                     tune: None,
                     stretch: 1.0,
                     resample: false,
+                    pitch: 0.0,
                 });
                 clip_ids.push(cid);
             }
@@ -824,7 +918,16 @@ impl Engine {
     /// cached, so committing the same reference afterwards only renders.
     pub fn pitch_target(&self, clip_id: Id, params: Option<RefTune>) -> Result<Arc<crate::reference::PitchTarget>, EngineError> {
         let clip = self.audio_clip(clip_id)?;
-        let p = params.or_else(|| clip.tune.as_ref().and_then(|t| t.reference)).ok_or(EngineError::Msg("the clip has no reference".into()))?;
+        let p = params
+            .or_else(|| clip.tune.as_ref().and_then(|t| t.reference.clone()))
+            .ok_or(EngineError::Msg("the clip has no reference".into()))?;
+        if let Some(m) = &p.melody {
+            let region = clip.source_span(self.core.lock().project.bpm);
+            let take = self.source_analysis(clip.source, clip.norm, clip.rev).ok_or(EngineError::Msg("audio not loaded".into()))?;
+            let spans = crate::sources::note_spans(&clip, &take);
+            let al = crate::melody::alignment(&take, region, &spans, &m.notes);
+            return Ok(Arc::new(crate::reference::target(&take, &spans, &al, &p)));
+        }
         let key = {
             let mut c = self.core.lock();
             if !c.project.sources.iter().any(|s| s.id == p.source) {
@@ -838,7 +941,8 @@ impl Engine {
         let al = match cached {
             Some(a) => a,
             None => {
-                let reference = self.source_analysis(p.source, false, false).ok_or(EngineError::Msg("reference audio not loaded".into()))?;
+                let reference =
+                    self.source_analysis(p.source, false, false).ok_or(EngineError::Msg("reference audio not loaded".into()))?;
                 let tc = self.source_content(clip.source, clip.norm, clip.rev).ok_or(EngineError::Msg("audio not loaded".into()))?;
                 let rc = self.source_content(p.source, false, false).ok_or(EngineError::Msg("reference audio not loaded".into()))?;
                 let r = crate::pitch::ANALYSIS_RATE as f64;
@@ -852,6 +956,42 @@ impl Engine {
             }
         };
         Ok(Arc::new(crate::sources::target_for(&clip, &take, &al, &p)))
+    }
+
+    /// The notes `channel` plays over an audio clip, as a melody reference (`span`: seconds of
+    /// the source, only notes overlapping it), and how well they fit what is sung (0..1).
+    pub fn melody_reference(&self, clip_id: Id, channel: Id, span: Option<[f64; 2]>) -> Result<(crate::model::Melody, f32), EngineError> {
+        let clip = self.audio_clip(clip_id)?;
+        let (notes, region) = {
+            let c = self.core.lock();
+            if c.project.channels.iter().all(|ch| ch.id != channel) {
+                return Err(EngineError::Msg("no such channel".into()));
+            }
+            (crate::melody::collect(&c.project, &clip, channel, span), clip.source_span(c.project.bpm))
+        };
+        let take = self.source_analysis(clip.source, clip.norm, clip.rev).ok_or(EngineError::Msg("audio not loaded".into()))?;
+        let fit = crate::melody::fit(&take, region, &notes);
+        Ok((crate::model::Melody { channel, span, notes }, fit))
+    }
+
+    /// Channels whose notes play over an audio clip: `(channel, notes, fit 0..1)`, best fit first.
+    pub fn melody_channels(&self, clip_id: Id) -> Result<Vec<(Id, usize, f32)>, EngineError> {
+        let clip = self.audio_clip(clip_id)?;
+        let (sets, region) = {
+            let c = self.core.lock();
+            let sets: Vec<(Id, Vec<MelodyNote>)> = crate::melody::channels_over(&c.project, &clip)
+                .into_iter()
+                .map(|(id, _)| (id, crate::melody::collect(&c.project, &clip, id, None)))
+                .collect();
+            (sets, clip.source_span(c.project.bpm))
+        };
+        if sets.is_empty() {
+            return Ok(vec![]);
+        }
+        let take = self.source_analysis(clip.source, clip.norm, clip.rev).ok_or(EngineError::Msg("audio not loaded".into()))?;
+        let mut out: Vec<(Id, usize, f32)> = sets.iter().map(|(id, ns)| (*id, ns.len(), crate::melody::fit(&take, region, ns))).collect();
+        out.sort_by(|a, b| b.2.total_cmp(&a.2).then(b.1.cmp(&a.1)));
+        Ok(out)
     }
 
     /// Uses `est` for pitch analysis from now on (`None` = built-in YIN). Pitch-edited
@@ -885,7 +1025,12 @@ impl Engine {
     }
 
     /// [`Engine::music_analysis`], also excluding the tracks routed to insert `exclude_insert`.
-    fn music_analysis_ex(&self, clip_id: Option<Id>, exclude_fx: Option<Id>, exclude_insert: Option<Id>) -> Result<crate::music::MusicAnalysis, EngineError> {
+    fn music_analysis_ex(
+        &self,
+        clip_id: Option<Id>,
+        exclude_fx: Option<Id>,
+        exclude_insert: Option<Id>,
+    ) -> Result<crate::music::MusicAnalysis, EngineError> {
         if let Some(cid) = clip_id {
             let (clip, bpm) = {
                 let c = self.core.lock();
@@ -961,7 +1106,13 @@ impl Engine {
     ///
     /// `bake_rider`: the plan's rider comes out of the chain into `rider_bake`, for
     /// [`Self::bake_rider`] (no live look-ahead on the insert, so no playback delay).
-    pub fn auto_vocal_plan(&self, clip_id: Id, beat_clip: Option<Id>, style: crate::autovocal::Style, bake_rider: bool) -> Result<crate::autovocal::AutoVocalPlan, EngineError> {
+    pub fn auto_vocal_plan(
+        &self,
+        clip_id: Id,
+        beat_clip: Option<Id>,
+        style: crate::autovocal::Style,
+        bake_rider: bool,
+    ) -> Result<crate::autovocal::AutoVocalPlan, EngineError> {
         let clip = self.audio_clip(clip_id)?;
         let region = |cl: &Clip| -> Result<(Vec<f32>, f32), EngineError> {
             let ((audio, rate), bpm) = {
@@ -1028,7 +1179,7 @@ impl Engine {
             }
             let bpm = c.project.bpm;
             let (audio, rate) = c.sources.clip_audio(&clip, false, bpm).ok_or(EngineError::Msg("audio not loaded".into()))?;
-            if clip.needs_stretch() && rate != 1.0 {
+            if clip.needs_stretch() && rate != clip.rendered_rate() {
                 return Err(EngineError::Msg("the clip's time-stretch could not be rendered".into()));
             }
             let src = c.project.sources.iter().find(|s| s.id == clip.source);
@@ -1072,7 +1223,16 @@ impl Engine {
         write_wav(&path, &data, sr)?;
         let baked = Audio::from_stereo(data, sr, audio.channels);
         let before = c.project.clone();
-        c.project.sources.push(Source { id, name, color, path: path.display().to_string(), dur: baked.seconds(), sr, ch: audio.channels, peak_db: crate::dsp::gain_to_db(baked.peak()) });
+        c.project.sources.push(Source {
+            id,
+            name,
+            color,
+            path: path.display().to_string(),
+            dur: baked.seconds(),
+            sr,
+            ch: audio.channels,
+            peak_db: crate::dsp::gain_to_db(baked.peak()),
+        });
         c.sources.insert(id, Arc::new(baked));
         if let Some(x) = c.project.clips.iter_mut().find(|x| x.id == clip_id) {
             // a time-stretched bake holds the stretched audio: it plays as it is
@@ -1123,7 +1283,13 @@ impl Engine {
         write_wav(&path, &data, audio.sr)?;
         let new = Audio::from_stereo(data, audio.sr, audio.channels);
         let before = c.project.clone();
-        c.project.sources.push(Source { id, path: path.display().to_string(), dur: new.seconds(), peak_db: crate::dsp::gain_to_db(new.peak()), ..old });
+        c.project.sources.push(Source {
+            id,
+            path: path.display().to_string(),
+            dur: new.seconds(),
+            peak_db: crate::dsp::gain_to_db(new.peak()),
+            ..old
+        });
         c.sources.insert(id, Arc::new(new));
         if let Some(x) = c.project.clips.iter_mut().find(|x| x.id == clip_id) {
             x.source = id;
@@ -1138,26 +1304,106 @@ impl Engine {
         Ok(id)
     }
 
-    pub fn preview_clip(&self, clip_id: Id) -> Result<(), EngineError> {
+    /// FL Studio's "Make unique" for audio clips. The clips (all of one source, on one track)
+    /// get their own copy of the source entry — the same file and decoded audio, nothing is
+    /// written — with its own name ("Name #2") and colour, and move to a new track right below
+    /// theirs, named and coloured after the copy. The new track plays where the old one does
+    /// (the master unless the user routed it): no mixer insert is claimed or created on its
+    /// behalf, routing is the user's choice. One undo step. Other clips of the source keep it,
+    /// their track and their routing.
+    pub fn make_unique_audio(&self, clip_ids: &[Id]) -> Result<MadeUnique, EngineError> {
+        let mut c = self.core.lock();
+        let err = |m: &str| EngineError::Msg(m.into());
+        let clips: Vec<Clip> = clip_ids
+            .iter()
+            .map(|id| c.project.clips.iter().find(|x| x.id == *id).cloned().ok_or(err("no such clip")))
+            .collect::<Result<_, _>>()?;
+        let first = clips.first().ok_or(err("no clips given"))?.clone();
+        if clips.iter().any(|x| x.kind != ClipKind::Audio) {
+            return Err(err("only audio clips can be made unique this way"));
+        }
+        if clips.iter().any(|x| x.source != first.source || x.track != first.track) {
+            return Err(err("the clips must play the same sample on the same track"));
+        }
+        let old = c.project.sources.iter().find(|s| s.id == first.source).cloned().ok_or(err("the clip's source is missing"))?;
+        let audio = c.sources.get(old.id).cloned().ok_or(err("audio not loaded"))?;
+        let track = c.project.tracks.get(first.track as usize).cloned().ok_or(err("the clip's track is missing"))?;
+        // "Guitar", "Guitar #2", … : the next number no source of that name has yet
+        let base = unique_base(&old.name);
+        let name = (2..).map(|k| format!("{base} #{k}")).find(|n| !c.project.sources.iter().any(|s| &s.name == n)).unwrap();
+
+        let before = c.project.clone();
+        let id = c.project.alloc_id();
+        c.project.sources.push(Source { id, name: name.clone(), ..old.clone() });
+        c.sources.insert(id, audio);
+        let insert_id = track.insert;
+        let track_id = c.project.alloc_id();
+        let at = first.track + 1;
+        c.project.tracks.insert(
+            at as usize,
+            Track {
+                id: track_id,
+                name: name.clone(),
+                color: old.color.clone(),
+                muted: false,
+                solo: false,
+                arm: false,
+                vol: VOL_UNITY,
+                h: track.h,
+                insert: insert_id,
+                icon: track.icon.clone(),
+            },
+        );
+        for x in c.project.clips.iter_mut() {
+            if clip_ids.contains(&x.id) {
+                x.track = at;
+                x.source = id;
+            } else if x.track >= at {
+                x.track += 1;
+            }
+        }
+        push_undo(&mut c, before);
+        c.revision += 1;
+        self.sync(&mut c, Dirty { timeline: true, mixer: true, ..Default::default() });
+        self.changed(c);
+        Ok(MadeUnique { source_id: id, track: at, insert_id })
+    }
+
+    /// Plays one clip alone on the output. `from` (seconds of the source) starts there and plays
+    /// the take with its pitch edits at the source's own speed (the pitch editor's Solo), to the
+    /// end of the clip's region; without it the whole clip plays as the playlist would.
+    pub fn preview_clip(&self, clip_id: Id, from: Option<f64>) -> Result<(), EngineError> {
         let mut c = self.core.lock();
         let clip = c.project.clips.iter().find(|x| x.id == clip_id).cloned().ok_or(EngineError::Msg("no such clip".into()))?;
         let bpm = c.project.bpm;
         // a time-stretch that is not rendered yet previews the source at its own speed
-        let ready = if clip.needs_stretch() { c.sources.stretch_request(&clip, true, bpm).and_then(Result::ok).filter(|x| x.1 == 1.0) } else { None };
+        let ready = if from.is_none() && clip.needs_stretch() {
+            c.sources.stretch_request(&clip, true, bpm).and_then(Result::ok).filter(|x| x.1 == clip.rendered_rate())
+        } else {
+            None
+        };
         let (audio, (a, b)) = match ready {
-            Some((a, _)) => {
-                let r = crate::sources::clip_region(&clip, bpm, 1.0, a.seconds());
+            Some((a, rate)) => {
+                let r = crate::sources::clip_region(&clip, bpm, rate, a.seconds());
                 (a, r)
             }
-            None => (c.sources.variant(clip.source, clip.norm, clip.rev).ok_or(EngineError::Msg("audio not loaded".into()))?, clip.source_span(bpm)),
+            None => {
+                (c.sources.clip_source_audio(&clip, false, bpm).ok_or(EngineError::Msg("audio not loaded".into()))?, clip.source_span(bpm))
+            }
         };
         let sr = audio.sr as f64;
+        let end = (b * sr).min(audio.frames as f64);
+        let pos = from.map_or(a, |f| f.clamp(a, b)) * sr;
+        if pos >= end {
+            return Err(EngineError::Msg("nothing to play after that point".into()));
+        }
         let pv = Preview {
-            pos: a * sr,
+            pos,
             start: a * sr,
-            end: (b * sr).min(audio.frames as f64),
+            end,
             gain: 10f32.powf(clip.gain / 20.0),
-            fade_in: clip.fade_in as f64,
+            // a start inside the clip is not its beginning: no fade-in there
+            fade_in: if from.is_some_and(|f| f > a + 1e-3) { 0.0 } else { clip.fade_in as f64 },
             fade_out: clip.fade_out as f64,
             audio,
         };
@@ -1323,6 +1569,11 @@ impl Engine {
 
     /// Loads a project file. Missing audio is reported, not fatal.
     pub fn open(&self, path: &Path) -> Result<Vec<String>, EngineError> {
+        self.open_at_revision(path, None)
+    }
+
+    /// Checks the expected revision after decoding, before replacing the current project.
+    pub fn open_at_revision(&self, path: &Path, if_revision: Option<u64>) -> Result<Vec<String>, EngineError> {
         let text = std::fs::read_to_string(path).map_err(|e| format!("{}: {e}", path.display()))?;
         let doc: serde_json::Value = serde_json::from_str(&text).map_err(|e| format!("not a WAVE project: {e}"))?;
         let mut p = Project::from_json(doc.get("project").cloned().unwrap_or(doc)).map_err(|e| format!("not a WAVE project: {e}"))?;
@@ -1346,6 +1597,14 @@ impl Engine {
             return Err(EngineError::Msg("the project has no master insert".into()));
         }
         let mut c = self.core.lock();
+        if c.take.is_some() || self.midi_take.lock().rec.is_some() {
+            return Err(EngineError::Msg("recording: stop it first".into()));
+        }
+        if let Some(r) = if_revision {
+            if r != c.revision {
+                return Err(EngineError::Msg(format!("REVISION_CONFLICT: project is at revision {}, not {r}", c.revision)));
+            }
+        }
         send(&mut c, Cmd::Stop);
         send(&mut c, Cmd::PatPlay(None));
         c.transport.playing = false;
@@ -1390,15 +1649,8 @@ impl Engine {
     /// Same as [`Self::render`], but returns [`EngineError::Cancelled`] as soon as
     /// `cancel` is set. Checked between DSP blocks so a long bounce can stop without
     /// waiting for the whole file.
-    pub fn render_cancelable(
-        &self,
-        from: f64,
-        to: f64,
-        tail: f64,
-        sample_rate: u32,
-        cancel: &AtomicBool,
-    ) -> Result<Vec<f32>, EngineError> {
-        self.render_inner(None, from, to, tail, sample_rate, cancel)
+    pub fn render_cancelable(&self, from: f64, to: f64, tail: f64, sample_rate: u32, cancel: &AtomicBool) -> Result<Vec<f32>, EngineError> {
+        self.render_export(None, from, to, RenderTail::Seconds(tail), sample_rate, cancel)
     }
 
     /// The mixer inserts a stem export writes a file for, in mixer order: every insert except the
@@ -1411,18 +1663,12 @@ impl Engine {
             .iter()
             .filter(|m| m.id != 0 && !m.muted)
             .filter(|m| {
-                let on_track = project.tracks.iter().enumerate().any(|(i, t)| {
-                    t.insert == m.id
-                        && !t.muted
-                        && project
-                            .clips
-                            .iter()
-                            .any(|c| c.track as usize == i && !c.muted)
-                });
-                let on_channel = project
-                    .channels
+                let on_track = project
+                    .tracks
                     .iter()
-                    .any(|c| c.insert == Some(m.id) && !c.mute);
+                    .enumerate()
+                    .any(|(i, t)| t.insert == m.id && !t.muted && project.clips.iter().any(|c| c.track as usize == i && !c.muted));
+                let on_channel = project.channels.iter().any(|c| c.insert == Some(m.id) && !c.mute);
                 on_track || on_channel
             })
             .map(|m| (m.id, m.name.clone()))
@@ -1443,20 +1689,21 @@ impl Engine {
         sample_rate: u32,
         cancel: &AtomicBool,
     ) -> Result<Vec<f32>, EngineError> {
-        self.render_inner(Some(insert), from, to, tail, sample_rate, cancel)
+        self.render_export(Some(insert), from, to, RenderTail::Seconds(tail), sample_rate, cancel)
     }
 
-    fn render_inner(
+    /// Render a mix or stem, optionally keeping the effect state from a previous loop pass.
+    pub fn render_export(
         &self,
         stem: Option<Id>,
         from: f64,
         to: f64,
-        tail: f64,
+        tail: RenderTail,
         sample_rate: u32,
         cancel: &AtomicBool,
     ) -> Result<Vec<f32>, EngineError> {
-        if to <= from {
-            return Err(EngineError::Msg("`to` must be after `from`".into()));
+        if !from.is_finite() || !to.is_finite() || to <= from {
+            return Err(EngineError::Msg("render range must be finite and `to` must be after `from`".into()));
         }
         if sample_rate < 8000 {
             return Err(EngineError::Msg("sample rate must be at least 8000 Hz".into()));
@@ -1501,8 +1748,8 @@ impl Engine {
                 None => {
                     let r = crate::sources::render_stretch(&job);
                     let got = match &r {
-                        Ok(a) => (a.clone(), 1.0),
-                        Err(_) => (job.audio.clone(), 1.0 / job.ratio),
+                        Ok(a) => (a.clone(), job.rate),
+                        Err(_) => (job.audio.clone(), job.fallback_rate),
                     };
                     self.core.lock().sources.put_stretch(job.key, r);
                     rendered.insert(job.key, got.clone());
@@ -1531,7 +1778,8 @@ impl Engine {
         let mut errs = HashMap::new();
         let graph = build_graph(&project, &HashSet::new(), sr, block, &*self.factory, false, &mut errs);
         let mut tl = build_timeline(&project, &mut |clip| store_snapshot.get(&clip.id).cloned(), &takes, &HashMap::new(), keys.as_ref());
-        tl.loop_range = None;
+        let wrap = matches!(tail, RenderTail::Wrap);
+        tl.loop_range = wrap.then_some((from, to));
         tl.song_end = TOTAL_BEATS;
         let _ = cmd_tx.push(Cmd::Graph(Box::new(graph)));
         for ch in &project.channels {
@@ -1542,20 +1790,33 @@ impl Engine {
         let _ = cmd_tx.push(Cmd::Timeline(Box::new(tl)));
         let _ = cmd_tx.push(Cmd::Play { from, count_in: 0.0, rec: false, rec_loop: false });
         let spb = 60.0 / project.bpm;
-        let frames = (((to - from).max(0.0) * spb + tail.max(0.0)) * sample_rate as f64) as usize;
-        let play_frames = ((to - from).max(0.0) * spb * sample_rate as f64) as usize;
+        let duration = (to - from) * spb;
+        let play_frames = (duration * f64::from(sample_rate)) as usize;
+        let (frames, warmup) = match tail {
+            RenderTail::Seconds(tail) => (((duration + tail.max(0.0)) * f64::from(sample_rate)) as usize, 0),
+            RenderTail::Wrap => {
+                let period = (duration * f64::from(sample_rate)).round() as usize;
+                if period == 0 {
+                    return Err(EngineError::Msg("loop is shorter than one sample".into()));
+                }
+                (period, period)
+            }
+        };
         // plugin delay compensation delays everything by `pdc` frames: render that much
         // longer and drop it from the front, so the file starts on `from` and the last
         // `pdc` frames of the song are not cut off
         let pdc = playback_latency(&project, sr);
-        let total = frames + pdc;
-        let mut out = Vec::with_capacity(frames * 2);
+        let too_long = || EngineError::Msg("render is too long".into());
+        let discard = warmup.checked_add(pdc).ok_or_else(too_long)?;
+        let total = frames.checked_add(discard).ok_or_else(too_long)?;
+        let mut out = Vec::new();
+        out.try_reserve_exact(frames.checked_mul(2).ok_or_else(too_long)?).map_err(|_| too_long())?;
         let mut l = vec![0f32; block];
         let mut r = vec![0f32; block];
         let mut done = 0;
         let mut stopped = false;
         let keep = |out: &mut Vec<f32>, at: usize, l: &[f32], r: &[f32]| {
-            for i in at.max(pdc).saturating_sub(at)..l.len() {
+            for i in discard.saturating_sub(at)..l.len() {
                 out.push(l[i]);
                 out.push(r[i]);
             }
@@ -1564,8 +1825,14 @@ impl Engine {
             if cancel.load(Relaxed) {
                 return Err(EngineError::Cancelled);
             }
-            let n = block.min(total - done);
-            if !stopped && done + n > play_frames {
+            let mut n = block.min(total - done);
+            if wrap {
+                let pos = done % frames;
+                if done != 0 && pos == 0 {
+                    let _ = cmd_tx.push(Cmd::LoopTo(from));
+                }
+                n = n.min(frames - pos);
+            } else if !stopped && done + n > play_frames {
                 // stop exactly at `to`: render up to it, then let tails ring
                 let k = play_frames.saturating_sub(done);
                 if k > 0 {
@@ -1780,18 +2047,27 @@ impl Engine {
         let total = data.len() / 2;
         // one pass per loop cycle; a last pass cut off within a beat of the wrap is not a take
         let mut bounds = vec![0];
-        bounds.extend(take.marks.iter().copied().filter(|&m| m < total));
-        bounds.push(total);
-        let mut passes: Vec<(f64, &[f32])> = vec![];
+        bounds.extend(take.marks.iter().copied().take_while(|&m| m <= total));
+        let complete = bounds.len() - 1;
+        if bounds.last() != Some(&total) {
+            bounds.push(total);
+        }
+        let mut passes = vec![];
         for k in 0..bounds.len() - 1 {
             let (f0, f1) = (bounds[k], bounds[k + 1]);
             let secs = f1.saturating_sub(f0) as f64 / sr;
-            let cut_short = k > 0 && k == bounds.len() - 2;
+            let cut_short = k > 0 && k >= complete;
             if secs < if cut_short { spb } else { 0.05 } {
                 continue;
             }
             let start = if k == 0 { take.start } else { take.lap.map(|l| l.0).unwrap_or(take.start) };
-            passes.push((start, &data[f0 * 2..f1 * 2]));
+            let full_len = take.lap.filter(|_| k < complete).map(|(_, end)| end - start);
+            // Each loop boundary is rounded to a device frame. Normalize that rounding only;
+            // a tempo or range edit during recording can change the actual pass length.
+            let exact = full_len
+                .map(|beats| (beats, (beats * spb * sr).round() as usize))
+                .filter(|(_, frames)| *frames > 0 && frames.abs_diff(f1 - f0) <= 1);
+            passes.push((start, exact, &data[f0 * 2..f1 * 2]));
         }
         if passes.is_empty() {
             return;
@@ -1799,19 +2075,32 @@ impl Engine {
         let before = c.project.clone();
         let dir = audio_dir(c);
         let mut landed = vec![];
-        for (start, data) in passes {
+        for (start, exact, data) in passes {
+            let mut data = data.to_vec();
+            if let Some((_, frames)) = exact {
+                data.resize(frames * 2, 0.0);
+            }
             let secs = data.len() as f64 / 2.0 / sr;
             let id = c.project.alloc_id();
             let n = c.project.sources.iter().filter(|s| s.name.starts_with("Take")).count() + 1;
             let name = format!("Take {n}");
             let path = fresh_path(&dir, &format!("{} {}", name, id));
-            if let Err(e) = write_wav(&path, data, take.sr) {
+            if let Err(e) = write_wav(&path, &data, take.sr) {
                 log::error!("could not write recording: {e}");
             }
-            let audio = Audio::from_stereo(data.to_vec(), take.sr, 1);
-            c.project.sources.push(Source { id, name, color: "#e05263".into(), path: path.display().to_string(), dur: secs, sr: take.sr, ch: 1, peak_db: crate::dsp::gain_to_db(audio.peak()) });
+            let audio = Audio::from_stereo(data, take.sr, 1);
+            c.project.sources.push(Source {
+                id,
+                name,
+                color: "#e05263".into(),
+                path: path.display().to_string(),
+                dur: secs,
+                sr: take.sr,
+                ch: 1,
+                peak_db: crate::dsp::gain_to_db(audio.peak()),
+            });
             c.sources.insert(id, Arc::new(audio));
-            landed.push((id, start, (secs / spb).min(TOTAL_BEATS - start)));
+            landed.push((id, start, exact.map_or(secs / spb, |(beats, _)| beats).min(TOTAL_BEATS - start)));
         }
         crate::comp::land_takes(&mut c.project, take.track as u32, &landed);
         push_undo(c, before);
@@ -1941,7 +2230,8 @@ impl Engine {
         let n = c.project.patterns.iter().filter(|p| p.name.starts_with("MIDI take")).count() + 1;
         let pid = c.project.alloc_id();
         let cid = c.project.alloc_id();
-        let pattern = Pattern { id: pid, name: format!("MIDI take {n}"), color, len: laid.len, min_len: laid.len, notes: laid.notes, swing: 0.0 };
+        let pattern =
+            Pattern { id: pid, name: format!("MIDI take {n}"), color, len: laid.len, min_len: laid.len, notes: laid.notes, swing: 0.0 };
         let clip = Clip {
             id: cid,
             track: track as u32,
@@ -1960,9 +2250,9 @@ impl Engine {
             tune: None,
             stretch: 1.0,
             resample: false,
+            pitch: 0.0,
         };
-        drop(c);
-        if let Err(e) = self.apply(&[Op::PutPattern { pattern }, Op::PutClips { clips: vec![clip] }], false, None) {
+        if let Err(e) = self.apply_locked(c, &[Op::PutPattern { pattern }, Op::PutClips { clips: vec![clip] }], false, None) {
             log::error!("could not place the MIDI take: {e}");
         }
     }
@@ -2017,10 +2307,29 @@ impl Engine {
         write_wav(&path, &data, sr)?;
         let audio = Audio::from_stereo(data, sr, ch);
         let before = c.project.clone();
-        c.project.sources.push(Source { id, name, color: "#e05263".into(), path: path.display().to_string(), dur: audio.seconds(), sr, ch, peak_db: crate::dsp::gain_to_db(audio.peak()) });
+        c.project.sources.push(Source {
+            id,
+            name,
+            color: "#e05263".into(),
+            path: path.display().to_string(),
+            dur: audio.seconds(),
+            sr,
+            ch,
+            peak_db: crate::dsp::gain_to_db(audio.peak()),
+        });
         c.sources.insert(id, Arc::new(audio));
         if let Some(x) = c.project.clips.iter_mut().find(|x| x.id == clip_id) {
-            *x = Clip { kind: ClipKind::Audio, source: id, offset: 0.0, norm: false, rev: false, tune: None, stretch: 1.0, resample: false, ..clip.clone() };
+            *x = Clip {
+                kind: ClipKind::Audio,
+                source: id,
+                offset: 0.0,
+                norm: false,
+                rev: false,
+                tune: None,
+                stretch: 1.0,
+                resample: false,
+                ..clip.clone()
+            };
         }
         if !c.project.clips.iter().any(|x| x.kind == ClipKind::Comp && x.source == comp.id) {
             c.project.comps.retain(|x| x.id != comp.id);
@@ -2071,6 +2380,14 @@ fn fx_send(f: &Fx) -> (Option<ParamBlock>, f32) {
 
 fn c_watch(w: &[Id]) -> Vec<Id> {
     w.to_vec()
+}
+
+/// The name without a trailing " #n" (the number "Make unique" adds).
+fn unique_base(name: &str) -> &str {
+    match name.rsplit_once(" #") {
+        Some((b, n)) if !b.is_empty() && !n.is_empty() && n.bytes().all(|d| d.is_ascii_digit()) => b,
+        _ => name,
+    }
 }
 
 fn push_undo(c: &mut Core, before: Project) {
@@ -2136,6 +2453,18 @@ fn send(c: &mut Core, cmd: Cmd) {
     }
 }
 
+fn wait_for_take_input(shared: &Shared, timeout: Duration) {
+    let start = std::time::Instant::now();
+    while shared.finishing_take.load(Acquire) {
+        if start.elapsed() >= timeout {
+            // A disconnected or stalled device must not prevent Stop from completing.
+            shared.finishing_take.store(false, Release);
+            return;
+        }
+        thread::sleep(Duration::from_millis(1));
+    }
+}
+
 fn watch_cmd(ids: &[Id]) -> Cmd {
     let mut a = [u64::MAX; WATCH_SLOTS];
     for (i, id) in ids.iter().take(WATCH_SLOTS).enumerate() {
@@ -2196,7 +2525,10 @@ fn dirs_data() -> PathBuf {
 
 fn audio_dir(c: &Core) -> PathBuf {
     match &c.path {
-        Some(p) => p.parent().unwrap_or(Path::new(".")).join(format!("{} Audio", p.file_stem().map(|s| s.to_string_lossy().into_owned()).unwrap_or_default())),
+        Some(p) => p
+            .parent()
+            .unwrap_or(Path::new("."))
+            .join(format!("{} Audio", p.file_stem().map(|s| s.to_string_lossy().into_owned()).unwrap_or_default())),
         None => scratch_dir(),
     }
 }
@@ -2250,7 +2582,18 @@ fn audible_tracks(p: &Project) -> Vec<(f32, bool)> {
 
 fn audible_inserts(p: &Project) -> Vec<(Id, f32, f32, f32, bool)> {
     let any_solo = p.inserts.iter().any(|m| m.id != 0 && m.solo);
-    p.inserts.iter().map(|m| (m.id, fader_gain(m.vol), m.pan.clamp(-1.0, 1.0), if m.width.is_finite() { m.width.clamp(0.0, 2.0) } else { 1.0 }, !m.muted && (m.id == 0 || !any_solo || m.solo))).collect()
+    p.inserts
+        .iter()
+        .map(|m| {
+            (
+                m.id,
+                fader_gain(m.vol),
+                m.pan.clamp(-1.0, 1.0),
+                if m.width.is_finite() { m.width.clamp(0.0, 2.0) } else { 1.0 },
+                !m.muted && (m.id == 0 || !any_solo || m.solo),
+            )
+        })
+        .collect()
 }
 
 /// Frames between the timeline and the speakers inside the mixer: the slowest non-master
@@ -2310,10 +2653,29 @@ fn build_patterns(p: &Project, audio: &HashMap<Id, Arc<Audio>>, keys: Option<&Ar
             };
             let (keys_release, keys_dynamics) = ks.map(|k| (k.release / 1000.0, k.dynamics / 100.0)).unwrap_or((0.35, 1.0));
             let smp = match c.src {
-                ChannelSrc::Sample { source, sampler } => SmpRt::new(&sampler, p.sources.iter().find(|s| s.id == source).map(|s| s.peak_db)),
+                ChannelSrc::Sample { source, sampler } => {
+                    SmpRt::new(&sampler, p.sources.iter().find(|s| s.id == source).map(|s| s.peak_db))
+                }
                 _ => SmpRt::default(),
             };
-            ChanRt { id: c.id, kind, sample, smp, keys: ks.and(keys.cloned()), keys_release, keys_dynamics, root: c.root, gain, pan, gain0: gain, pan0: pan, on, insert, heard, home: insert.or(heard).unwrap_or(0) }
+            ChanRt {
+                id: c.id,
+                kind,
+                sample,
+                smp,
+                keys: ks.and(keys.cloned()),
+                keys_release,
+                keys_dynamics,
+                root: c.root,
+                gain,
+                pan,
+                gain0: gain,
+                pan0: pan,
+                on,
+                insert,
+                heard,
+                home: insert.or(heard).unwrap_or(0),
+            }
         })
         .collect();
     let pats = p
@@ -2328,7 +2690,13 @@ fn build_patterns(p: &Project, audio: &HashMap<Id, Arc<Audio>>, keys: Option<&Ar
                 .filter_map(|n| {
                     let ci = p.channels.iter().position(|c| c.id == n.ch)?;
                     let step = n.step + swing_offset(n.step, pt.swing);
-                    Some(NoteRt { beat: step as f64 / 4.0, len: n.len as f64 / 4.0, chan: ci, key: n.p.unwrap_or(p.channels[ci].root), vel: n.v.clamp(0.0, 1.0) })
+                    Some(NoteRt {
+                        beat: step as f64 / 4.0,
+                        len: n.len as f64 / 4.0,
+                        chan: ci,
+                        key: n.p.unwrap_or(p.channels[ci].root),
+                        vel: n.v.clamp(0.0, 1.0),
+                    })
                 })
                 .collect();
             PatRt { id: pt.id, len: pt.len, notes, home: pat_home(pt.id) }
@@ -2339,7 +2707,15 @@ fn build_patterns(p: &Project, audio: &HashMap<Id, Arc<Audio>>, keys: Option<&Ar
 
 /// Builds the mixer graph. Effects in `live` are left as `proc: None` so the audio
 /// thread keeps the running instance; everything else is created and prepared here.
-pub(crate) fn build_graph(p: &Project, live: &HashSet<Id>, sr: f32, max_block: usize, factory: &dyn PluginFactory, live_instances: bool, errs: &mut HashMap<Id, String>) -> Graph {
+pub(crate) fn build_graph(
+    p: &Project,
+    live: &HashSet<Id>,
+    sr: f32,
+    max_block: usize,
+    factory: &dyn PluginFactory,
+    live_instances: bool,
+    errs: &mut HashMap<Id, String>,
+) -> Graph {
     let ins_state = audible_inserts(p);
     let lat: Vec<usize> = p.inserts.iter().map(|m| m.fx.iter().map(|f| crate::catalog::latency(f, sr)).sum()).collect();
     let max_lat = lat.iter().skip(1).copied().max().unwrap_or(0);
@@ -2348,36 +2724,35 @@ pub(crate) fn build_graph(p: &Project, live: &HashSet<Id>, sr: f32, max_block: u
         .iter()
         .zip(ins_state)
         .map(|(m, (id, gain, pan, width, on))| {
-            let fx = m
-                .fx
-                .iter()
-                .map(|f| {
-                    let proc: Option<Box<dyn Processor>> = if live.contains(&f.id) {
-                        None
-                    } else if f.kind == FxKind::Vst3 {
-                        match factory.create(f.id, f.plugin.as_ref().unwrap(), sr, max_block, live_instances) {
-                            Ok(p) => {
-                                errs.remove(&f.id);
-                                Some(p)
+            let fx =
+                m.fx.iter()
+                    .map(|f| {
+                        let proc: Option<Box<dyn Processor>> = if live.contains(&f.id) {
+                            None
+                        } else if f.kind == FxKind::Vst3 {
+                            match factory.create(f.id, f.plugin.as_ref().unwrap(), sr, max_block, live_instances) {
+                                Ok(p) => {
+                                    errs.remove(&f.id);
+                                    Some(p)
+                                }
+                                Err(e) => {
+                                    errs.insert(f.id, e);
+                                    None
+                                }
                             }
-                            Err(e) => {
-                                errs.insert(f.id, e);
-                                None
+                        } else {
+                            let mut pr = crate::dsp::create(f.kind).unwrap();
+                            pr.prepare(sr, max_block);
+                            pr.set_params(&param_block(f));
+                            if let Some(m) = &f.maps {
+                                let _ = pr.swap_data(Box::new(m.clone()));
                             }
-                        }
-                    } else {
-                        let mut pr = crate::dsp::create(f.kind).unwrap();
-                        pr.prepare(sr, max_block);
-                        pr.set_params(&param_block(f));
-                        if let Some(m) = &f.maps {
-                            let _ = pr.swap_data(Box::new(m.clone()));
-                        }
-                        Some(pr)
-                    };
-                    let params = if f.kind == FxKind::Vst3 { None } else { Some(param_block(f)) };
-                    FxSlot::new(f.id, f.bypass, f.mix.clamp(0.0, 1.0), proc, params, crate::catalog::latency(f, sr))
-                })
-                .collect();
+                            Some(pr)
+                        };
+                        let params = if f.kind == FxKind::Vst3 { None } else { Some(param_block(f)) };
+                        FxSlot::new(f.id, f.bypass, f.mix.clamp(0.0, 1.0), proc, params, crate::catalog::latency(f, sr))
+                    })
+                    .collect();
             let k = p.inserts.iter().position(|x| x.id == id).unwrap_or(0);
             let comp = if k == 0 { 0 } else { max_lat - lat[k] };
             InsertRt::new(id, gain, pan, width, on, fx, max_block).with_delay(comp)
@@ -2397,10 +2772,17 @@ pub(crate) fn build_graph(p: &Project, live: &HashSet<Id>, sr: f32, max_block: u
 /// What an audio clip plays and the rate it reads it at (`SourceStore::clip_play`).
 type ClipAudioFn<'a> = dyn FnMut(&Clip) -> Option<(Arc<Audio>, f64)> + 'a;
 
-pub(crate) fn build_timeline(p: &Project, audio: &mut ClipAudioFn<'_>, takes: &HashMap<Id, Arc<Audio>>, audition: &HashMap<Id, Id>, keys: Option<&Arc<crate::keys::KeysBank>>) -> Timeline {
+pub(crate) fn build_timeline(
+    p: &Project,
+    audio: &mut ClipAudioFn<'_>,
+    takes: &HashMap<Id, Arc<Audio>>,
+    audition: &HashMap<Id, Id>,
+    keys: Option<&Arc<crate::keys::KeysBank>>,
+) -> Timeline {
     // comps are resolved once each, shared by every clip that plays them
     let spb = 60.0 / p.bpm;
-    let comps: HashMap<Id, Arc<crate::comp::CompRt>> = p.comps.iter().map(|cp| (cp.id, Arc::new(crate::comp::build(cp, spb, audition.get(&cp.id).copied(), takes)))).collect();
+    let comps: HashMap<Id, Arc<crate::comp::CompRt>> =
+        p.comps.iter().map(|cp| (cp.id, Arc::new(crate::comp::build(cp, spb, audition.get(&cp.id).copied(), takes)))).collect();
     let (chans, pats) = build_patterns(p, takes, keys);
     // automation envelopes whose target still exists
     let mut autos = vec![];
@@ -2438,7 +2820,21 @@ pub(crate) fn build_timeline(p: &Project, audio: &mut ClipAudioFn<'_>, takes: &H
                 None => continue,
             },
         };
-        clips.push(ClipRt { id: c.id, track: c.track as usize, start: c.start, end: c.start + c.len, offset: c.offset, rate, gain: c.gain, pan: c.pan, fade_in: c.fade_in, fade_out: c.fade_out, src, gain0: c.gain, pan0: c.pan });
+        clips.push(ClipRt {
+            id: c.id,
+            track: c.track as usize,
+            start: c.start,
+            end: c.start + c.len,
+            offset: c.offset,
+            rate,
+            gain: c.gain,
+            pan: c.pan,
+            fade_in: c.fade_in,
+            fade_out: c.fade_out,
+            src,
+            gain0: c.gain,
+            pan0: c.pan,
+        });
     }
     clips.sort_by(|a, b| a.start.total_cmp(&b.start));
     // clip targets point at the sorted list (a muted clip is not in it: its automation rests)

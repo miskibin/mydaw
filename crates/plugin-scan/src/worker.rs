@@ -206,19 +206,10 @@ pub fn run_worker_if_requested(handlers: &[WorkerHandler]) {
     };
     let report = match handlers.iter().find(|handler| handler.format == format) {
         Some(handler) => match run_handler(handler, &module) {
-            Ok(plugins) => WorkerReport::Ok {
-                v: PROTOCOL_VERSION,
-                plugins,
-            },
-            Err(message) => WorkerReport::Error {
-                v: PROTOCOL_VERSION,
-                message,
-            },
+            Ok(plugins) => WorkerReport::Ok { v: PROTOCOL_VERSION, plugins },
+            Err(message) => WorkerReport::Error { v: PROTOCOL_VERSION, message },
         },
-        None => WorkerReport::Error {
-            v: PROTOCOL_VERSION,
-            message: format!("this build has no scanner for plugin format '{format}'"),
-        },
+        None => WorkerReport::Error { v: PROTOCOL_VERSION, message: format!("this build has no scanner for plugin format '{format}'") },
     };
     write_report(&report);
     // Not `return`: a worker has done its whole job, and running the DAW's
@@ -241,9 +232,8 @@ fn run_handler(handler: &WorkerHandler, module: &Path) -> Result<serde_json::Val
 /// Print a report on the one line the parent reads.
 fn write_report(report: &WorkerReport) {
     use std::io::Write;
-    let json = serde_json::to_string(report).unwrap_or_else(|err| {
-        format!(r#"{{"status":"error","v":{PROTOCOL_VERSION},"message":"unserialisable result: {err}"}}"#)
-    });
+    let json = serde_json::to_string(report)
+        .unwrap_or_else(|err| format!(r#"{{"status":"error","v":{PROTOCOL_VERSION},"message":"unserialisable result: {err}"}}"#));
     let mut stdout = std::io::stdout();
     let _ = writeln!(stdout, "{RESULT_PREFIX}{json}");
     let _ = stdout.flush();
@@ -333,10 +323,7 @@ pub fn resolve_worker(format: &str) -> Option<PathBuf> {
     // `target/<profile>/examples/`, one level below the dedicated workers.
     // Restricted to those two names so an installed WAVE never goes looking
     // outside its own directory for something to execute.
-    if dir
-        .file_name()
-        .is_some_and(|leaf| leaf == "deps" || leaf == "examples")
-    {
+    if dir.file_name().is_some_and(|leaf| leaf == "deps" || leaf == "examples") {
         if let Some(parent) = dir.parent() {
             let up = parent.join(&name);
             if up.is_file() {
@@ -356,20 +343,12 @@ pub fn resolve_worker(format: &str) -> Option<PathBuf> {
 ///
 /// The child is killed at `timeout`, and the parent survives whatever it was
 /// doing. That is the whole point.
-pub fn scan_in_child(
-    spawn: &WorkerSpawn,
-    format: &str,
-    module: &Path,
-    timeout: Duration,
-) -> Option<WorkerOutcome> {
+pub fn scan_in_child(spawn: &WorkerSpawn, format: &str, module: &Path, timeout: Duration) -> Option<WorkerOutcome> {
     let started = spawn.start(format, module)?;
     let mut child = match started {
         Ok(child) => child,
         Err(err) => {
-            log::debug!(
-                "could not start a scan worker for {}: {err}",
-                module.display()
-            );
+            log::debug!("could not start a scan worker for {}: {err}", module.display());
             return None;
         }
     };
@@ -379,11 +358,9 @@ pub fn scan_in_child(
     // reading to the end without waiting would never notice a hang.
     let (tx, rx) = mpsc::sync_channel(1);
     let reader = child.stdout.take().map(|mut stdout| {
-        std::thread::Builder::new()
-            .name("wave-scan-reader".to_owned())
-            .spawn(move || {
-                let _ = tx.send(read_capped(&mut stdout));
-            })
+        std::thread::Builder::new().name("wave-scan-reader".to_owned()).spawn(move || {
+            let _ = tx.send(read_capped(&mut stdout));
+        })
     });
     if let Some(Err(err)) = reader {
         log::debug!("could not start a scan reader thread: {err}");
@@ -408,9 +385,7 @@ pub fn scan_in_child(
             }
             Err(err) => {
                 let _ = child.kill();
-                return Some(WorkerOutcome::Crashed(format!(
-                    "could not wait for the scan worker: {err}"
-                )));
+                return Some(WorkerOutcome::Crashed(format!("could not wait for the scan worker: {err}")));
             }
         }
     };
@@ -457,9 +432,7 @@ pub fn interpret(output: &str, success: bool, code: Option<i32>) -> WorkerOutcom
             if v == PROTOCOL_VERSION {
                 WorkerOutcome::Scanned(plugins)
             } else {
-                WorkerOutcome::Crashed(format!(
-                    "the scan worker speaks protocol {v}, this build speaks {PROTOCOL_VERSION}"
-                ))
+                WorkerOutcome::Crashed(format!("the scan worker speaks protocol {v}, this build speaks {PROTOCOL_VERSION}"))
             }
         }
         Some(Ok(WorkerReport::Error { message, .. })) if success => WorkerOutcome::Refused(message),
@@ -480,9 +453,7 @@ fn exit_description(code: Option<i32>) -> String {
     match code {
         // Windows reports an access violation as an unhandled exception code,
         // which is far more useful spelled out than as a bare number.
-        Some(code) if code as u32 == 0xC000_0005 => {
-            "the scan worker crashed reading this module (access violation)".to_owned()
-        }
+        Some(code) if code as u32 == 0xC000_0005 => "the scan worker crashed reading this module (access violation)".to_owned(),
         Some(code) => format!("the scan worker crashed reading this module (exit code {code})"),
         None => "the scan worker was terminated while reading this module".to_owned(),
     }
@@ -521,24 +492,15 @@ mod tests {
     fn plugin_chatter_around_the_result_line_is_ignored() {
         // Vendors print. A licensing library's banner must not be mistaken for a
         // scan result, and must not hide one either.
-        let out = format!(
-            "iLok: checking licence...\n{}garbage trailing line\n",
-            json_line(r#"{"status":"ok","v":1,"plugins":[]}"#)
-        );
-        assert!(matches!(
-            interpret(&out, true, Some(0)),
-            WorkerOutcome::Scanned(_)
-        ));
+        let out = format!("iLok: checking licence...\n{}garbage trailing line\n", json_line(r#"{"status":"ok","v":1,"plugins":[]}"#));
+        assert!(matches!(interpret(&out, true, Some(0)), WorkerOutcome::Scanned(_)));
     }
 
     #[test]
     fn a_worker_that_says_nothing_is_a_crash_however_it_exited() {
         // Both halves matter. Exit code 0 with no answer means something called
         // `exit()` inside the module; a non-zero code means it died outright.
-        assert!(matches!(
-            interpret("", true, Some(0)),
-            WorkerOutcome::Crashed(_)
-        ));
+        assert!(matches!(interpret("", true, Some(0)), WorkerOutcome::Crashed(_)));
         assert!(matches!(
             interpret("hello from a plugin\n", false, Some(3)),
             WorkerOutcome::Crashed(message) if message.contains("exit code 3")
@@ -552,26 +514,18 @@ mod tests {
     #[test]
     fn an_access_violation_is_named_rather_than_numbered() {
         let outcome = interpret("", false, Some(0xC000_0005_u32 as i32));
-        assert!(
-            matches!(outcome, WorkerOutcome::Crashed(ref m) if m.contains("access violation")),
-            "got {outcome:?}"
-        );
+        assert!(matches!(outcome, WorkerOutcome::Crashed(ref m) if m.contains("access violation")), "got {outcome:?}");
     }
 
     #[test]
     fn a_truncated_or_mistyped_answer_is_a_crash_not_a_plugin_list() {
-        assert!(matches!(
-            interpret(&json_line("{\"status\":\"ok\","), true, Some(0)),
-            WorkerOutcome::Crashed(_)
-        ));
+        assert!(matches!(interpret(&json_line("{\"status\":\"ok\","), true, Some(0)), WorkerOutcome::Crashed(_)));
     }
 
     #[test]
     fn a_worker_from_another_protocol_version_is_refused_loudly() {
         let out = json_line(r#"{"status":"ok","v":99,"plugins":[]}"#);
-        assert!(
-            matches!(interpret(&out, true, Some(0)), WorkerOutcome::Crashed(ref m) if m.contains("protocol 99")),
-        );
+        assert!(matches!(interpret(&out, true, Some(0)), WorkerOutcome::Crashed(ref m) if m.contains("protocol 99")),);
     }
 
     #[test]
@@ -579,10 +533,7 @@ mod tests {
         // The module was read and then took the process down on the way out.
         // Reporting its classes and carrying on would mean opening it again.
         let out = json_line(r#"{"status":"ok","v":1,"plugins":[]}"#);
-        assert!(matches!(
-            interpret(&out, false, Some(1)),
-            WorkerOutcome::Crashed(_)
-        ));
+        assert!(matches!(interpret(&out, false, Some(1)), WorkerOutcome::Crashed(_)));
     }
 
     #[test]
@@ -591,10 +542,7 @@ mod tests {
         // never become eligible to be spawned as its own worker, or one stray
         // `WorkerSpawn::Auto` would re-run the whole test suite once per module.
         assert!(worker_request().is_none());
-        assert!(
-            !is_worker_capable(),
-            "nothing in this crate's tests may opt this executable in"
-        );
+        assert!(!is_worker_capable(), "nothing in this crate's tests may opt this executable in");
     }
 
     #[test]

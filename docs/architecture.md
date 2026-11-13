@@ -74,6 +74,18 @@ resampled (`ClipRt::rate = 1/s`, pitch follows speed), and the state's `stretchi
 is rendered once, on release). Offline bounces render missing stretches themselves, outside
 the project lock. `"resample": true` always plays resampled (turntable-style), no render.
 
+### Transposed audio clips
+
+An audio clip may carry `"pitch": p`, semitones within ±12 (cents as the fraction, absent = 0):
+the clip sounds `p` semitones higher and keeps its length. It is rendered by the same path as a
+stretch, in the same Signalsmith pass (`stretch_shift_stereo`: length × `s`, transposed by `p`),
+cached by (source, pre-stretch audio, render ratio, `p`). The render ratio is `s`, or 1 for a
+resampled clip — that one reads the render at `1/s`, so speed and pitch move together on top of
+the transposition. Until the render lands the clip plays at its own pitch (`stretching` names
+it). Other clip kinds cannot be transposed (`putClips` rejects it). The sample window sets it
+with PITCH and FINE (whole semitones toward 0, and cents) and fits a clip to 1 or 2 beats or
+1–8 bars (`fitClip`: the stretch scales by `beats / len`, the offset with it, the start stays).
+
 ## Channels, patterns and notes (Channel Rack and Piano roll)
 
 Channels are **global to the project**, like FL Studio's Channel Rack: one row per
@@ -155,10 +167,14 @@ clip that hides N − 1 clips entirely (`lib/overlaps.ts`). Clicking such a clip
 the status line. The overlay is recomputed with the fades on clip edits and tile moves,
 never per frame.
 
-**The standard library** (`crates/engine/src/factory.rs`). Fifty CC0 one-shots (kicks,
-snares, claps, hats, cymbals, toms, percussion, a few tonal ones) are embedded in the engine
-(`crates/engine/library`, 3.2 MB of FLAC; built by `scripts/make-factory-library.py`,
-which trims, fades and normalises picks from the kits pinned in `assets-manifest.json`).
+**The standard library** (`crates/engine/src/factory.rs`). 148 CC0 one-shots in ten groups
+(kicks, snares, claps, hats, cymbals, toms, percussion, tonal, orchestra, FX) are embedded in
+the engine (`crates/engine/library`, 14 MB of FLAC). `scripts/make-factory-library.py` builds
+them: it downloads each pick at a pinned commit (the kits in `assets-manifest.json`, and the
+files listed under `factory` there, each with its SHA-256), trims, fades and normalises it,
+tunes the pitched ones onto their root key (`pitched` in the table: the browser shows that
+key) and mixes the orchestra hits and stabs from tuned layers. A file whose audio did not
+change is not rewritten, and existing files keep their names: projects name them by path.
 There is nothing synthesised behind a channel any more: a new project's Channel Rack is four
 samplers of these files (`STARTER_KIT`: Kick, Clap, Hat, Snare), and the program starts
 with that empty project. A source inside the sample library is stored by a portable
@@ -210,10 +226,14 @@ All edits are "put" ops, applied atomically per batch:
 (also removes its notes in every pattern; `removeSource` removes sampler channels of that
 source), `putSource{source}`,
 `removeSource{id}`, `putAutomation{automation}`, `removeAutomation{id}`,
+`transformNotes{pattern, verb, seed, select}` (deterministic note transforms: verb kinds
+`humanize|quantize|euclidFill|strum|euclidDrums|melody`; same seed and notes ⇒ identical
+notes; `select` limits the notes touched), `setKey{key, scale}` (project key/scale for the
+scale-aware tools),
 `putComp{comp}`, `removeComp{id}`, `putNotebook{notebook}`, `setBpm{bpm}`, `setLoop{loop}`.
 
 Every effect has `mix` (0..1 dry/wet, default 1). Automation:
-`project.automations[] = {id, name, color, target, points:[{t, v}]}`; a clip of
+`project.key` (0 = C, `null` = none) and `project.scale` (0 chromatic, 1 major, 2 minor, 3/4 pentatonic) feed the scale-aware note tools; `project.automations[] = {id, name, color, target, points:[{t, v}]}`; a clip of
 kind `auto` with `ref` = automation id plays it (`offset` in beats into it).
 Targets: `{kind:"fx", fxId, param}` (catalog id, or `band:<i>:f|g|q` for EQ:
 f log 20–20k, g −30..30 dB, q log 0.1–18), `{kind:"mix", fxId}`,
@@ -248,17 +268,20 @@ client: take them from `project.nextId` and increase locally (the engine bumps
 | `source_peaks` | `{id, norm?, rev?}` | `ArrayBuffer` of f32 `[min,max]` pairs, 100 per second of audio |
 | `pitch_analyze` | `{clipId}` | `{rate, curve: (midi\|null)[], levels: number[], confidence: number[], notes: [{start,end,pitch,level}], backend: "rmvpe"\|"yin"}` — pitch every 1/rate s (null = unvoiced: breath, sibilant, silence); times in seconds of the source |
 | `pitch_target` | `{clipId, reference?: RefTune}` | `PitchTarget` (below) — Tune to Reference for the clip, with `reference` or the clip's own `tune.reference` (preview before applying) |
+| `melody_channels` | `{clipId}` | `[{channel, name, notes, fit}]` — channels whose notes the playlist plays over the clip, best `fit` (0..1, share of the sung frames within a semitone of a sounding note) first |
+| `melody_reference` | `{clipId, channel, span?: [s, s]}` | `{melody: Melody, fit}` — those notes as a melody reference (a copy, seconds of the source; `span` = only notes overlapping it) |
 | `f0_model_status` | – | `{id, name, bytes, installed, backend, licenseNote, licenseUrl, path, error}` |
 | `f0_model_install` | – | – ; downloads RMVPE, verifies size and SHA-256, activates it; progress as event `model-progress {id,done,total,error?}` |
 | `music_analyze` | `{clipId?, excludeFx?}` | `{tempo: {bpm, confidence, candidates:[{bpm,score}], firstBeat}\|null, key: {root, minor, confidence, candidates:[{root,minor,score}], chroma:number[12], tuningCents}\|null}` — tempo and key of a clip, or of the project's active audio clips (excluding tracks routed to `excludeFx`'s insert) |
 | `auto_vocal_plan` | `{clipId, beatClipId?, style?: "natural"\|"hard"}` | `AutoVocalPlan` (`ui/src/api/types.ts`): `{version, style, analysis, chain: [{type, params, mix, enabled, note}], trackGainDb\|null, stages, warnings}` — "Auto wokal": measures the vocal clip's region and calibrates tune → rider → fet → comp → deess → reverb → limit on it (`crates/engine/src/autovocal.rs`; key from `beatClipId`, else from the tracks not routed to the vocal's insert). Read-only, seconds per minute of audio; the UI applies the chain with `apply_ops` |
 | `clip_peaks` | `{clipId}` | like `source_peaks`, but of what the clip actually plays (norm/rev/pitch edits applied), in source time: a stretched clip draws them stretched |
 | `trim_clip` | `{clipId}` | `{sourceId}` — writes a new file with only the clip region, clip now points at it |
+| `make_unique` | `{clipIds}` | `{sourceId, track, insertId}` — FL's "Make unique" for audio clips (one source, one track): a copy of the source entry (same file and decoded audio, name "Name #n"), a new track right below that plays where the old track does (the master unless the user routed it; no insert is claimed), the clips move there. One undo step |
 | `flatten_comp` | `{clipId}` | `{sourceId}` — renders a comp clip to a new file; the clip becomes an `audio` clip, the takes go (one undo step) |
 | `comp_audition` | `{compId, takeId?}` | – ; plays one whole take instead of the comp (`null` = the comp). Live only: not saved, not undone, ignored by renders |
 | `note_audition` | `{ch, key?, vel?, pattern?}` | – ; plays one note of a channel now (step clicks, piano-roll keys). `pattern`: the edited pattern, so a track-routed channel is heard through that pattern's track. Not an edit |
 | `pattern_play` | `{pattern}` (`null` stops) | – ; loops one pattern on its own. Starting it stops the song, starting the song stops it (FL's PAT / SONG). Position in telemetry `patBeat` |
-| `preview_clip` / `preview_file` / `preview_stop` | `{clipId}` / `{path}` / – | – |
+| `preview_clip` / `preview_file` / `preview_stop` | `{clipId, from?}` / `{path}` / – | – — `from` (seconds of the source): the take alone with its pitch edits at the source's speed from there to the clip's end (the pitch editor's Solo); rejects when nothing is left |
 | `audio_hosts` | – | `[{id, name}]` (ids like `"wasapi"`, `"asio"`, `"alsa"`) |
 | `audio_devices` | `{host}` | `{outputs: string[], inputs: string[]}` |
 | `audio_get_config` / `audio_set_config` | `– / AudioConfig` | `AudioStatus` (a config without `recOffsetMs` keeps the saved one; changing only `recOffsetMs` does not restart the device) |
@@ -266,12 +289,14 @@ client: take them from `project.nextId` and increase locally (the engine bumps
 | `asio_control_panel` | – | – (opens the driver's own panel, Windows only) |
 | `library_list` | – | `{kits:[{id,name,description,bytes,count,installed}], folders:string[]}` |
 | `library_install` | `{id}` | – ; progress as event `library-progress {id,done,total,error?}` |
-| `library_files` | `{kit?}` or `{folder?}` | `[{name, path, group, root?}]`; kit `Standard` = the standard library (always installed); `root` = the file's own pitch when the library knows it |
+| `library_files` | `{kit?}` or `{folder?}` | `[{name, path, group, root?, pitched?}]`; kit `Standard` = the standard library (always installed); `root` = the key a sampler made from the file is rooted at, when the library knows it; `pitched` = the file plays a note there (drums and noises do not) |
 | `library_add_folder` / `library_remove_folder` | – (native dialog) / `{path}` | updated `folders` |
-| `project_new` / `project_open` / `project_save` | – / `{path?}` / `{saveAs?}` | `StateDto` / `{state: StateDto, warnings}` or `{cancelled}` / `{path}` or `{cancelled}`. A save first keeps the file it replaces as `<name> (backup).wave` |
+| `project_new` / `project_open` / `project_save` | – / `{path?, ifRevision?}` / `{saveAs?}` | `StateDto` / `{state: StateDto, warnings}` or `{cancelled}` / `{path}` or `{cancelled}`. Open checks the approved revision before replacing the project. A save first keeps the file it replaces as `<name> (backup).wave` |
+| `take_project_open_requests` | – | `string[]`; drains project paths supplied at startup or forwarded to the running Windows instance. The `project-open-requested` event tells the UI to drain again and use its normal guarded open workflow. |
 | `recovery_write` | – | `bool`; the autosave tick for a project with no file: writes its crash-recovery copy (`<data>/WAVE/Recovery/<session>.wave`), or removes it once the project has a file or nothing unsaved |
 | `recovery_list` / `recovery_restore` / `recovery_discard` | – / `{id}` / `{id}` | `[{id, savedMs}]` newest first (copies of sessions that did not exit normally) / `{state, warnings}` (opened as an unsaved project) / – |
-| `export_audio` | `{useLoop, tail, sampleRate}` | `{out, fromBeat, toBeat, tail, stats}` or `{cancelled:true}`; native save dialog; offline master → 32-bit float stereo WAV |
+| `export_audio` | `{useLoop, tail, sampleRate, format?, mp3Kbps?, wavBits?, dither?, wrapTail?}` | `{out, fromBeat, toBeat, tail, stats}` or `{cancelled:true}`; native save dialog; stereo WAV (32-bit float by default or 24-bit PCM) or MP3 |
+| `export_stems` | `{useLoop, tail, sampleRate, includeMaster, wavBits?, dither?, wrapTail?}` | `{dir, fromBeat, toBeat, tail, files, skipped}` or `{cancelled:true}`; native folder dialog; one WAV per insert with sound, optional master mix |
 | `export_cancel` | – | – (abort an in-flight `export_audio` before a file is written) |
 | `vst3_scan` | `{rescan}` | `[{path,cid,name,vendor,category}]` |
 | `vst3_editor` | `{fxId, open}` | – (native window) |
@@ -398,8 +423,9 @@ Projects without `comps` open unchanged (`#[serde(default)]`).
 * **Takes line up with what was heard.** Input captured at a frame was sung
   to playback heard *round trip + PDC* frames earlier. `finalize_take` drops
   that many frames from the front; pass marks stay put, since they already
-  sit on the heard loop boundary. The last *latency* of a take (still in
-  flight at Stop) is not captured.
+  sit on the heard loop boundary. At Stop or punch-out the audio callback
+  captures the input still in flight for the same number of frames before
+  the engine lands the take.
   * *Round trip, per callback* (`wave-audio-io`): output playback − callback
     (cpal) + the age of the input frame played first in this callback. Each
     input packet publishes `origin` = its capture instant − frames pushed
@@ -550,12 +576,26 @@ empty `Dirty`). Old files without `notebook` open with no pages (`#[serde(defaul
 
 ## Pitch edits on audio clips
 
-`clip.tune = { notes: [{start, end, shift, drift, formant, gain}], pencil: [[sec, midi], …] }`
-(seconds into the source; `shift`/`formant` in cents; `drift` 0..1 flattens pitch
+`clip.tune = { notes: [{start, end, shift, drift, formant, gain, speed?}], pencil: [[sec, midi], …] }`
+(seconds into the source; `shift`/`formant` in cents; `speed` ms, see below; `drift` 0..1 flattens pitch
 movement inside the note toward its centre; `gain` dB). Start from
 `pitch_analyze` notes, edit, send with `putClips`. Rendering is offline and
 latency-free; during a gesture the previous render keeps playing and the new
 one is made at `end_gesture`.
+
+**Retune speed.** The correction (edited − sung pitch) follows its target with a one-pole
+lag that reaches 95 % of a change in `speed` ms (Auto-Tune's Retune Speed): a note's own
+`speed`, else `tune.reference.speed`, else immediate. After an unvoiced gap it starts from no
+correction, so the singer's attack is heard and pulled into tune. Below 5 ms (hard tune) the
+render smooths the change over ±5 ms instead of ±17.5 ms, keeping the steps. A tune without
+speeds renders exactly as before they existed. The editor's Correct macro writes Strength
+(`shift` toward the scale note), Speed and Flatten (`drift`) onto the notes; its presets
+(Natural 80 %/120 ms/20 %, Pop 100/50/50, Tight 100/15/80, Robot 100/0/100) are UI only.
+
+**Playback in the editor.** The ruler is the Playlist's: a click sets the start marker (playback
+jumps there), a drag sets the project loop (`setLoop`, one undo step), a double-click removes it;
+Space and Play run the song from the marker in SONG mode, so the vocal is heard in its mix.
+Solo is `preview_clip` with `from`.
 
 ### Tune to Reference (`crates/engine/src/reference.rs`)
 
@@ -596,6 +636,30 @@ type PitchTarget = { rate: number; start: number;            // first analysis f
   alignmentConfidence: number[]; refTime: number[];          // seconds into the reference
   octave: number; notes: Note[]; score: number; reason: string | null };  // reason set = refused
 ```
+
+### Melody as the reference (`crates/engine/src/melody.rs`)
+
+`reference.melody = {channel, span?, notes: [{start, end, key}]}` (source 0, influence 1): a
+copy of the notes `channel` plays over the clip in the playlist (pattern repeats, swing and
+clip edges as the sequencer plays them; muted pattern clips left out), in seconds of the take's
+source — so it moves with the clip, and a later piano roll edit changes nothing until the
+editor's *Update* (shown when `melody_reference` differs from the copy). No alignment is guessed:
+`melody::alignment` builds an `Alignment` for `reference::target` directly — per sung note
+(the editor's segmentation), stretches between played-note edges take the sounding note nearest
+the voice (chords), slivers under 150 ms take their neighbour's (singing early or late keeps its
+own timing), a played change inside one sung note moves to the take's steepest pitch change
+within 150 ms (melisma); full confidence where a note sounds, none elsewhere (ad-libs stay as
+sung); the octave is the multiple of 12 nearest the singing. The Piano roll's *Vocal reference*
+button opens the pitch editor of a vocal the pattern plays over with the selected notes (`span`
+= the source seconds they cover) or all of the channel's.
+
+The other way round, the pitch editor's *Copy notes* (Ctrl+C) puts the selected sung notes (all
+without a selection) on the Piano roll's note clipboard, UI only (`ui/src/lib/vocalNotes.ts`):
+source seconds go through the clip (offset, stretch, tempo) to the 1/16 grid, the key is the
+sounding pitch (edits included, pencil excepted) rounded to a semitone, velocity follows the
+level relative to the loudest copied note, overlaps the grid creates are trimmed (the voice is
+monophonic), and steps count from the bar of the first note, so Ctrl+V in any pattern keeps the
+melody's place in the bar (from the pattern's start; a second paste lands a bar after it).
 
 The RMVPE model is not shipped: `f0_model_install` downloads it (URL,
 size, SHA-256 and licence link are constants in `crates/rmvpe`) to

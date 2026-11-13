@@ -60,19 +60,11 @@ pub struct AllocCount {
 
 /// Runs `f` and returns what the current thread allocated meanwhile.
 pub fn count_allocs<R>(f: impl FnOnce() -> R) -> (R, AllocCount) {
-    let (a0, b0, f0) = (
-        ALLOCS.with(|c| c.get()),
-        BYTES.with(|c| c.get()),
-        FREES.with(|c| c.get()),
-    );
+    let (a0, b0, f0) = (ALLOCS.with(|c| c.get()), BYTES.with(|c| c.get()), FREES.with(|c| c.get()));
     ARMED.with(|a| a.set(true));
     let r = f();
     ARMED.with(|a| a.set(false));
-    let d = AllocCount {
-        allocs: ALLOCS.with(|c| c.get()) - a0,
-        bytes: BYTES.with(|c| c.get()) - b0,
-        frees: FREES.with(|c| c.get()) - f0,
-    };
+    let d = AllocCount { allocs: ALLOCS.with(|c| c.get()) - a0, bytes: BYTES.with(|c| c.get()) - b0, frees: FREES.with(|c| c.get()) - f0 };
     (r, d)
 }
 
@@ -99,14 +91,7 @@ pub fn stats(mut v: Vec<f64>) -> Stats {
     }
     v.sort_by(|a, b| a.total_cmp(b));
     let at = |q: f64| v[((v.len() - 1) as f64 * q).round() as usize];
-    Stats {
-        n: v.len(),
-        mean: v.iter().sum::<f64>() / v.len() as f64,
-        p50: at(0.5),
-        p95: at(0.95),
-        p99: at(0.99),
-        max: *v.last().unwrap(),
-    }
+    Stats { n: v.len(), mean: v.iter().sum::<f64>() / v.len() as f64, p50: at(0.5), p95: at(0.95), p99: at(0.99), max: *v.last().unwrap() }
 }
 
 impl Stats {
@@ -132,13 +117,8 @@ pub fn rss_mib() -> f64 {
             fn GetCurrentProcess() -> isize;
             fn K32GetProcessMemoryInfo(h: isize, c: *mut Counters, cb: u32) -> i32;
         }
-        let mut c = Counters {
-            cb: std::mem::size_of::<Counters>() as u32,
-            page_fault_count: 0,
-            peak_working_set: 0,
-            working_set: 0,
-            rest: [0; 6],
-        };
+        let mut c =
+            Counters { cb: std::mem::size_of::<Counters>() as u32, page_fault_count: 0, peak_working_set: 0, working_set: 0, rest: [0; 6] };
         unsafe {
             if K32GetProcessMemoryInfo(GetCurrentProcess(), &mut c, c.cb) != 0 {
                 return c.working_set as f64 / 1048576.0;
@@ -150,11 +130,7 @@ pub fn rss_mib() -> f64 {
     {
         std::fs::read_to_string("/proc/self/statm")
             .ok()
-            .and_then(|s| {
-                s.split_whitespace()
-                    .nth(1)
-                    .and_then(|x| x.parse::<f64>().ok())
-            })
+            .and_then(|s| s.split_whitespace().nth(1).and_then(|x| x.parse::<f64>().ok()))
             .map(|p| p * 4096.0 / 1048576.0)
             .unwrap_or(0.0)
     }

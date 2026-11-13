@@ -46,20 +46,13 @@ static EXECUTOR: OnceLock<Executor> = OnceLock::new();
 ///
 /// Returns `false` (and changes nothing) if an executor was already installed.
 pub fn set_main_thread_executor(post: impl Fn(MainThreadJob) + Send + Sync + 'static) -> bool {
-    EXECUTOR
-        .set(Executor {
-            thread: std::thread::current().id(),
-            post: Box::new(post),
-        })
-        .is_ok()
+    EXECUTOR.set(Executor { thread: std::thread::current().id(), post: Box::new(post) }).is_ok()
 }
 
 /// Whether plugin work runs inline on the calling thread: it is the UI thread,
 /// or no executor is installed.
 pub fn on_main_thread() -> bool {
-    EXECUTOR
-        .get()
-        .is_none_or(|executor| executor.thread == std::thread::current().id())
+    EXECUTOR.get().is_none_or(|executor| executor.thread == std::thread::current().id())
 }
 
 /// Run `job` on the UI thread and wait for its result.
@@ -67,10 +60,7 @@ pub fn on_main_thread() -> bool {
 /// Must not be called while holding a lock the UI thread may be waiting for:
 /// the wait has no timeout, because the UI thread may legitimately be busy for
 /// a long time (a licence dialog inside a plugin's `initialize`).
-pub(crate) fn run<R: Send + 'static>(
-    stage: &'static str,
-    job: impl FnOnce() -> R + Send + 'static,
-) -> Result<R, Vst3Error> {
+pub(crate) fn run<R: Send + 'static>(stage: &'static str, job: impl FnOnce() -> R + Send + 'static) -> Result<R, Vst3Error> {
     let executor = match EXECUTOR.get() {
         Some(executor) if executor.thread != std::thread::current().id() => executor,
         _ => {

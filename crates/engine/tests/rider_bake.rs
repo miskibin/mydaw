@@ -83,7 +83,9 @@ fn insert_of(p: &Project, track: usize) -> Id {
 
 fn rider_params(look: f64) -> BTreeMap<String, f64> {
     let mut m = wave_engine::catalog::default_params(FxKind::Rider);
-    for (k, v) in [("auto", 0.0), ("target", -24.0), ("floor", -70.0), ("gate", -50.0), ("look", look), ("out", -2.5), ("up", 6.0), ("down", 6.0)] {
+    for (k, v) in
+        [("auto", 0.0), ("target", -24.0), ("floor", -70.0), ("gate", -50.0), ("look", look), ("out", -2.5), ("up", 6.0), ("down", 6.0)]
+    {
         m.insert(k.into(), v);
     }
     m
@@ -172,7 +174,14 @@ fn put_chain(e: &Engine, chain: &[wave_engine::autovocal::PlannedFx], first_id: 
 
 /// Renders the vocal through `live` (rider on the insert), then bakes `rider` and renders
 /// through `rest`; undoes everything afterwards. Returns (live, baked) renders.
-fn live_vs_baked(e: &Engine, clip: Id, live: &[wave_engine::autovocal::PlannedFx], rider: &BTreeMap<String, f64>, rest: &[wave_engine::autovocal::PlannedFx], to: f64) -> (Vec<f32>, Vec<f32>) {
+fn live_vs_baked(
+    e: &Engine,
+    clip: Id,
+    live: &[wave_engine::autovocal::PlannedFx],
+    rider: &BTreeMap<String, f64>,
+    rest: &[wave_engine::autovocal::PlannedFx],
+    to: f64,
+) -> (Vec<f32>, Vec<f32>) {
     put_chain(e, live, 9100);
     let a = e.render(0.0, to, 1.0, SR).unwrap();
     let pdc = wave_engine::engine::playback_latency(&e.project(), SR as f32);
@@ -213,12 +222,16 @@ fn baked_plan_renders_like_the_live_plan() {
     // Pitch correction is not part of the level calibration and baking moves it after the
     // rider (live it runs before it): it stays out of these comparisons.
     let without = |chain: &[wave_engine::autovocal::PlannedFx], kinds: &[FxKind]| -> Vec<wave_engine::autovocal::PlannedFx> {
-        chain.iter().cloned().map(|mut f| {
-            if kinds.contains(&f.kind) {
-                f.enabled = false;
-            }
-            f
-        }).collect()
+        chain
+            .iter()
+            .cloned()
+            .map(|mut f| {
+                if kinds.contains(&f.kind) {
+                    f.enabled = false;
+                }
+                f
+            })
+            .collect()
     };
     // 1. The calibrated dynamics (FET → compressor → de-esser) and the limiter are
     //    time-invariant: the baked chain plays the same samples.
@@ -231,7 +244,10 @@ fn baked_plan_renders_like_the_live_plan() {
     let off = [FxKind::Tune];
     let (live, baked) = live_vs_baked(&e, clip, &without(&live_plan.chain, &off), &rb.params, &without(&plan.chain, &off), to);
     let mono = |x: &[f32]| x.chunks(2).map(|f| 0.5 * (f[0] + f[1])).collect::<Vec<f32>>();
-    let (ll, lb) = (wave_engine::autovocal::integrated_lufs(&mono(&live), SR as f32), wave_engine::autovocal::integrated_lufs(&mono(&baked), SR as f32));
+    let (ll, lb) = (
+        wave_engine::autovocal::integrated_lufs(&mono(&live), SR as f32),
+        wave_engine::autovocal::integrated_lufs(&mono(&baked), SR as f32),
+    );
     assert!((ll - lb).abs() < 0.05, "loudness {ll:.3} vs {lb:.3} LUFS");
     let (tl, tb) = (wave_engine::autovocal::true_peak_db(&mono(&live)), wave_engine::autovocal::true_peak_db(&mono(&baked)));
     assert!((tl - tb).abs() < 0.3, "true peak {tl:.2} vs {tb:.2} dBTP");

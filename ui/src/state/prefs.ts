@@ -5,6 +5,7 @@ import { setLang, type Lang } from '../lib/i18n';
 import { isTauri } from '../api/backend';
 import * as A from './actions';
 import { S } from './store';
+import { U } from './ui';
 
 export interface Prefs {
   /** interface language */
@@ -54,6 +55,7 @@ function applyPref(k: keyof Prefs, p: Prefs) {
     if (timer) clearInterval(timer);
     timer = null;
     if (p.autosaveMin > 0) timer = setInterval(() => {
+      if (U.openingProject) return;
       if (!S.path) void A.recoveryTick(); // also drops a stale copy once nothing is unsaved
       else if (S.dirty) void A.projectSave(false);
     }, p.autosaveMin * 60_000);

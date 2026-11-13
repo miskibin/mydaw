@@ -39,10 +39,6 @@ pub(crate) fn client_size(_id: WindowId, _hwnd: isize) -> Result<WindowSize, Win
     Err(WindowError::Unsupported)
 }
 
-pub(crate) fn set_client_size(
-    _id: WindowId,
-    _hwnd: isize,
-    _size: WindowSize,
-) -> Result<(), WindowError> {
+pub(crate) fn set_client_size(_id: WindowId, _hwnd: isize, _size: WindowSize) -> Result<(), WindowError> {
     Err(WindowError::Unsupported)
 }

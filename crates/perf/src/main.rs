@@ -27,9 +27,7 @@ const SR: f32 = 48000.0;
 static ONLY: std::sync::OnceLock<Vec<String>> = std::sync::OnceLock::new();
 /// `--only fx,synth,rt,ops,export,analysis,edit,midi,telemetry,undo` limits the run to some sections.
 fn want(sec: &str) -> bool {
-    ONLY.get()
-        .map(|o| o.is_empty() || o.iter().any(|x| x == sec))
-        .unwrap_or(true)
+    ONLY.get().map(|o| o.is_empty() || o.iter().any(|x| x == sec)).unwrap_or(true)
 }
 
 fn main() {
@@ -73,12 +71,7 @@ fn main() {
             for s in &sizes {
                 let sp = fixture::spec(s).unwrap_or_else(|| panic!("unknown size {s}"));
                 let (g, ms) = time_ms(|| fixture::generate(&sp, &cache));
-                eprintln!(
-                    "{s}: {} clips, {} tracks -> {} ({ms:.0} ms)",
-                    g.project.clips.len(),
-                    g.project.tracks.len(),
-                    g.wave.display()
-                );
+                eprintln!("{s}: {} clips, {} tracks -> {} ({ms:.0} ms)", g.project.clips.len(), g.project.tracks.len(), g.wave.display());
             }
         }
         _ => {
@@ -124,17 +117,10 @@ fn bench_all(cache: &Path, sizes: &[String], quick: bool, full_export: bool) -> 
             fixture::generate(&sp, cache);
         }
         let wav_mb: f64 = std::fs::read_dir(dir.join("audio"))
-            .map(|d| {
-                d.flatten()
-                    .map(|e| e.metadata().map(|m| m.len()).unwrap_or(0))
-                    .sum::<u64>() as f64
-                    / 1048576.0
-            })
+            .map(|d| d.flatten().map(|e| e.metadata().map(|m| m.len()).unwrap_or(0)).sum::<u64>() as f64 / 1048576.0)
             .unwrap_or(0.0);
         let wave_bytes = std::fs::metadata(&wave).map(|m| m.len()).unwrap_or(0);
-        let proj_bytes = std::fs::metadata(dir.join("project.json"))
-            .map(|m| m.len())
-            .unwrap_or(0);
+        let proj_bytes = std::fs::metadata(dir.join("project.json")).map(|m| m.len()).unwrap_or(0);
 
         // ---- project load
         eprintln!("[{name}] load");
@@ -198,11 +184,7 @@ fn bench_all(cache: &Path, sizes: &[String], quick: bool, full_export: bool) -> 
         }
     }
     if sizes.iter().any(|s| s == "large") || sizes.iter().any(|s| s == "medium") {
-        let name = if sizes.iter().any(|s| s == "large") {
-            "large"
-        } else {
-            "medium"
-        };
+        let name = if sizes.iter().any(|s| s == "large") { "large" } else { "medium" };
         let wave = cache.join(name).join(format!("{name}.wave"));
         if want("analysis") {
             eprintln!("[{name}] analysis / comp / peaks");
@@ -376,9 +358,7 @@ fn bench_fx(cache: &Path, quick: bool) -> Value {
         let mut ph = 0f32;
         for i in 0..n {
             let t = i as f32 / 48000.0;
-            let f0 = 150.0
-                * 2f32.powf(((t * 1.7).floor() % 9.0) / 12.0)
-                * (1.0 + 0.012 * (std::f32::consts::TAU * 5.5 * t).sin());
+            let f0 = 150.0 * 2f32.powf(((t * 1.7).floor() % 9.0) / 12.0) * (1.0 + 0.012 * (std::f32::consts::TAU * 5.5 * t).sin());
             ph += std::f32::consts::TAU * f0 / 48000.0;
             let mut s = 0.0;
             for h in 1..=12 {
@@ -421,11 +401,7 @@ fn bench_fx(cache: &Path, quick: bool) -> Value {
         let mut ops = vec![];
         for i in 1..=8u64 {
             next_id += 1;
-            ops.push(Op::PutFx {
-                insert_id: i,
-                fx: new_fx(next_id, k, p.bpm),
-                index: None,
-            });
+            ops.push(Op::PutFx { insert_id: i, fx: new_fx(next_id, k, p.bpm), index: None });
         }
         e.apply(&ops, false, None).unwrap();
         let m = rt_sync(&e, 512, 0.0, secs);
@@ -437,14 +413,8 @@ fn bench_fx(cache: &Path, quick: bool) -> Value {
             "rtf_per_instance": if per_inst > 0.0 { r2(100.0 / per_inst) } else { 0.0 },
             "block_us": m["block_us"], "late_blocks": m["late_blocks"], "audio_allocs": m["audio_allocs"], "cpu_load_max_pct": m["cpu_load_max_pct"],
         });
-        let rm: Vec<Op> = e
-            .project()
-            .inserts
-            .iter()
-            .skip(1)
-            .take(8)
-            .flat_map(|i| i.fx.iter().map(|f| Op::RemoveFx { fx_id: f.id }))
-            .collect();
+        let rm: Vec<Op> =
+            e.project().inserts.iter().skip(1).take(8).flat_map(|i| i.fx.iter().map(|f| Op::RemoveFx { fx_id: f.id })).collect();
         e.apply(&rm, false, None).unwrap();
     }
     out
@@ -482,8 +452,7 @@ fn bench_synth(quick: bool) -> Value {
 fn bench_rt_project(wave: &Path, quick: bool) -> Value {
     let e = Engine::new(Project::routed(), Arc::new(NoPlugins));
     e.open(wave).unwrap();
-    e.apply(&[Op::SetLoop { range: None }], false, None)
-        .unwrap();
+    e.apply(&[Op::SetLoop { range: None }], false, None).unwrap();
     let secs = if quick { 4.0 } else { 12.0 };
     let end = e.project().song_end();
     let mut out = json!({});
@@ -499,11 +468,8 @@ fn bench_rt_project(wave: &Path, quick: bool) -> Value {
     // voices in the middle: how many clips sound at the chosen beat
     let b = end * 0.5;
     let p = e.project();
-    out["clips_sounding_at_middle"] = json!(p
-        .clips
-        .iter()
-        .filter(|c| c.start <= b && b < c.start + c.len && c.kind != ClipKind::Auto)
-        .count());
+    out["clips_sounding_at_middle"] =
+        json!(p.clips.iter().filter(|c| c.start <= b && b < c.start + c.len && c.kind != ClipKind::Auto).count());
     out
 }
 
@@ -517,27 +483,11 @@ fn bench_ops(wave: &Path, _sp: &Spec, quick: bool) -> Value {
     let sim = start_sim(rt, 512, true);
     e.open(wave).unwrap();
     let p = e.project();
-    let clip = p
-        .clips
-        .iter()
-        .find(|c| c.kind == ClipKind::Audio && c.tune.is_none())
-        .cloned()
-        .unwrap();
+    let clip = p.clips.iter().find(|c| c.kind == ClipKind::Audio && c.tune.is_none()).cloned().unwrap();
     let tuned = p.clips.iter().find(|c| c.tune.is_some()).cloned();
     let track = p.tracks[p.tracks.len() / 2].clone();
-    let comp_fx = p
-        .inserts
-        .iter()
-        .flat_map(|i| i.fx.iter())
-        .find(|f| f.kind == FxKind::Comp)
-        .cloned()
-        .unwrap();
-    let eq_ins = p
-        .inserts
-        .iter()
-        .find(|i| i.fx.iter().any(|f| f.kind == FxKind::Eq) && i.id != 0)
-        .cloned()
-        .unwrap();
+    let comp_fx = p.inserts.iter().flat_map(|i| i.fx.iter()).find(|f| f.kind == FxKind::Comp).cloned().unwrap();
+    let eq_ins = p.inserts.iter().find(|i| i.fx.iter().any(|f| f.kind == FxKind::Eq) && i.id != 0).cloned().unwrap();
     let mut res = json!({});
 
     let time_op = |mut f: Box<dyn FnMut(usize) -> Vec<Op>>, transient: bool| -> Value {
@@ -553,9 +503,7 @@ fn bench_ops(wave: &Path, _sp: &Spec, quick: bool) -> Value {
     res["move_clip_ms"] = time_op(
         Box::new(move |k| {
             c.start = 10.0 + (k % 7) as f64;
-            vec![Op::PutClips {
-                clips: vec![c.clone()],
-            }]
+            vec![Op::PutClips { clips: vec![c.clone()] }]
         }),
         false,
     );
@@ -564,9 +512,7 @@ fn bench_ops(wave: &Path, _sp: &Spec, quick: bool) -> Value {
     res["drag_clip_transient_ms"] = time_op(
         Box::new(move |k| {
             c.start = 20.0 + k as f64 * 0.25;
-            vec![Op::PutClips {
-                clips: vec![c.clone()],
-            }]
+            vec![Op::PutClips { clips: vec![c.clone()] }]
         }),
         true,
     );
@@ -602,11 +548,7 @@ fn bench_ops(wave: &Path, _sp: &Spec, quick: bool) -> Value {
     res["fx_param_drag_transient_ms"] = time_op(
         Box::new(move |k| {
             f.params.insert("thr".into(), -30.0 + (k % 20) as f64);
-            vec![Op::PutFx {
-                insert_id: 0,
-                fx: f.clone(),
-                index: None,
-            }]
+            vec![Op::PutFx { insert_id: 0, fx: f.clone(), index: None }]
         }),
         true,
     );
@@ -615,9 +557,7 @@ fn bench_ops(wave: &Path, _sp: &Spec, quick: bool) -> Value {
     res["insert_vol_ms"] = time_op(
         Box::new(move |k| {
             ins.vol = 0.5 + (k % 20) as f32 * 0.01;
-            vec![Op::PutInsert {
-                insert: ins.clone(),
-            }]
+            vec![Op::PutInsert { insert: ins.clone() }]
         }),
         false,
     );
@@ -628,18 +568,8 @@ fn bench_ops(wave: &Path, _sp: &Spec, quick: bool) -> Value {
     let mut t = vec![];
     for _ in 0..n {
         next += 1;
-        let (_, ms) = time_ms(|| {
-            e.apply(
-                &[Op::PutFx {
-                    insert_id: eq_id,
-                    fx: new_fx(next, FxKind::Sat, bpm),
-                    index: None,
-                }],
-                false,
-                None,
-            )
-            .unwrap()
-        });
+        let (_, ms) =
+            time_ms(|| e.apply(&[Op::PutFx { insert_id: eq_id, fx: new_fx(next, FxKind::Sat, bpm), index: None }], false, None).unwrap());
         t.push(ms);
         added.push(next);
     }
@@ -650,18 +580,9 @@ fn bench_ops(wave: &Path, _sp: &Spec, quick: bool) -> Value {
         t.push(ms);
     }
     res["remove_fx_graph_rebuild_ms"] = stats(t).json();
-    res["set_bpm_ms"] = time_op(
-        Box::new(|k| {
-            vec![Op::SetBpm {
-                bpm: 100.0 + k as f64,
-            }]
-        }),
-        false,
-    );
+    res["set_bpm_ms"] = time_op(Box::new(|k| vec![Op::SetBpm { bpm: 100.0 + k as f64 }]), false);
     // a no-op apply costs clone + equality only
-    let same = Op::SetBpm {
-        bpm: e.project().bpm,
-    };
+    let same = Op::SetBpm { bpm: e.project().bpm };
     let mut t = vec![];
     for _ in 0..n {
         let (_, ms) = time_ms(|| e.apply(std::slice::from_ref(&same), false, None).unwrap());
@@ -687,16 +608,7 @@ fn bench_ops(wave: &Path, _sp: &Spec, quick: bool) -> Value {
         let mut t = vec![];
         for k in 0..n {
             c.start = 30.0 + (k % 5) as f64;
-            let (_, ms) = time_ms(|| {
-                e.apply(
-                    &[Op::PutClips {
-                        clips: vec![c.clone()],
-                    }],
-                    false,
-                    None,
-                )
-                .unwrap()
-            });
+            let (_, ms) = time_ms(|| e.apply(&[Op::PutClips { clips: vec![c.clone()] }], false, None).unwrap());
             t.push(ms);
         }
         res["move_tuned_clip_ms"] = stats(t).json();
@@ -707,10 +619,7 @@ fn bench_ops(wave: &Path, _sp: &Spec, quick: bool) -> Value {
             if let Some(tu) = c2.tune.as_mut() {
                 tu.notes[0].shift = 10.0 * (k + 1) as f32;
             }
-            let (_, ms) = time_ms(|| {
-                e.apply(&[Op::PutClips { clips: vec![c2] }], false, None)
-                    .unwrap()
-            });
+            let (_, ms) = time_ms(|| e.apply(&[Op::PutClips { clips: vec![c2] }], false, None).unwrap());
             t.push(ms);
         }
         res["edit_tune_rerender_ms"] = stats(t).json();
@@ -736,10 +645,7 @@ fn bench_ops(wave: &Path, _sp: &Spec, quick: bool) -> Value {
     let mut tr = track.clone();
     for k in 0..n {
         tr.vol = 0.4 + (k % 20) as f32 * 0.01;
-        let (_, ms) = time_ms(|| {
-            e.apply(&[Op::PutTrack { track: tr.clone() }], true, None)
-                .unwrap()
-        });
+        let (_, ms) = time_ms(|| e.apply(&[Op::PutTrack { track: tr.clone() }], true, None).unwrap());
         t.push(ms);
     }
     e.end_gesture();
@@ -790,13 +696,7 @@ fn bench_analysis(wave: &Path, _name: &str) -> Value {
         .clips
         .iter()
         .filter(|c| c.kind == ClipKind::Audio && c.tune.is_none())
-        .find(|c| {
-            p.sources
-                .iter()
-                .find(|s| s.id == c.source)
-                .map(|s| s.name.starts_with("Vocal"))
-                .unwrap_or(false)
-        })
+        .find(|c| p.sources.iter().find(|s| s.id == c.source).map(|s| s.name.starts_with("Vocal")).unwrap_or(false))
         .cloned()
         .unwrap();
     let src = p.sources.iter().find(|s| s.id == vocal.source).unwrap();
@@ -814,36 +714,18 @@ fn bench_analysis(wave: &Path, _name: &str) -> Value {
             .notes
             .iter()
             .take(6)
-            .map(|n| NoteEdit {
-                start: n.start,
-                end: n.end,
-                shift: 50.0,
-                drift: 0.0,
-                formant: 0.0,
-                gain: 0.0,
-            })
+            .map(|n| NoteEdit { start: n.start, end: n.end, shift: 50.0, drift: 0.0, formant: 0.0, gain: 0.0, speed: None })
             .collect(),
         pencil: vec![],
         reference: None,
     });
     let rt = e.create_rt(SR, 512);
     let sim = start_sim(rt, 512, true);
-    let (_, ms) = time_ms(|| {
-        e.apply(
-            &[Op::PutClips {
-                clips: vec![c.clone()],
-            }],
-            false,
-            None,
-        )
-        .unwrap()
-    });
-    res["tune_render_apply_ms"] =
-        json!({ "source_secs": r2(src.dur), "ms": r2(ms), "rtf": r2(src.dur / (ms / 1000.0)) });
+    let (_, ms) = time_ms(|| e.apply(&[Op::PutClips { clips: vec![c.clone()] }], false, None).unwrap());
+    res["tune_render_apply_ms"] = json!({ "source_secs": r2(src.dur), "ms": r2(ms), "rtf": r2(src.dur / (ms / 1000.0)) });
     // peaks
     let (pk, ms) = time_ms(|| e.source_peaks(vocal.source, false, false).unwrap());
-    res["source_peaks_ms"] =
-        json!({ "pairs": pk.len() / 2, "ms": r2(ms), "kib": pk.len() * 4 / 1024 });
+    res["source_peaks_ms"] = json!({ "pairs": pk.len() / 2, "ms": r2(ms), "kib": pk.len() * 4 / 1024 });
     let (_, ms) = time_ms(|| e.source_peaks(vocal.source, true, false).unwrap());
     res["source_peaks_normalized_first_ms"] = json!(r2(ms));
     let (_, ms) = time_ms(|| e.clip_peaks(vocal.id).unwrap());
@@ -857,11 +739,7 @@ fn bench_analysis(wave: &Path, _name: &str) -> Value {
         .filter(|p| p.extension().map(|x| x == "wav").unwrap_or(false))
         .take(10)
         .collect();
-    let mb: f64 = files
-        .iter()
-        .map(|f| std::fs::metadata(f).map(|m| m.len()).unwrap_or(0) as f64)
-        .sum::<f64>()
-        / 1048576.0;
+    let mb: f64 = files.iter().map(|f| std::fs::metadata(f).map(|m| m.len()).unwrap_or(0) as f64).sum::<f64>() / 1048576.0;
     let (_, ms) = time_ms(|| {
         for f in &files {
             let _ = wave_engine::sources::Audio::load(f).unwrap();
@@ -869,19 +747,10 @@ fn bench_analysis(wave: &Path, _name: &str) -> Value {
     });
     res["decode_wav"] = json!({ "files": files.len(), "mib": r2(mb), "ms": r2(ms), "mib_per_s": r2(mb / (ms / 1000.0)) });
     // import path (decode + sources + undo snapshot)
-    let (_, ms) = time_ms(|| {
-        e.import_audio(&files[..3.min(files.len())], Some((0, 0.0)))
-            .unwrap()
-    });
+    let (_, ms) = time_ms(|| e.import_audio(&files[..3.min(files.len())], Some((0, 0.0))).unwrap());
     res["import_3_files_ms"] = json!(r2(ms));
     // comp / flatten
-    if let Some(cc) = e
-        .project()
-        .clips
-        .iter()
-        .find(|c| c.kind == ClipKind::Comp)
-        .cloned()
-    {
+    if let Some(cc) = e.project().clips.iter().find(|c| c.kind == ClipKind::Comp).cloned() {
         let (r, ms) = time_ms(|| e.flatten_comp(cc.id));
         res["flatten_comp_ms"] = json!({ "ms": r2(ms), "ok": r.is_ok() });
     }
@@ -895,8 +764,7 @@ fn bench_analysis(wave: &Path, _name: &str) -> Value {
 fn bench_rt_under_edit(wave: &Path, quick: bool) -> Value {
     let e = Engine::new(Project::routed(), Arc::new(NoPlugins));
     e.open(wave).unwrap();
-    e.apply(&[Op::SetLoop { range: None }], false, None)
-        .unwrap();
+    e.apply(&[Op::SetLoop { range: None }], false, None).unwrap();
     let rt = e.create_rt(SR, 512);
     e.play(e.project().song_end() * 0.5);
     // control: the same playback, paced like a device callback, with no edits at all
@@ -906,18 +774,8 @@ fn bench_rt_under_edit(wave: &Path, quick: bool) -> Value {
     let sim = start_sim(rt, 512, true);
     std::thread::sleep(Duration::from_millis(300));
     let p = e.project();
-    let clip = p
-        .clips
-        .iter()
-        .find(|c| c.kind == ClipKind::Audio && c.tune.is_none())
-        .cloned()
-        .unwrap();
-    let ins = p
-        .inserts
-        .iter()
-        .find(|i| i.id != 0 && !i.fx.is_empty())
-        .cloned()
-        .unwrap();
+    let clip = p.clips.iter().find(|c| c.kind == ClipKind::Audio && c.tune.is_none()).cloned().unwrap();
+    let ins = p.inserts.iter().find(|i| i.id != 0 && !i.fx.is_empty()).cloned().unwrap();
     let n = if quick { 10 } else { 40 };
     let mut out = json!({});
     // while playing: timeline edits (every clip move rebuilds the whole timeline)
@@ -925,16 +783,7 @@ fn bench_rt_under_edit(wave: &Path, quick: bool) -> Value {
     let mut t = vec![];
     for k in 0..n {
         c.start = 40.0 + (k % 9) as f64;
-        let (_, ms) = time_ms(|| {
-            e.apply(
-                &[Op::PutClips {
-                    clips: vec![c.clone()],
-                }],
-                false,
-                None,
-            )
-            .unwrap()
-        });
+        let (_, ms) = time_ms(|| e.apply(&[Op::PutClips { clips: vec![c.clone()] }], false, None).unwrap());
         t.push(ms);
         std::thread::sleep(Duration::from_millis(15));
     }
@@ -942,21 +791,11 @@ fn bench_rt_under_edit(wave: &Path, quick: bool) -> Value {
     let mut t = vec![];
     for next in (80_001u64..).take(n / 2) {
         let (_, ms) = time_ms(|| {
-            e.apply(
-                &[Op::PutFx {
-                    insert_id: ins.id,
-                    fx: new_fx(next, FxKind::Reverb, p.bpm),
-                    index: None,
-                }],
-                false,
-                None,
-            )
-            .unwrap()
+            e.apply(&[Op::PutFx { insert_id: ins.id, fx: new_fx(next, FxKind::Reverb, p.bpm), index: None }], false, None).unwrap()
         });
         t.push(ms);
         std::thread::sleep(Duration::from_millis(30));
-        e.apply(&[Op::RemoveFx { fx_id: next }], false, None)
-            .unwrap();
+        e.apply(&[Op::RemoveFx { fx_id: next }], false, None).unwrap();
         std::thread::sleep(Duration::from_millis(30));
     }
     out["apply_add_reverb_while_playing_ms"] = stats(t).json();
@@ -979,16 +818,9 @@ fn bench_midi(wave: &Path, quick: bool) -> Value {
     let call = |e: &Arc<Engine>, k: usize| {
         let t = Instant::now();
         e.midi_event(if k.is_multiple_of(2) {
-            MidiMsg::NoteOn {
-                ch: 0,
-                key: 60 + (k % 12) as u8,
-                vel: 100,
-            }
+            MidiMsg::NoteOn { ch: 0, key: 60 + (k % 12) as u8, vel: 100 }
         } else {
-            MidiMsg::NoteOff {
-                ch: 0,
-                key: 60 + ((k - 1) % 12) as u8,
-            }
+            MidiMsg::NoteOff { ch: 0, key: 60 + ((k - 1) % 12) as u8 }
         });
         t.elapsed().as_secs_f64() * 1e6
     };
@@ -1001,25 +833,13 @@ fn bench_midi(wave: &Path, quick: bool) -> Value {
     let stop = Arc::new(AtomicBool::new(false));
     let s2 = stop.clone();
     let e2 = e.clone();
-    let clip = e
-        .project()
-        .clips
-        .iter()
-        .find(|c| c.kind == ClipKind::Audio && c.tune.is_none())
-        .cloned()
-        .unwrap();
+    let clip = e.project().clips.iter().find(|c| c.kind == ClipKind::Audio && c.tune.is_none()).cloned().unwrap();
     let editor = std::thread::spawn(move || {
         let mut c = clip;
         let mut k = 0;
         while !s2.load(Ordering::Relaxed) {
             c.start = 10.0 + (k % 11) as f64;
-            let _ = e2.apply(
-                &[Op::PutClips {
-                    clips: vec![c.clone()],
-                }],
-                false,
-                None,
-            );
+            let _ = e2.apply(&[Op::PutClips { clips: vec![c.clone()] }], false, None);
             k += 1;
         }
         k
@@ -1040,19 +860,13 @@ fn bench_midi(wave: &Path, quick: bool) -> Value {
 fn bench_telemetry(wave: &Path, quick: bool) -> Value {
     let e = Engine::new(Project::routed(), Arc::new(NoPlugins));
     e.open(wave).unwrap();
-    e.apply(&[Op::SetLoop { range: None }], false, None)
-        .unwrap();
+    e.apply(&[Op::SetLoop { range: None }], false, None).unwrap();
     let p = e.project();
     let fx_ids: Vec<Id> = p
         .inserts
         .iter()
         .flat_map(|i| i.fx.iter())
-        .filter(|f| {
-            matches!(
-                f.kind,
-                FxKind::Eq | FxKind::Comp | FxKind::Tune | FxKind::Reverb
-            )
-        })
+        .filter(|f| matches!(f.kind, FxKind::Eq | FxKind::Comp | FxKind::Tune | FxKind::Reverb))
         .map(|f| f.id)
         .take(8)
         .collect();
@@ -1072,32 +886,17 @@ fn bench_telemetry(wave: &Path, quick: bool) -> Value {
     for (label, ids) in [("no_windows", vec![]), ("8_fx_windows", fx_ids.clone())] {
         e.watch_fx(&ids);
         std::thread::sleep(Duration::from_millis(300));
-        let (f0, b0) = (
-            frames.load(Ordering::Relaxed),
-            bytes.load(Ordering::Relaxed),
-        );
+        let (f0, b0) = (frames.load(Ordering::Relaxed), bytes.load(Ordering::Relaxed));
         let t0 = Instant::now();
         let mut t = vec![];
         for k in 0..n {
             track.vol = 0.5 + (k % 20) as f32 * 0.01;
-            let (_, ms) = time_ms(|| {
-                e.apply(
-                    &[Op::PutTrack {
-                        track: track.clone(),
-                    }],
-                    false,
-                    None,
-                )
-                .unwrap()
-            });
+            let (_, ms) = time_ms(|| e.apply(&[Op::PutTrack { track: track.clone() }], false, None).unwrap());
             t.push(ms);
             std::thread::sleep(Duration::from_millis(12));
         }
         let secs = t0.elapsed().as_secs_f64();
-        let (f1, b1) = (
-            frames.load(Ordering::Relaxed),
-            bytes.load(Ordering::Relaxed),
-        );
+        let (f1, b1) = (frames.load(Ordering::Relaxed), bytes.load(Ordering::Relaxed));
         res[label] = json!({ "frames_per_s": r2((f1 - f0) as f64 / secs), "kib_per_frame": r2((b1 - b0) as f64 / (f1 - f0).max(1) as f64 / 1024.0), "mib_per_s": r2((b1 - b0) as f64 / secs / 1048576.0),
                              "apply_fader_ms_while_housekeeping": stats(t).json() });
     }
@@ -1117,14 +916,7 @@ fn bench_undo_memory(wave: &Path, quick: bool) -> Value {
     let r0 = rss_mib();
     let t0 = Instant::now();
     for k in 0..n {
-        e.apply(
-            &[Op::SetBpm {
-                bpm: 60.0 + k as f64 * 0.1,
-            }],
-            false,
-            None,
-        )
-        .unwrap();
+        e.apply(&[Op::SetBpm { bpm: 60.0 + k as f64 * 0.1 }], false, None).unwrap();
     }
     let ms = t0.elapsed().as_secs_f64() * 1000.0;
     let r1 = rss_mib();

@@ -3307,5 +3307,692 @@
         }
       ]
     }
-  ]
+  ],
+  "factory": {
+    "sources": {
+      "808": {
+        "repo": "https://github.com/tidalcycles/sounds-tr808-fischer",
+        "commit": "85fbecf1bec32553395625ea659e2a56dfd7c0e1",
+        "license": "CC0-1.0"
+      },
+      "vcsl": {
+        "repo": "https://github.com/sgossner/VCSL",
+        "commit": "c1ea7bcc3c7309650ab0da9d15c9cd1fbc4a4c7e",
+        "license": "CC0-1.0"
+      },
+      "vsco": {
+        "repo": "https://github.com/sgossner/VSCO-2-CE",
+        "commit": "440300901dfe9275fd84e0b7763af1f8443ae62e",
+        "license": "CC0-1.0"
+      }
+    },
+    "files": [
+      {
+        "source": "808",
+        "path": "bd8/BD0010.WAV",
+        "sha256": "2929f825db405543f8f1e1ef09e368d83421f030e249cb6a17e5a5ff34a882d6",
+        "bytes": 264646
+      },
+      {
+        "source": "808",
+        "path": "bd8/BD0075.WAV",
+        "sha256": "75ab3c2b179c47c718a740dbae97f792442b739ca28df9e2ab59aea6c26b0496",
+        "bytes": 176446
+      },
+      {
+        "source": "808",
+        "path": "bd8/BD1000.WAV",
+        "sha256": "c126eacc7ceaaf29fb9e7155a53a07ce0d2014c0795bc1ddcd28ea78ca02bac9",
+        "bytes": 22096
+      },
+      {
+        "source": "808",
+        "path": "bd8/BD5010.WAV",
+        "sha256": "42c7c5eebf440437479c9b351b9749b8cbcd08f3fb43b338c61cd28437b43a8d",
+        "bytes": 264646
+      },
+      {
+        "source": "808",
+        "path": "bd8/BD5075.WAV",
+        "sha256": "9ed0c14f09d091b78aa962bb0184813c02e6657857c86ff33c14b2f9daab6558",
+        "bytes": 176446
+      },
+      {
+        "source": "808",
+        "path": "bd8/BD7550.WAV",
+        "sha256": "44dc338b85c2605c6b75465d1d208f4cf58e440a25118fcac64033590a59ca0a",
+        "bytes": 132346
+      },
+      {
+        "source": "808",
+        "path": "bd8/BD7575.WAV",
+        "sha256": "f682067cb3e717374d27e2c8cdabaa3ea16eb8afe36776f163b46ebed64de5c9",
+        "bytes": 176446
+      },
+      {
+        "source": "808",
+        "path": "cy8/CY1050.WAV",
+        "sha256": "60f377d4f8d3ce61c3e8edb6ac5bc8a060073002dc3585009c955118a9d041fb",
+        "bytes": 220546
+      },
+      {
+        "source": "808",
+        "path": "cy8/CY5000.WAV",
+        "sha256": "c9c98fb276990086f76d029ad9aebeb1b6911fd11855b04bef9dc35dbd612ea1",
+        "bytes": 132346
+      },
+      {
+        "source": "808",
+        "path": "ht8/HT10.WAV",
+        "sha256": "aef7d50fc43965c35ef2fde924b19f3fa4be08a9132d0095514d0fae4b5c9202",
+        "bytes": 88246
+      },
+      {
+        "source": "808",
+        "path": "lt8/LT00.WAV",
+        "sha256": "a324073813003398a3ed92c3e569ac80f6ff50d82253f95b2b87a3f268f6951b",
+        "bytes": 88246
+      },
+      {
+        "source": "808",
+        "path": "mc8/MC50.WAV",
+        "sha256": "8175efe26c67f5af926bdf376b1bde75f495451140a2ebc132e74644b31cae1b",
+        "bytes": 44146
+      },
+      {
+        "source": "808",
+        "path": "oh8/OH10.WAV",
+        "sha256": "1cfdc86ad44525bbef78b2db0bf860dc5abc8fe53636af7920267410666ff782",
+        "bytes": 66196
+      },
+      {
+        "source": "808",
+        "path": "oh8/OH25.WAV",
+        "sha256": "2674962ca376c0d08ce802423eb696be86b516450fe23707ac69f3878b35f12b",
+        "bytes": 22096
+      },
+      {
+        "source": "808",
+        "path": "sd8/SD2550.WAV",
+        "sha256": "31692bc1795641de8410fd5aee0eb98c7876100631be4f351a3b87e700acad60",
+        "bytes": 44146
+      },
+      {
+        "source": "808",
+        "path": "sd8/SD5000.WAV",
+        "sha256": "8a6c2425b6d65f4a0790d46a356b9b291e92b84ff810853fda549c1cbbb0d375",
+        "bytes": 22096
+      },
+      {
+        "source": "808",
+        "path": "sd8/SD5010.WAV",
+        "sha256": "6832682eeb286223b76bf7ce4daa2c1a2df9e13b722f11c81c44c3a30c607ffc",
+        "bytes": 44146
+      },
+      {
+        "source": "808",
+        "path": "sd8/SD7525.WAV",
+        "sha256": "dc5c0d5c84cd5e09890c19f8263d2ec3729e59abc27d1def574ef41928de935b",
+        "bytes": 22094
+      },
+      {
+        "source": "vcsl",
+        "path": "Aerophones/Edge-blown Aerophones/Pipe Organ/Loud/Rode_Man3Open_C3.wav",
+        "sha256": "1524a5631561e898617154a2f1b6bdc6fbdacb383549255d78d14eb53b588f8b",
+        "bytes": 2180642
+      },
+      {
+        "source": "vcsl",
+        "path": "Aerophones/Reed Aerophones/Tenor Saxophone/Staccato/BrettTenor_Staccato_Main_C3_vl2_rr4.wav",
+        "sha256": "0984039ad9542a4feee2ae34cf817042e7e2aa17330b1e7d595a513535e4d62d",
+        "bytes": 152162
+      },
+      {
+        "source": "vcsl",
+        "path": "Chordophones/Composite Chordophones/Concert Harp/KSHarp_C3_f2.wav",
+        "sha256": "706e586007e07771a97ef97888c23c99aed163503b38878ac5b8ffa437bed5a0",
+        "bytes": 2788402
+      },
+      {
+        "source": "vcsl",
+        "path": "Chordophones/Composite Chordophones/Concert Harp/KSHarp_C5_f1.wav",
+        "sha256": "52a002ae0359257f02b972a62f05e86a4bdbeed272820f934c356408e100cda8",
+        "bytes": 2238054
+      },
+      {
+        "source": "vcsl",
+        "path": "Chordophones/Zithers/Harpsichord, French/Sustains/Harpsi2_Normal_C3_rr1_Main.wav",
+        "sha256": "cda5d21cdf4581517933859b8557e32745b5115ba243f63fef757fee025390de",
+        "bytes": 2647268
+      },
+      {
+        "source": "vcsl",
+        "path": "Chordophones/Zithers/Upright Piano, Yamaha/Sustains/Upright1_Sus_C3_vl3_rr1.wav",
+        "sha256": "00560d702c006447d2a30ecaa0006af9bde90372a37721ef6acc589b9abaf79c",
+        "bytes": 4752374
+      },
+      {
+        "source": "vcsl",
+        "path": "Electrophones/TX81Z/Clavisynth/Clavisynth_C2_vl3.wav",
+        "sha256": "4f171206fec4a1e5ba8da274886f20f268775820fe821db7fb85a94c4bc7e79c",
+        "bytes": 878917
+      },
+      {
+        "source": "vcsl",
+        "path": "Electrophones/TX81Z/FM Piano/FMPiano_C3_vl3.wav",
+        "sha256": "4e7a7d75bf01af25bcd8b321853e61f159c14432360705b319154d7010ffb1fc",
+        "bytes": 1340008
+      },
+      {
+        "source": "vcsl",
+        "path": "Idiophones/Plucked Idiophones/Kalimba, Kenya/Mbira6_Normal_MainSpirit_B3_k3_vl3_rr2.wav",
+        "sha256": "d35e8f5773ee989511e376876d9698e0027f44a754eb9e001de01abb29b19808",
+        "bytes": 1301696
+      },
+      {
+        "source": "vcsl",
+        "path": "Idiophones/Struck Idiophones/Agogo Bells/Agogo_High_v3_rr1_Mid.wav",
+        "sha256": "c7f0d2b70c6cee34beea62d7566227da2687ca5c87d72d1245f444fbe2c76b43",
+        "bytes": 197312
+      },
+      {
+        "source": "vcsl",
+        "path": "Idiophones/Struck Idiophones/Agogo Bells/Agogo_Low_v2_rr1_Mid.wav",
+        "sha256": "36fb0e28c0ba39336082902d299a5b2d20b9f5f0cb448cb64e4b13837b896eea",
+        "bytes": 431804
+      },
+      {
+        "source": "vcsl",
+        "path": "Idiophones/Struck Idiophones/Anvil/Anvil_Hit1_v3_rr1_Mid.wav",
+        "sha256": "f832799b7cabeb06163a18ac49d373d21bc5271fc316f9f61e6d6f17ef669a18",
+        "bytes": 410320
+      },
+      {
+        "source": "vcsl",
+        "path": "Idiophones/Struck Idiophones/Balafon/Hard Mallet/EthnicXylo_hardM_C4_vl3_rr1_Mid.wav",
+        "sha256": "f3fc7058cb0de65d33c43d15b73d489c7b61995bc1136f1be06bfe9508463829",
+        "bytes": 243244
+      },
+      {
+        "source": "vcsl",
+        "path": "Idiophones/Struck Idiophones/Bell Tree/Stroke/BellTree_Stroke_1_Mid.wav",
+        "sha256": "aae960ec30aaf8217ca6421d540adefd43012ddb12275be3022818f3a0478cdf",
+        "bytes": 805132
+      },
+      {
+        "source": "vcsl",
+        "path": "Idiophones/Struck Idiophones/Brake Drum/BrakeDrum1_Hammer_v3_rr1_Mid.wav",
+        "sha256": "a488e7cdca983fc53c4399fa0c492d582510dd48ee35e5336113b0041f8f55b1",
+        "bytes": 299416
+      },
+      {
+        "source": "vcsl",
+        "path": "Idiophones/Struck Idiophones/Claps/Clap_rr1.wav",
+        "sha256": "4c9f3fe4a34733b9be6ed9ce5e5aad48b19c1029ae9c6dd1b96294a847539e3f",
+        "bytes": 141974
+      },
+      {
+        "source": "vcsl",
+        "path": "Idiophones/Struck Idiophones/Claps/Clap_rr4.wav",
+        "sha256": "3415613351d0af8de674ebc3e8200784c2ffc691da60698cb81ba03704ad748a",
+        "bytes": 147686
+      },
+      {
+        "source": "vcsl",
+        "path": "Idiophones/Struck Idiophones/Clash Cymbals 1/cymbal_crash1_ff2.wav",
+        "sha256": "6f27c36fe2a829b667fd3372e1488437671534c0c719af9ae90128e5f99629d3",
+        "bytes": 2344542
+      },
+      {
+        "source": "vcsl",
+        "path": "Idiophones/Struck Idiophones/Clash Cymbals 1/cymbal_crash1_short1.wav",
+        "sha256": "7ac4afb439b7c1279e3280f60b1e25fb0865fc6b7e59d09c78c6e97bc987195d",
+        "bytes": 420946
+      },
+      {
+        "source": "vcsl",
+        "path": "Idiophones/Struck Idiophones/Cowbells/Cowbell1_Muted_v3_rr1_Mid.wav",
+        "sha256": "aeac086aae2ebe56ec5bcf13dac8cfb4fa76666678bd4267149517c548cafe9a",
+        "bytes": 195688
+      },
+      {
+        "source": "vcsl",
+        "path": "Idiophones/Struck Idiophones/Cowbells/Cowbell1_Normal_v3_rr1_Mid.wav",
+        "sha256": "e212cc27b3490d7927d41508bd7e90d6e09b0b8da169f0357341d3057c4910c4",
+        "bytes": 165900
+      },
+      {
+        "source": "vcsl",
+        "path": "Idiophones/Struck Idiophones/Finger Cymbals/Fing_Cymb.wav",
+        "sha256": "6d39abaeff2a09fc8dcd366664ebad47f570c95b0e0440fde1bb6b7dbd33be32",
+        "bytes": 1678354
+      },
+      {
+        "source": "vcsl",
+        "path": "Idiophones/Struck Idiophones/Gong 1/gong_fff.wav",
+        "sha256": "998b27e21ee1639a73c1d71c8093e98cab4a10223640a59e8902ecfc557f74ac",
+        "bytes": 4822774
+      },
+      {
+        "source": "vcsl",
+        "path": "Idiophones/Struck Idiophones/Guiro/Guiro_Hit_rr1_Mid.wav",
+        "sha256": "e7d4bf1c28521e3410d710688a576f2fe5f6c5339e754417ae3c1a46a386cf42",
+        "bytes": 226344
+      },
+      {
+        "source": "vcsl",
+        "path": "Idiophones/Struck Idiophones/Guiro/Guiro_Med_rr1_Mid.wav",
+        "sha256": "b32a7fd5b8a9971ebe85313df3e7be72134c2c1eaf243d21a28dc48b77deb44c",
+        "bytes": 331892
+      },
+      {
+        "source": "vcsl",
+        "path": "Idiophones/Struck Idiophones/Hand Chimes/sus_C5_r01_main.wav",
+        "sha256": "836f13d448c9d6d685da634368615c2f7c03b6fb5b99ac93627e1fbb40368e58",
+        "bytes": 1894740
+      },
+      {
+        "source": "vcsl",
+        "path": "Idiophones/Struck Idiophones/Hi-Hat Cymbal/HiHat_HitC_v2_rr1_Mid.wav",
+        "sha256": "e1fb54c9a030800038abcebbed1c056fb74bdeec627315f3cd5fd893c6e6b031",
+        "bytes": 247272
+      },
+      {
+        "source": "vcsl",
+        "path": "Idiophones/Struck Idiophones/Hi-Hat Cymbal/HiHat_HitLoose_rr1_Mid.wav",
+        "sha256": "1cc4aca0edbac1fb1027cff990f5fd1c52870daf4a2b0aee9e501af1c1a4d26d",
+        "bytes": 488080
+      },
+      {
+        "source": "vcsl",
+        "path": "Idiophones/Struck Idiophones/Hi-Hat Cymbal/HiHat_HitOC_rr5_Mid.wav",
+        "sha256": "dc44df613fc279e5c5d66a81f3ed25019eed3a8513507104680032e4b4c9a242",
+        "bytes": 341944
+      },
+      {
+        "source": "vcsl",
+        "path": "Idiophones/Struck Idiophones/Mark Trees/Legacy/windchimes_asc1.wav",
+        "sha256": "4da1f0ec4ed2d94902a35995faef9ce2bd747a525761c0db7ace093359939693",
+        "bytes": 2054074
+      },
+      {
+        "source": "vcsl",
+        "path": "Idiophones/Struck Idiophones/Shaker, Small/Mid_ShakerHighFaster_Down_rr1.wav",
+        "sha256": "cf4cb388ffcff5a042149e0645123b089ae85e8342876421e817dce55ce66a5a",
+        "bytes": 31556
+      },
+      {
+        "source": "vcsl",
+        "path": "Idiophones/Struck Idiophones/Slapstick/slapstick_rr1.wav",
+        "sha256": "e73b38bf43b385d95e2c790e7424526a91af8d1cdf484002912a4a8eabe73300",
+        "bytes": 346222
+      },
+      {
+        "source": "vcsl",
+        "path": "Idiophones/Struck Idiophones/Sleigh Bells/Sleighbells_Hit_rr1_Mid.wav",
+        "sha256": "cc424c298ac98a783ebf37ce6f2152a19b227ff89c5c20bc2462ddc8261fefc5",
+        "bytes": 441104
+      },
+      {
+        "source": "vcsl",
+        "path": "Idiophones/Struck Idiophones/Slit Drum/LogDrumHi_MedM_v3_rr1_Sum.wav",
+        "sha256": "e56b10659b821bbf4eeb3cc371f42ea60414adcbd66ad0ead9e7a62cdd11fe3f",
+        "bytes": 267984
+      },
+      {
+        "source": "vcsl",
+        "path": "Idiophones/Struck Idiophones/Slit Drum/LogDrumLo_MedM_v3_rr1_Sum.wav",
+        "sha256": "1428c9b05398c3b08aac4c36c5c5f57c52bca3c89627d693f3ecc00759c43fea",
+        "bytes": 220864
+      },
+      {
+        "source": "vcsl",
+        "path": "Idiophones/Struck Idiophones/Suspended Cymbal 1/susCymb1_cresc_2s.wav",
+        "sha256": "a5507bf116b33ee220f4eff54506be56fd455e908c8d53903f217590341e5008",
+        "bytes": 1837622
+      },
+      {
+        "source": "vcsl",
+        "path": "Idiophones/Struck Idiophones/Suspended Cymbal 1/susCymb1_cresc_4s.wav",
+        "sha256": "bb3b6b251b0b9dac23b7b0fae47aab84a70abbefa4a110b05c9f4ad733e70741",
+        "bytes": 2291710
+      },
+      {
+        "source": "vcsl",
+        "path": "Idiophones/Struck Idiophones/Suspended Cymbal 1/susCymb1_hit_bell_fff1.wav",
+        "sha256": "6be90461233ba1900c1c02118cc0d00b50d0d534596ec0ae2fe5bc1e0ce0e715",
+        "bytes": 748994
+      },
+      {
+        "source": "vcsl",
+        "path": "Idiophones/Struck Idiophones/Suspended Cymbal 1/susCymb1_hit_fff1.wav",
+        "sha256": "993ceb041adaad19c88042e9d6e66707c30eda6e44a5a263d68bb4a3cdb2ca02",
+        "bytes": 2285114
+      },
+      {
+        "source": "vcsl",
+        "path": "Idiophones/Struck Idiophones/Tubular Bells 1/chimes_C4_ff_rr2.wav",
+        "sha256": "50d2c2bff54396a684ce9b29346bb8d43bb55d5d9adb9d736bdd5a713adc424a",
+        "bytes": 4882730
+      },
+      {
+        "source": "vcsl",
+        "path": "Idiophones/Struck Idiophones/Vibraphone/Hard Mallets/Vibes_hard_C3_v3_rr1_Main.wav",
+        "sha256": "1e4c472f6630be1b0c4ff1e8a63ad61d2c1dc561bd764fedaf87e8e46bdd706d",
+        "bytes": 2187612
+      },
+      {
+        "source": "vcsl",
+        "path": "Idiophones/Struck Idiophones/Vibraphone/Hard Mallets/Vibes_hard_C5_v3_rr1_Main.wav",
+        "sha256": "2aa1bde8ca38dcfccb07641d7d8514f3df6e8f523287055f7fdc4b54d8224bdb",
+        "bytes": 1094952
+      },
+      {
+        "source": "vcsl",
+        "path": "Idiophones/Struck Idiophones/Vibraslap/Legacy/vibraslap_rr1.wav",
+        "sha256": "e7d6c27383fd7b4ea732f1dea53c0beef709ec26e714d838f2dd04bf2f390a67",
+        "bytes": 761098
+      },
+      {
+        "source": "vcsl",
+        "path": "Idiophones/Struck Idiophones/Xylophone/Hard Mallets/Xylo_Hard_C5_ff_01_far.wav",
+        "sha256": "4282a5982eb99b798fbe9dffe1b84e4366b2b8f8fd161335f527b728edd0c083",
+        "bytes": 458286
+      },
+      {
+        "source": "vcsl",
+        "path": "Membranophones/Struck Membranophones/Bass Drum 1/BDrumNew_hit_v7_rr1_Sum.wav",
+        "sha256": "7024054e68261d2cca0ee58fdf9d6f23b54370792d04aa2c1ccf41acc090bd2b",
+        "bytes": 1105152
+      },
+      {
+        "source": "vcsl",
+        "path": "Membranophones/Struck Membranophones/Bass Drum 2/bassdrum_cresc_short.wav",
+        "sha256": "0ab359be2a8f4ae9ceda83b935060bf63a93197fbf2246d0ee7fca5dc958c7e9",
+        "bytes": 2866570
+      },
+      {
+        "source": "vcsl",
+        "path": "Membranophones/Struck Membranophones/Conga/Conga_HitN_v3_rr1_Sum.wav",
+        "sha256": "664365ac735d819c69cabbbae8a78d225fa73059e698ad8ca292c46cc03c6961",
+        "bytes": 231124
+      },
+      {
+        "source": "vcsl",
+        "path": "Membranophones/Struck Membranophones/Conga/Quinto_HitN_v3_rr1_Sum.wav",
+        "sha256": "07fe0922f97a57969a3cbb706126de2d09d23f42f6390a9a9adac027d7741c7e",
+        "bytes": 207412
+      },
+      {
+        "source": "vcsl",
+        "path": "Membranophones/Struck Membranophones/Conga/Tumba_HitN_v4_rr1_Sum.wav",
+        "sha256": "5504101dba1a22e133efb77147084e96565a7ff64535f94f2f3d8934f2b2895b",
+        "bytes": 161200
+      },
+      {
+        "source": "vcsl",
+        "path": "Membranophones/Struck Membranophones/Darbuka/Darbuka_1_hit_vl2_rr1.wav",
+        "sha256": "9775c01e17a2713c239c552b63c3b6e9068f782c70128737390f8508f14cffb0",
+        "bytes": 221192
+      },
+      {
+        "source": "vcsl",
+        "path": "Membranophones/Struck Membranophones/Darbuka/Darbuka_4_hit_vl2_rr1.wav",
+        "sha256": "6d6c6cb0898490532dadba6ec4a7f2440f8de6c94192f77af53a86878f0c562c",
+        "bytes": 128996
+      },
+      {
+        "source": "vcsl",
+        "path": "Membranophones/Struck Membranophones/Frame Drum/HDrumL_Hit_v3_rr1_Sum.wav",
+        "sha256": "e0fa5a60d459df12fa2e79080fc2db514e58a70a47d3300c5363d6ad113dfd0c",
+        "bytes": 637712
+      },
+      {
+        "source": "vcsl",
+        "path": "Membranophones/Struck Membranophones/Frame Drum/HDrumS_HitMuted_v3_rr1_Sum.wav",
+        "sha256": "9ac5fae877b90f0f354766efe8dc813be87eeb31e6b52fe8750fa0528c2c16c4",
+        "bytes": 173168
+      },
+      {
+        "source": "vcsl",
+        "path": "Membranophones/Struck Membranophones/Snare Drum, Modern 1/Snare2_HitNS_v6_rr1_Mid.wav",
+        "sha256": "1231d6e59ea7a16c58defe6d001c0dd346e2d56a4a94000111399bb5e6652714",
+        "bytes": 196508
+      },
+      {
+        "source": "vcsl",
+        "path": "Membranophones/Struck Membranophones/Snare Drum, Modern 1/Snare2_rollSN_v5_rr2_Mid.wav",
+        "sha256": "6f8dad14dadf613c7a4186ef7943697356d292b92be98bca80d1574bc5132a7b",
+        "bytes": 1560852
+      },
+      {
+        "source": "vcsl",
+        "path": "Membranophones/Struck Membranophones/Snare Drum, Modern 3/Snare4_HitSN_v5_rr1_Mid.wav",
+        "sha256": "5d3a3a632bd2da7f3edc698de86ebcb5f596d4397990312598bca36b6c75e0e7",
+        "bytes": 177824
+      },
+      {
+        "source": "vcsl",
+        "path": "Membranophones/Struck Membranophones/Snare Drum, Modern 3/Snare4_Xstick_v2_rr1_Mid.wav",
+        "sha256": "547988ba9c75ac4cb54222c240f0ee56f6224b0578fa87a044e182b9cfd8c135",
+        "bytes": 137940
+      },
+      {
+        "source": "vcsl",
+        "path": "Membranophones/Struck Membranophones/Snare Drum, Modern 3/Snare4_rimshot_v4_rr1_Mid.wav",
+        "sha256": "dbe6e4758a967a7b93cd7a00f6a55a7ffe182fac38a6666a74fdd880c98b9a97",
+        "bytes": 490352
+      },
+      {
+        "source": "vcsl",
+        "path": "Membranophones/Struck Membranophones/Snare Drum, Rope Tension/Hi/RopeSnare_hi_sn_Main_vl4_rr1.wav",
+        "sha256": "7d6c8c57c830fe98fcc4cd8b5f87e55fdba65533689c434d7a3a28f3c814e627",
+        "bytes": 625808
+      },
+      {
+        "source": "vcsl",
+        "path": "Membranophones/Struck Membranophones/Snare Drum, Rope Tension/Low/RopeSnare_low_sn_Main_vl3_rr1.wav",
+        "sha256": "6131e8634efe5c66b3c383bd794004f395669ab2863ba5cb5941e8eb2f5e05e2",
+        "bytes": 588662
+      },
+      {
+        "source": "vcsl",
+        "path": "Membranophones/Struck Membranophones/Tom 1/TomH_rimS_v4_rr1_Mid.wav",
+        "sha256": "23cb0354a76e77b70b19ba40fa3e0954d09b1540b4be6765c64f43d2e36d1b4a",
+        "bytes": 333288
+      },
+      {
+        "source": "vcsl",
+        "path": "Membranophones/Struck Membranophones/Tom 2/Mallet/TomL_HitM_v4_rr1_Mid.wav",
+        "sha256": "8ee010beab0edb64ce7f580a433f4e4ab1d07874dcf8e74b0edad9e0fe8b4639",
+        "bytes": 416188
+      },
+      {
+        "source": "vsco",
+        "path": "Brass/F Horn/stac/MOHorn_stac_C3_v3_rr1.wav",
+        "sha256": "7ea5a48590310d32b29aa3046f7ca2708b8f233067352001e6043095d6dac1b6",
+        "bytes": 280932
+      },
+      {
+        "source": "vsco",
+        "path": "Brass/F Horn/stac/MOHorn_stac_D4_v3_rr1.wav",
+        "sha256": "14724f3fc89936848381cd8a2399653bacd551364f8118673c0b98ce4d16160f",
+        "bytes": 206752
+      },
+      {
+        "source": "vsco",
+        "path": "Brass/F Horn/stac/MOHorn_stac_F2_v3_rr1.wav",
+        "sha256": "1f6df484f8b62e31f1add13ea2599ecfcfeec5ecbe4701b26480f13478df7ba8",
+        "bytes": 302936
+      },
+      {
+        "source": "vsco",
+        "path": "Brass/Tenor Trombone/stac/tenortbn_stac_D3_v4_rr1.wav",
+        "sha256": "15fc0a2625e4cf3f6f55b4d4e251bb445d52bda4c1b59be49f816168ceec22fb",
+        "bytes": 328948
+      },
+      {
+        "source": "vsco",
+        "path": "Brass/Tenor Trombone/stac/tenortbn_stac_F2_v4_rr1.wav",
+        "sha256": "378b9f790ef731c18f9c8468faf973b0e848b8ff797795681d20812abbb25674",
+        "bytes": 270120
+      },
+      {
+        "source": "vsco",
+        "path": "Brass/Trumpet/stac/Sum_SHTrumpet_stac_C3_v3_rr1.wav",
+        "sha256": "6ee12d20bfc94165d3d900e40274c8d4343e683fed2fee64f1bfcb5e94d99aa4",
+        "bytes": 214984
+      },
+      {
+        "source": "vsco",
+        "path": "Brass/Trumpet/stac/Sum_SHTrumpet_stac_C5_v3_rr1.wav",
+        "sha256": "9a66e31c9417825230870e5de2668363a374d0780a06d23b388f096273ee237b",
+        "bytes": 253728
+      },
+      {
+        "source": "vsco",
+        "path": "Brass/Trumpet/stac/Sum_SHTrumpet_stac_D#3_v3_rr1.wav",
+        "sha256": "04d9ce75dcb30cd9ff32cf6b6cd1b4dcf756e6c99acfe9e4dbe3cdead7a1ac0c",
+        "bytes": 258380
+      },
+      {
+        "source": "vsco",
+        "path": "Brass/Trumpet/stac/Sum_SHTrumpet_stac_G3_v3_rr1.wav",
+        "sha256": "fc88e87885839b5fb45e2fb63cc70afef0b3c0f13c129c7d0ee4aee3458f293d",
+        "bytes": 226840
+      },
+      {
+        "source": "vsco",
+        "path": "Brass/Tuba/stac/Tuba3_stac_D2_v2_rr1_Sum.wav",
+        "sha256": "4ed9b5455e0c8b2532e9cac41e32a9218e96a4260a0104008b0a86083d3b7ce2",
+        "bytes": 125584
+      },
+      {
+        "source": "vsco",
+        "path": "Percussion/Timpani/Rolls/Timpani2_Roll_v5_rr1_Sum.wav",
+        "sha256": "f05404c85a8512f2a1503b849ed54b5c1a0e7ea7fab93f68dc2817819a137f44",
+        "bytes": 4587896
+      },
+      {
+        "source": "vsco",
+        "path": "Percussion/Timpani/Timpani2_Hit_v4_rr1_Sum.wav",
+        "sha256": "b737b4bde0c2f54f57866ea7cdce79bc2e67162e37906a6820614fbc57324940",
+        "bytes": 1638140
+      },
+      {
+        "source": "vsco",
+        "path": "Percussion/Timpani/Timpani4_Hit_v4_rr1_Sum.wav",
+        "sha256": "71161169062458913095b6d87d0eacb1bc344622e28832fef9458c7f142c8860",
+        "bytes": 1599356
+      },
+      {
+        "source": "vsco",
+        "path": "Percussion/zap1_v1.wav",
+        "sha256": "6bcdb01132898eb7b2db3abcbcd4cf037b15080c7de95ab781b1bdef1e852101",
+        "bytes": 322184
+      },
+      {
+        "source": "vsco",
+        "path": "Strings/Cello Section/pizzT/pizzT_C3_v2_RR1.wav",
+        "sha256": "fbc86686ef092e92e473dce4d1ff5f1e351dcc76ed2d94b0d336c1346f314e59",
+        "bytes": 762122
+      },
+      {
+        "source": "vsco",
+        "path": "Strings/Cello Section/spic/spic_C1_v2_RR1.wav",
+        "sha256": "92de035cdbfab6e41f94115b2c23716a9e93554a4c23c1cc4b946f7492d9c927",
+        "bytes": 853964
+      },
+      {
+        "source": "vsco",
+        "path": "Strings/Cello Section/spic/spic_C3_v2_RR1.wav",
+        "sha256": "278a14177cd3ffffc5418e403d9583af22778a8ce8fc548f88ea707e044a62d4",
+        "bytes": 536360
+      },
+      {
+        "source": "vsco",
+        "path": "Strings/Cello Section/spic/spic_G1_v2_RR1.wav",
+        "sha256": "7f536c013e9e24c0cde3577416bf27111b741fd331a0d041ff75e53eaa6102fa",
+        "bytes": 856028
+      },
+      {
+        "source": "vsco",
+        "path": "Strings/Solo Contrabass/Pizz/BKCtbss_Pizz_C1_v3_rr1.wav",
+        "sha256": "706d82ca773408bb6cd6f22466d5d017c1d36a9055f3a6b6af864407b26c5a0d",
+        "bytes": 400396
+      },
+      {
+        "source": "vsco",
+        "path": "Strings/Solo Contrabass/Spic/BKCtbss_Spic_C1_v3_rr1.wav",
+        "sha256": "4bca4ab782cdbddeb75069135a4a8b0e4bc4f3570a5033b7f0729b5285719ae2",
+        "bytes": 239208
+      },
+      {
+        "source": "vsco",
+        "path": "Strings/Viola Section/spic/Violas_spic_C4_v2_rr1.wav",
+        "sha256": "3b4c0644c38ec7d13e03e3de88bce2dad899eb3c94a6251ec2acc8e6531687a5",
+        "bytes": 208272
+      },
+      {
+        "source": "vsco",
+        "path": "Strings/Viola Section/spic/Violas_spic_E4_v2_rr1.wav",
+        "sha256": "d66d31214f831ea6649d6b3584459a2ba855ed8eed8adeecbec7e7db99e882a0",
+        "bytes": 216696
+      },
+      {
+        "source": "vsco",
+        "path": "Strings/Viola Section/spic/Violas_spic_G2_v2_rr1.wav",
+        "sha256": "ebd5f73e697f3d68e263429c9ca62337bb20982316b959487c4f4c9efa44a5cf",
+        "bytes": 211020
+      },
+      {
+        "source": "vsco",
+        "path": "Strings/Violin Section/Pizz/VlnEns_Pizz_C4_v2_rr1.wav",
+        "sha256": "909eb79fc2c9076909680fa3c2dabdbbd15870f674a883ddab33bbcd0dac965a",
+        "bytes": 184590
+      },
+      {
+        "source": "vsco",
+        "path": "Strings/Violin Section/Spic/VlnEns_Spic_C4_v2_rr1.wav",
+        "sha256": "a14e9795677e0c418f1e18f7b640bc27b8cb3aef4cfef766e18caf38549ffe56",
+        "bytes": 167454
+      },
+      {
+        "source": "vsco",
+        "path": "Strings/Violin Section/Spic/VlnEns_Spic_D5_v2_rr1.wav",
+        "sha256": "959a93165a9271657b4bc97c75eded62deab37b03128f71f0f1f4c8903e50b84",
+        "bytes": 136734
+      },
+      {
+        "source": "vsco",
+        "path": "Strings/Violin Section/Spic/VlnEns_Spic_E4_v2_rr1.wav",
+        "sha256": "db063e7e21abb2d3271d0e96068601fbb48a91f2f0bfde8dea773ce1a6bacfb0",
+        "bytes": 106314
+      },
+      {
+        "source": "vsco",
+        "path": "Strings/Violin Section/Spic/VlnEns_Spic_G2_v2_rr1.wav",
+        "sha256": "a6bee065f0a171d3fabc42b218e941f66916a6de53a55809da724eeefeae2653",
+        "bytes": 435542
+      },
+      {
+        "source": "vsco",
+        "path": "Strings/Violin Section/Spic/VlnEns_Spic_G4_v2_rr1.wav",
+        "sha256": "3345451be62b9bdfbbf6bb03f22f410484abb75585992336d530215fc4df7141",
+        "bytes": 162898
+      },
+      {
+        "source": "vsco",
+        "path": "Strings/Violin Section/Trem/VlnEns_Trem_C4_v2.wav",
+        "sha256": "fb63b02651cf1f08c103f192e6c4783a6c469c4ed953d069949e9b0fe92bd9f0",
+        "bytes": 1432052
+      },
+      {
+        "source": "vsco",
+        "path": "Woodwinds/Flute/stac/LDFlute_stac_C5_v3_rr1.wav",
+        "sha256": "e1a08c8f8333c6b4cace01bb6a61e852808a6925c0a4dbde358878f313b5cc55",
+        "bytes": 195378
+      }
+    ]
+  }
 }

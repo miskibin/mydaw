@@ -134,6 +134,11 @@ documentation.
 - For DSP or performance work, add objective measurements or deterministic test
   signals where practical.
 
+## Commits and Pull Requests
+
+Describe the change itself: what changed for the user, why, and how it was
+verified.
+
 ## Verification and Definition of Done
 
 Run the gates relevant to the touched areas. For a repository-wide or
