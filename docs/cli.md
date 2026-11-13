@@ -16,7 +16,8 @@ wave status
 wave context --pretty
 ```
 
-stdout is only JSON (`--pretty` to indent); messages go to stderr. Exit codes:
+stdout is only JSON (`--pretty` to indent), with numbers rounded to at most four decimal places
+(0.47, not 0.4699999988); messages go to stderr. Exit codes:
 `0` ok, `1` bad usage, `2` WAVE not running / unreachable, `3` refused, as
 `CODE: message` (`BAD_OPS`, `REVISION_CONFLICT`, `NEEDS_APP`, `FILE_OPEN` …).
 

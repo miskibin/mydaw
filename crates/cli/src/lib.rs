@@ -223,6 +223,29 @@ struct Cx<'a> {
     doc: Option<&'a dyn Doc>,
 }
 
+/// Decimal places kept in printed numbers. The engine stores many values as `f32`, so a step of
+/// 0.47 prints as 0.4699999988079071 without this; four places keep triplet positions
+/// (28.3333) and fader values (0.7937 = 0 dB) exact enough to send back.
+const PRINT_DECIMALS: i32 = 4;
+
+/// Rounds every non-integer number in a reply to [`PRINT_DECIMALS`] places (integers and ids untouched).
+fn tidy_numbers(v: &mut Value) {
+    match v {
+        Value::Number(n) if !n.is_i64() && !n.is_u64() => {
+            if let Some(f) = n.as_f64() {
+                let k = 10f64.powi(PRINT_DECIMALS);
+                let r = (f * k).round() / k;
+                if let Some(m) = serde_json::Number::from_f64(if r == 0.0 { 0.0 } else { r }) {
+                    *n = m;
+                }
+            }
+        }
+        Value::Array(a) => a.iter_mut().for_each(tidy_numbers),
+        Value::Object(o) => o.values_mut().for_each(tidy_numbers),
+        _ => {}
+    }
+}
+
 /// Runs the CLI with `raw` arguments (without the program name), against the running app only.
 pub fn run_cli(raw: Vec<String>) -> ExitCode {
     run_cli_with(raw, None)
@@ -248,7 +271,8 @@ pub fn run_cli_with(raw: Vec<String>, files: Option<&dyn Files>) -> ExitCode {
         run(&Cx { doc: None }, &cmd, &a)
     };
     match res {
-        Ok(v) => {
+        Ok(mut v) => {
+            tidy_numbers(&mut v);
             let s = if pretty { serde_json::to_string_pretty(&v) } else { serde_json::to_string(&v) };
             println!("{}", s.unwrap_or_default());
             ExitCode::SUCCESS
@@ -1298,5 +1322,25 @@ mod tests {
         file(&f, &["bpm", "90", "--save-as", &v2, "--project", &p]).unwrap();
         file(&f, &["bpm", "90", "--force", "--project", &p]).unwrap();
         assert_eq!(f.saves().len(), 2);
+    }
+
+    #[test]
+    fn printed_numbers_drop_f32_noise_but_keep_ids_and_useful_precision() {
+        let mut v = json!({
+            "id": 11639u64, "revision": 1020, "neg": -3,
+            "notes": [{"step": 28.333332061767578, "v": 0.4699999988079071, "len": 0.5}],
+            "vol": 0.7936999797821045, "tiny": -0.00001, "big": 6000.000000001
+        });
+        tidy_numbers(&mut v);
+        assert_eq!(v["id"], json!(11639u64));
+        assert_eq!(v["revision"], json!(1020));
+        assert_eq!(v["neg"], json!(-3));
+        assert_eq!(v["notes"][0]["step"], json!(28.3333));
+        assert_eq!(v["notes"][0]["v"], json!(0.47));
+        assert_eq!(v["notes"][0]["len"], json!(0.5));
+        assert_eq!(v["vol"], json!(0.7937));
+        assert_eq!(serde_json::to_string(&v["tiny"]).unwrap(), "0.0"); // no "-0.0"
+        assert_eq!(v["big"], json!(6000.0));
+        assert_eq!(serde_json::to_string(&v["notes"][0]["v"]).unwrap(), "0.47");
     }
 }

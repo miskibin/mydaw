@@ -4,6 +4,12 @@ What changed in each release of WAVE. The newest version comes first; its sectio
 shown in the app after an update and is published as the release notes (see
 `docs/releasing.md`). Write for musicians: what you can do now, not how it works inside.
 
+## Unreleased
+
+### Changed
+- **The `wave` command prints readable numbers.** Replies show at most four decimal places, so a
+  note velocity reads 0.47 instead of 0.4699999988079071.
+
 ## 0.9.14 — 2026-11-13
 
 ### Added
