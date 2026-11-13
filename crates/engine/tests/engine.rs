@@ -578,3 +578,37 @@ fn an_arrangement_can_run_past_the_old_128_bar_limit() {
     pat.notes.push(Note::new(k, 600.0 * 4.0, 4.0, None));
     e.apply(&[Op::PutPattern { pattern: pat }], false, None).unwrap();
 }
+
+#[test]
+fn a_loop_does_not_play_the_downbeat_after_its_end() {
+    // one kick, on the first beat after the loop: looping [0, 4) must never play it (#57)
+    let mut p = Project::empty();
+    let [kick, ..] = p.add_starter_kit();
+    p.patterns[0].notes = vec![Note::new(kick, 16.0, 1.0, None)];
+    p.patterns[0].len = 8.0;
+    p.clips = vec![Clip {
+        id: 50, track: 0, start: 0.0, len: 8.0, offset: 0.0, kind: ClipKind::Pat, source: p.patterns[0].id, muted: false, gain: 0.0,
+        fade_in: 0.0, fade_out: 0.0, pan: 0.0, norm: false, rev: false, tune: None, stretch: 1.0, resample: false, pitch: 0.0,
+    }];
+    // at 44.1 kHz 4 beats are not a whole number of samples: the block that reaches the loop
+    // end runs past it by a fraction of a sample
+    let sr = 44100.0;
+    let loud = |p: &Project| {
+        let e = Engine::new(p.clone(), Arc::new(NoPlugins));
+        let mut rt = e.create_rt(sr, 256);
+        let (mut l, mut r) = (vec![0f32; 256], vec![0f32; 256]);
+        e.play(0.0);
+        let mut peak = 0f32;
+        // three passes of the loop (4 beats at 128 BPM = 1.875 s)
+        for _ in 0..((sr as f64 * 1.875 * 3.0) as usize / 256) {
+            rt.process(&mut l, &mut r, None);
+            peak = l.iter().chain(&r).fold(peak, |a, b| a.max(b.abs()));
+        }
+        peak
+    };
+    p.loop_range = None;
+    assert!(loud(&p) > 0.05, "the kick on beat 4 should play without a loop");
+    p.loop_range = Some(LoopRange { a: 0.0, b: 4.0 });
+    let peak = loud(&p);
+    assert!(peak < 1e-4, "the downbeat after the loop leaked into it: peak {peak}");
+}

@@ -1176,7 +1176,11 @@ impl Rt {
                 let seg = left.min(n - p);
                 let b0 = self.beat;
                 let b1 = b0 + seg as f64 * bps;
-                self.schedule(b0, b1, p, seg, bps, spb);
+                // `seg` is rounded up to whole samples, so `b1` can pass the loop end by up to a
+                // sample; events in `[le, b1)` belong to the beat after the wrap (or after the
+                // song end), not to this pass: a kick on the next bar's downbeat would sound
+                // here as well as at the loop start
+                self.schedule(b0, b1.min(le), p, seg, bps, spb);
                 // record input
                 if self.rec && b1 > self.rec_start {
                     self.shared.recording.store(true, Relaxed);
