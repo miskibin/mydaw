@@ -439,8 +439,16 @@ select option { background: var(--bg4); color: var(--fg); }
 .ptools .toolname { align-self: center; font: 600 10px var(--sans); color: var(--fg3); letter-spacing: .04em; min-width: 62px; }
 .ptools .vsep { align-self: center; height: 28px; }
 .ptools .smallbtn { height: 26px; padding: 0 10px; }
+/* the pitch editor: one row of tools under the title bar, labels beside their fields */
+.pitchwin .ptools { align-items: center; gap: 8px; padding: 5px 10px; }
+.pitchwin .ptools .numf { flex-direction: row; gap: 5px; height: 26px; box-sizing: border-box; padding: 0 7px; align-items: center; width: auto !important; }
+.pitchwin .ptools .numf .lab, .pitchwin .plab, .pitchwin .reflab { font: 600 8.5px var(--sans); color: var(--fg5); letter-spacing: .08em; text-transform: uppercase; white-space: nowrap; }
+.pitchwin .plab, .pitchwin .reflab { display: flex; flex-direction: row; align-items: center; gap: 5px; }
+.pitchwin .ptools .sel { height: 26px; }
+.pitchwin .reflab .sel { min-width: 130px; max-width: 200px; }
+.pitchwin .ptools .refnote { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.pitchwin .winhd .smallbtn { height: 22px; padding: 0 9px; }
 .macro { display: flex; align-items: flex-end; gap: 6px; }
-.refrow { align-items: flex-end; }
 .reflab { display: flex; flex-direction: column; gap: 2px; font: 600 8px var(--sans); color: var(--fg4); letter-spacing: .06em; }
 .reflab .sel { height: 26px; min-width: 150px; max-width: 220px; }
 .refnote { align-self: center; font: 500 11px var(--sans); color: var(--fg3); }

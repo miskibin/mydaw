@@ -599,6 +599,13 @@ function PitchBody(props: { clipId: number }) {
     const name = d.melody ? melName(d.melody.channel) : S.project.sources.find(s => s.id === d.source)?.name ?? '';
     say(t('d.pitch.say.matched', { name, c: Math.round(d.correction * 100), v: Math.round(d.vibrato * 100), i: Math.round(d.influence * 100) }));
   };
+  /** One line on the reference: matching, an error, why it is not used, or how well it fits. */
+  const refStatus = () => tgtBusy() ? t('d.pitch.matching')
+    : tgtErr() ? t('d.pitch.error', { err: tgtErr()! })
+    : target()?.reason ? t('d.pitch.nocorr', { why: reasonText(target()!.reason!) })
+    : target() ? t(draft()?.melody ? 'd.pitch.mel.fit' : 'd.pitch.fit', { n: Math.round(target()!.score * 100) }) + (target()!.octave ? t('d.pitch.fit.oct', { o: (target()!.octave > 0 ? '+' : '') + target()!.octave }) : '')
+      + (lowRuns().length ? t(lowRuns().length === 1 ? 'd.pitch.low.one' : 'd.pitch.low.many', { n: lowRuns().length }) : '')
+    : '';
   const reasonText = (r: string) => r === 'the reference does not match this take' ? t('d.pitch.mismatch')
     : r === 'the melody has no notes over this clip' ? t('d.pitch.mel.none')
     : r === 'no melody note plays while this take is sung' ? t('d.pitch.mel.nowhere') : r;
@@ -673,13 +680,16 @@ function PitchBody(props: { clipId: number }) {
         <span class="sub">{src()?.name ?? ''} · {S.project.tracks[c().track]?.name ?? ''}</span>
         <span ref={status} class="rendering" />
         <div style={{ flex: 1 }} />
+        <span onPointerDown={e => e.stopPropagation()}>
+          <Segmented small options={[t('d.pitch.mode.manual'), t('d.pitch.mode.ref')]} value={mode} pick={pickMode} color={FXMETA.tune.color} title={t('d.pitch.mode.tip')} />
+        </span>
+        <button class="smallbtn" classList={{ playing: U.playing }} title={t('d.pitch.play.tip')} onPointerDown={e => e.stopPropagation()} onClick={() => void A.toggleSong()}>{U.playing ? t('d.pitch.stop') : t('d.pitch.play')}</button>
+        <button class="smallbtn" classList={{ playing: previewing() }} title={t('d.pitch.solo.tip')} onPointerDown={e => e.stopPropagation()} onClick={solo}>{previewing() ? t('d.pitch.stop') : t('d.pitch.solo')}</button>
+        <button class="iconbtn" title={t('d.pitch.fit.tip')} onPointerDown={e => e.stopPropagation()} onClick={() => fitView()}><Icon d="M4 9V4h5 M20 9V4h-5 M4 15v5h5 M20 15v5h-5" size={13} /></button>
         <PitchCorrectButton insert={() => S.project.tracks[c().track]?.insert ?? null} keyScale={() => ({ key: key(), scale: scale() })} />
         <button class="closebtn" title={t('d.pitch.close')} onClick={A.closePitchEditor}>×</button>
       </div>
       <div class="ptools">
-        <Segmented small label={t('d.pitch.mode')} options={[t('d.pitch.mode.manual'), t('d.pitch.mode.ref')]} value={mode} pick={pickMode} color={FXMETA.tune.color}
-          title={t('d.pitch.mode.tip')} />
-        <div class="vsep" />
         <div class="seg tools">
           <For each={TOOLS}>{tl => (
             <button classList={{ on: tool() === tl.id }} title={t(tl.label) + ' (' + tl.key + ') — ' + t(tl.tip)} onClick={() => setTool(tl.id)}>
@@ -687,30 +697,19 @@ function PitchBody(props: { clipId: number }) {
             </button>
           )}</For>
         </div>
-        <span class="toolname">{t(TOOLS.find(x => x.id === tool())!.label)}</span>
+        <label class="plab" title={t('d.pitch.key.tip')}>{t('d.pitch.key')}
+          <select class="sel" value={key()} onChange={e => setKey(+e.currentTarget.value)}><For each={NOTE_NAMES}>{(n, i) => <option value={i()}>{n}</option>}</For></select>
+        </label>
+        <select class="sel" title={t('d.pitch.key.tip')} value={scale()} onChange={e => setScale(+e.currentTarget.value)}><For each={SCALES}>{(n, i) => <option value={i()}>{n}</option>}</For></select>
         <div class="vsep" />
-        <Segmented small label={t('d.pitch.key')} options={NOTE_NAMES} value={key} pick={setKey} color={FXMETA.tune.color} title={t('d.pitch.key.tip')} />
-        <Segmented small options={SCALES} value={scale} pick={setScale} color={FXMETA.tune.color} />
-        <div class="vsep" />
-        <button class="smallbtn" disabled={!an()} title={an() ? t('d.pitch.copy.tip') : t('d.pitch.copy.wait')} onClick={copyNotes}>{sel().size ? t('d.pitch.copy.sel', { n: sel().size }) : t('d.pitch.copy.all')}</button>
-        <button class="smallbtn" disabled={!tune()} title={sel().size ? t('d.pitch.reset.tip1') : t('d.pitch.reset.tip2')} onClick={resetNotes}>{sel().size ? t('d.pitch.reset.notes') : t('d.pitch.reset')}</button>
-        <div style={{ flex: 1 }} />
-        <button class="smallbtn" classList={{ playing: U.playing }} title={t('d.pitch.play.tip')} onClick={() => void A.toggleSong()}>{U.playing ? t('d.pitch.stop') : t('d.pitch.play')}</button>
-        <button class="smallbtn" classList={{ playing: previewing() }} title={t('d.pitch.solo.tip')} onClick={solo}>{previewing() ? t('d.pitch.stop') : t('d.pitch.solo')}</button>
-        <button class="iconbtn" title={t('d.pitch.fit.tip')} onClick={() => fitView()}><Icon d="M4 9V4h5 M20 9V4h-5 M4 15v5h5 M20 15v5h-5" size={13} /></button>
-      </div>
-      <Show when={mode() === 0}>
-        <div class="ptools refrow">
-          <Segmented small label={t('d.pitch.style')} options={CORRECT_PRESETS.map(x => t(('d.pitch.preset.' + x.id) as TranslationKey))} value={preset} pick={pickPreset} color={FXMETA.tune.color} title={t('d.pitch.style.tip')} />
+        <Show when={mode() === 0}>
+          <Segmented small options={CORRECT_PRESETS.map(x => t(('d.pitch.preset.' + x.id) as TranslationKey))} value={preset} pick={pickPreset} color={FXMETA.tune.color} title={t('d.pitch.style.tip')} />
           <NumField label={t('d.pitch.strength')} width={64} title={t('d.pitch.strength.tip')} value={centerPct} text={v => Math.round(v) + '%'} parse={parseNum} drag={(v, d) => clamp(Math.round(v + d * 0.5), 0, 100)} apply={v => setCenterPct(Math.round(clamp(v, 0, 100)))} />
           <NumField label={t('d.pitch.speed')} width={64} title={t('d.pitch.speed.tip')} value={speedMs} text={v => Math.round(v) + ' ms'} parse={parseNum} drag={(v, d) => clamp(Math.round(v + d), 0, 400)} apply={v => setSpeedMs(Math.round(clamp(v, 0, 400)))} />
           <NumField label={t('d.pitch.flatten')} width={70} title={t('d.pitch.flatten.tip')} value={driftPct} text={v => Math.round(v) + '%'} parse={parseNum} drag={(v, d) => clamp(Math.round(v + d * 0.5), 0, 100)} apply={v => setDriftPct(Math.round(clamp(v, 0, 100)))} />
-          <button class="smallbtn primary" disabled={!an()} title={t('d.pitch.macro.tip')} onClick={correct}>{sel().size ? t('d.pitch.correct.sel', { n: sel().size }) : t('d.pitch.correct.all')}</button>
-          <span class="refnote">{t('d.pitch.explain', { c: centerPct(), s: speedMs() === 0 ? t('d.pitch.instant') : speedMs() + ' ms', d: driftPct(), key: NOTE_NAMES[key()], scale: t(('d.pitch.scale.' + scale()) as TranslationKey) })}</span>
-        </div>
-      </Show>
-      <Show when={mode() === 1}>
-        <div class="ptools refrow">
+          <button class="smallbtn primary" disabled={!an()} title={t('d.pitch.macro.tip') + '\n' + t('d.pitch.explain', { c: centerPct(), s: speedMs() === 0 ? t('d.pitch.instant') : speedMs() + ' ms', d: driftPct(), key: NOTE_NAMES[key()], scale: t(('d.pitch.scale.' + scale()) as TranslationKey) })} onClick={correct}>{sel().size ? t('d.pitch.correct.sel', { n: sel().size }) : t('d.pitch.correct.all')}</button>
+        </Show>
+        <Show when={mode() === 1}>
           <Show when={(refSources().length || melodies().length || draft()?.melody) && draft()} fallback={<span class="refnote">{t('d.pitch.refnote.empty')}</span>}>
             <label class="reflab" title={t('d.pitch.ref.tip')}>
               <span>{t('d.pitch.reference')}</span>
@@ -738,24 +737,19 @@ function PitchBody(props: { clipId: number }) {
               drag={(v, d) => clamp(Math.round(v + d), 0, 400)} apply={v => patchDraft({ speed: Math.round(clamp(v, 0, 400)) || null })} />
             <Show when={!draft()!.melody}><NumField label={t('d.pitch.influence')} width={66} title={t('d.pitch.influence.tip')} value={() => Math.round(draft()!.influence * 100)} text={v => Math.round(v) + '%'} parse={parseNum}
               drag={(v, d) => clamp(Math.round(v + d * 0.5), 0, 100)} apply={v => patchDraft({ influence: clamp(Math.round(v), 0, 100) / 100 })} /></Show>
-            <Segmented small label={t('d.pitch.octave')} options={[t('d.pitch.auto'), '−24', '−12', '0', '+12', '+24']} value={() => [null, -24, -12, 0, 12, 24].indexOf(draft()!.octave ?? null)}
-              pick={i => patchDraft({ octave: [null, -24, -12, 0, 12, 24][i] })} color={FXMETA.tune.color} title={t('d.pitch.octave.tip')} />
+            <label class="plab" title={t('d.pitch.octave.tip')}>{t('d.pitch.octave')}
+              <select class="sel" value={[null, -24, -12, 0, 12, 24].indexOf(draft()!.octave ?? null)} onChange={e => patchDraft({ octave: [null, -24, -12, 0, 12, 24][+e.currentTarget.value] })}>
+                <For each={[t('d.pitch.auto'), '−24', '−12', '0', '+12', '+24']}>{(o, i) => <option value={i()}>{o}</option>}</For>
+              </select>
+            </label>
             <button class="smallbtn primary" disabled={!pending() || !target() || !!target()?.reason || tgtBusy()} onClick={applyRef}>{applied() ? t('d.pitch.apply.changes') : t('d.pitch.apply')}</button>
             <Show when={applied()}><button class="smallbtn" onClick={offRef} title={t('d.pitch.off.tip')}>{t('d.pitch.off')}</button></Show>
             <Show when={melStale() && applied()?.melody}>
               <span class="refnote warn">{t('d.pitch.mel.changed')}</span>
               <button class="smallbtn" title={t('d.pitch.mel.update.tip')} onClick={updateMelody}>{t('d.pitch.mel.update')}</button>
             </Show>
-            <span class="refnote" classList={{ err: !!tgtErr() || !!target()?.reason }}>
-              {tgtBusy() ? t('d.pitch.matching')
-                : tgtErr() ? t('d.pitch.error', { err: tgtErr()! })
-                : target()?.reason ? t('d.pitch.nocorr', { why: reasonText(target()!.reason!) })
-                : target() ? t(draft()?.melody ? 'd.pitch.mel.fit' : 'd.pitch.fit', { n: Math.round(target()!.score * 100) }) + (target()!.octave ? t('d.pitch.fit.oct', { o: (target()!.octave > 0 ? '+' : '') + target()!.octave }) : '')
-                  + (lowRuns().length ? t(lowRuns().length === 1 ? 'd.pitch.low.one' : 'd.pitch.low.many', { n: lowRuns().length }) : '')
-                : ''}
-            </span>
+            <span class="refnote" classList={{ err: !!tgtErr() || !!target()?.reason }} title={refStatus()}>{refStatus()}</span>
           </Show>
-          <div style={{ flex: 1 }} />
           <span class="reflegend"><i style={{ background: 'var(--fg4)' }} />{t('d.pitch.legend.orig')} <i class="dash" />{t('d.pitch.legend.ref')} <i style={{ background: FXMETA.tune.color }} />{t('d.pitch.legend.out')}</span>
           <Show when={model()}>{m => (
             <span class="detchip" title={t('d.pitch.det', { name: m().backend === 'rmvpe' ? t('d.pitch.det.rmvpe') : t('d.pitch.det.yin') }) + (m().error ? ' · ' + m().error : '')}>
@@ -767,8 +761,11 @@ function PitchBody(props: { clipId: number }) {
               {dl() != null ? t('d.pitch.dl.busy', { n: Math.round(dl()! * 100) }) : t('d.pitch.dl')}
             </button>
           </Show>
-        </div>
-      </Show>
+        </Show>
+        <div style={{ flex: 1 }} />
+        <button class="smallbtn" disabled={!an()} title={an() ? t('d.pitch.copy.tip') : t('d.pitch.copy.wait')} onClick={copyNotes}>{sel().size ? t('d.pitch.copy.sel', { n: sel().size }) : t('d.pitch.copy.all')}</button>
+        <button class="smallbtn" disabled={!tune()} title={sel().size ? t('d.pitch.reset.tip1') : t('d.pitch.reset.tip2')} onClick={resetNotes}>{sel().size ? t('d.pitch.reset.notes') : t('d.pitch.reset')}</button>
+      </div>
       <div ref={area} class="parea">
         <canvas ref={cv} style={{ position: 'absolute', inset: 0, width: '100%', height: '100%', 'touch-action': 'none' }}
           onPointerDown={down} onPointerMove={move} onPointerLeave={() => setHover(null)} onWheel={wheel} onContextMenu={e => e.preventDefault()} />
