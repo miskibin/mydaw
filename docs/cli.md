@@ -40,7 +40,7 @@ wave add-fx --insert 6 --type reverb --preset 3          # → {"fxId":1203,…}
 wave set-param --fx 1203 --param mix --value 30
 wave preset --fx 1203 --index 4
 wave import kick.wav loop.wav --track 3 --beat 16
-wave make-unique --clip 5012                           # own copy of the sample, new track + free insert
+wave make-unique --clip 5012                           # own copy of the sample on a new track (same routing)
 wave apply --file edit.json --label "Busier hats"
 wave undo
 ```

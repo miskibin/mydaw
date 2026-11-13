@@ -7,7 +7,7 @@ import { prefs } from '../state/prefs';
 import { createEffect, createSignal, For, onCleanup, onMount, Show } from 'solid-js';
 import { be } from '../api/backend';
 import { baseName, clamp, fmtClock, fmtPos, TapTracker } from '../lib/format';
-import { SNAPS, snapLabel } from '../lib/snap';
+import { autoSnap, SNAPS, snapLabel, snapName } from '../lib/snap';
 import * as A from '../state/actions';
 import { commit, Gesture, wheelEdit } from '../state/edit';
 import { S } from '../state/store';
@@ -196,17 +196,18 @@ export function Toolbar() {
           )}
         </For>
       </div>
-      <select class="sel snapsel" title={t('a.tb.snapTip')} value={String(U.snap)} onChange={e => A.setSnap(parseFloat(e.currentTarget.value))} data-snap>
-        <For each={SNAPS}>{([label, v]) => <option value={String(v)}>{v < 0 ? snapLabel(-1, U.bw) : v === 0 ? t('a.snap.off') : label}</option>}</For>
+      {/* the select names the setting only ("Snap: auto"); what auto resolves to is in its tooltip and the hint line */}
+      <select class="sel snapsel" title={U.snap < 0 ? t('a.tb.snapTipAuto', { unit: snapName(autoSnap(U.bw)) }) : t('a.tb.snapTip')} value={String(U.snap)} onChange={e => A.setSnap(parseFloat(e.currentTarget.value))} data-snap>
+        <For each={SNAPS}>{([label, v]) => <option value={String(v)}>{v === 0 ? t('a.snap.off') : label}</option>}</For>
       </select>
       <Show when={wins()}>
-        <button class="tbtn" classList={{ on: !U.plugsHidden }} onClick={() => (U.plugsHidden ? A.showPlugs() : A.playlistFront())}
-          title={U.plugsHidden ? t('a.tb.showWins', { n: wins() }) : t('a.tb.hideWins')}>
-          <Icon d="M4 7h12v12H4z M8 3h12v12" size={13} /><span class="lbl">{t('a.tb.windows', { n: wins() })}</span>
+        <button class="tbtn icon winsbtn" classList={{ on: !U.plugsHidden }} onClick={() => (U.plugsHidden ? A.showPlugs() : A.playlistFront())}
+          title={U.plugsHidden ? t('a.tb.showWins', { n: wins() }) : t('a.tb.hideWins')} aria-label={t('a.tb.windows', { n: wins() })}>
+          <Icon d="M4 7h12v12H4z M8 3h12v12" size={14} /><span class="cnt mono">{wins()}</span>
         </button>
       </Show>
-      <button class="tbtn" classList={{ on: U.mixOpen }} onClick={() => setU('mixOpen', !U.mixOpen)} title={t('a.tb.mixerTip')} aria-label="Mixer">
-        <Icon d="M5 21v-7M5 10V3M12 21v-9M12 8V3M19 21v-5M19 12V3M2 14h6M9 8h6M16 16h6" size={13} /><span class="lbl">Mixer</span>
+      <button class="tbtn icon" classList={{ on: U.mixOpen }} onClick={() => setU('mixOpen', !U.mixOpen)} title={t('a.tb.mixerTip')} aria-label={t('a.mn.mixer')}>
+        <Icon d="M5 21v-7M5 10V3M12 21v-9M12 8V3M19 21v-5M19 12V3M2 14h6M9 8h6M16 16h6" size={14} />
       </button>
       <Show when={midiStatus()?.selected}>
         <button class="ibtn midibtn" onClick={() => setU('settings', true)}

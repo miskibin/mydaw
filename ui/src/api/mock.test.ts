@@ -95,7 +95,7 @@ describe('make unique (audio) in the mock', () => {
   }
   const clip = async (be: MockBackend, id: number) => (await be.getState()).project.clips.find(c => c.id === id)!;
 
-  it('gives the clip its own source on a new track routed to a free insert, in one undo step', async () => {
+  it('gives the clip its own source on a new track with the old routing, in one undo step', async () => {
     const { be, src, a } = await setup();
     const before = structuredClone((await be.getState()).project);
     const r = await be.makeUnique([a]);
@@ -103,10 +103,9 @@ describe('make unique (audio) in the mock', () => {
     expect(p.sources.find(s => s.id === r.sourceId)).toMatchObject({ name: 'guitar #2', path: p.sources.find(s => s.id === src)!.path });
     expect(r.track).toBe(1);
     expect(p.tracks).toHaveLength(before.tracks.length + 1);
-    expect(p.inserts).toHaveLength(before.inserts.length);
-    expect(p.tracks[1]).toMatchObject({ name: 'guitar #2', insert: r.insertId });
-    expect(r.insertId).toBe(p.inserts[1].id);
-    expect(p.inserts[1].name).toBe('guitar #2');
+    expect(p.inserts).toEqual(before.inserts);
+    expect(p.tracks[1]).toMatchObject({ name: 'guitar #2', insert: 0 });
+    expect(r.insertId).toBe(0);
     expect(await clip(be, a)).toMatchObject({ track: 1, ref: r.sourceId });
     expect(await clip(be, 70001)).toMatchObject({ track: 0, ref: src });
     expect(await clip(be, 70002)).toMatchObject({ track: 2, ref: src });
@@ -120,7 +119,17 @@ describe('make unique (audio) in the mock', () => {
     const r3 = await be.makeUnique([a]);
     const name = async (id: number) => (await be.getState()).project.sources.find(s => s.id === id)!.name;
     expect([await name(r.sourceId), await name(r2.sourceId), await name(r3.sourceId)]).toEqual(['guitar #2', 'guitar #3', 'guitar #4']);
-    expect(new Set([r.insertId, r2.insertId, r3.insertId]).size).toBe(3);
+    expect([r.insertId, r2.insertId, r3.insertId]).toEqual([0, 0, 0]);
+  });
+  it('keeps a routing the user picked', async () => {
+    const { be, a } = await setup();
+    const p0 = (await be.getState()).project;
+    await be.applyOps([{ op: 'putTrack', track: { ...p0.tracks[0], insert: p0.inserts[3].id } }]);
+    const r = await be.makeUnique([a]);
+    const p = (await be.getState()).project;
+    expect(r.insertId).toBe(p0.inserts[3].id);
+    expect(p.tracks[1].insert).toBe(p0.inserts[3].id);
+    expect(p.inserts).toHaveLength(p0.inserts.length);
   });
   it('refuses what it cannot do and changes nothing', async () => {
     const { be, a } = await setup();

@@ -593,8 +593,8 @@ select option { background: var(--bg4); color: var(--fg); }
 /* one row at every width: labels turn into icons, then redundant controls drop out */
 @media (max-width: 1560px) { .toolbar .loopText { display: none; } }
 @media (max-width: 1460px) { .toolbar .tapbtn, .toolbar .monbtn, .toolbar .clockbox .tag9 { display: none; } }
-@media (max-width: 1340px) { .toolbar .tbtn .lbl, .toolbar .typoct { display: none; } .toolbar .tbtn { padding: 0 7px; } .toolbar .count { display: none; } }
-@media (max-width: 1200px) { .toolbar { column-gap: 8px; } .toolbar .projName, .toolbar .hinttxt { display: none; } .toolbar .snapsel { width: 92px; } }
+@media (max-width: 1340px) { .toolbar .typoct { display: none; } .toolbar .count { display: none; } }
+@media (max-width: 1200px) { .toolbar { column-gap: 8px; } .toolbar .projName, .toolbar .hinttxt { display: none; } }
 @media (max-width: 1040px) { .toolbar .patselbtn { min-width: 64px; max-width: 96px; } .toolbar .patselnew { display: none; } .toolbar .tools > button:nth-child(n+4), .toolbar .seg > button.metrobtn, .toolbar .typkb { display: none; } .tbmid, .tbright { gap: 5px; } }
 @media (max-width: 900px) { .toolbar .snapsel, .toolbar .tools, .toolbar .clockbox > div { display: none; } }
 .winbtns > button { width: 46px; border: 0; background: transparent; color: var(--fg2); cursor: default; display: flex; align-items: center; justify-content: center; padding: 0; }
@@ -840,7 +840,13 @@ select option { background: var(--bg4); color: var(--fg); }
 /* bigger mute / solo / arm targets in track headers and mixer strips */
 .lane .mini.m, .lane .mini.s, .strip .mini.m, .strip .mini.s { min-width: 22px; height: 19px; font-size: 10px; }
 .lane .mini.route { min-width: 30px; padding: 0 4px; }
-.toolbar .snapsel { flex: none; width: 118px; }
+.toolbar .snapsel { flex: none; width: 96px; }
+/* PAT over SONG: two short rows take half the width of a side-by-side switch */
+.toolbar .seg.patsong { flex-direction: column; justify-content: center; gap: 1px; padding: 2px; }
+.toolbar .seg.patsong > button { height: 11px; width: 38px; padding: 0; font-size: 8.5px; line-height: 1; border-radius: 2px; }
+/* icon-only toolbar buttons (Mixer, Windows); the Windows button keeps its count */
+.toolbar .tbtn.icon { padding: 0 7px; }
+.toolbar .tbtn .cnt { font-size: 9.5px; font-weight: 600; min-width: 7px; }
 
 /* EQ quick low/high cut knobs */
 
