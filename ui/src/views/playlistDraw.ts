@@ -522,27 +522,3 @@ function drawRec(g: CanvasRenderingContext2D, v: View, r: { track: number; clipS
   g.strokeStyle = T.red; g.lineWidth = 1; g.beginPath(); g.roundRect(x + 0.5, y + 0.5, w - 1, h - 1, 3); g.stroke();
 }
 
-export function drawRuler(g: CanvasRenderingContext2D, offX: number, W: number, bw: number, loop: { a: number; b: number } | null, start: number) {
-  g.fillStyle = T.rulerBg; g.fillRect(0, 0, W, 26);
-  g.save(); g.translate(-offX, 0);
-  const x0 = offX, x1 = offX + W;
-  if (loop) {
-    g.fillStyle = rgba(T.green, 0.16); g.fillRect(loop.a * bw, 0, (loop.b - loop.a) * bw, 26);
-    g.fillStyle = T.green; g.fillRect(Math.round(loop.a * bw), 0, 1, 26); g.fillRect(Math.round(loop.b * bw) - 1, 0, 1, 26);
-  }
-  // beat ticks along the bottom
-  g.fillStyle = T.fg6;
-  for (let b = Math.floor(x0 / bw); b * bw <= x1; b++) g.fillRect(Math.round(b * bw), 21, 1, 5);
-  const barStep = bw * 4 < 36 ? 4 : bw * 4 < 64 ? 2 : 1;
-  g.font = '500 10px "Geist Mono Variable", "Geist Mono", monospace';
-  for (let bar = Math.floor(x0 / (4 * bw) / barStep) * barStep; bar * 4 * bw <= x1; bar += barStep) {
-    const x = Math.round(bar * 4 * bw);
-    g.fillStyle = T.fg6; g.fillRect(x, 0, 1, 26);
-    g.fillStyle = T.rulerText; g.fillText(String(bar + 1), x + 4, 15);
-  }
-  // start marker
-  const sx = start * bw;
-  g.fillStyle = T.green; g.beginPath(); g.moveTo(sx - 5, 0); g.lineTo(sx + 5, 0); g.lineTo(sx, 7); g.closePath(); g.fill();
-  g.restore();
-  g.fillStyle = T.bg0; g.fillRect(0, 25, W, 1);
-}

@@ -10,6 +10,10 @@ import { t, type TranslationKey } from '../lib/i18n';
 import { cloneNotes } from '../lib/noteClone';
 import { zoomAround, type ZRange } from '../lib/zoomBar';
 import { ZoomScrollbar } from '../ui/ZoomScrollbar';
+import { drawRuler, rulerCursor, rulerDown, RULER_H, type RulerHost } from '../ui/timeRuler';
+import { clipOfPattern, patBeatAt, songBeatIn } from '../lib/patLoop';
+import { rgba, T, themeVersion } from '../ui/theme';
+import { curBeat } from '../state/telemetry';
 import { TOTAL_BEATS, type Note } from '../api/types';
 import { clamp } from '../lib/format';
 import { duplicateRight, keyOf, moveNotes, noteAt, notesText, resizeNotes, ROLL_SNAPS, SCALES, scaleMask, snapStep, stepsOf, transpose, velOf } from '../lib/pattern';
@@ -23,12 +27,15 @@ import type { TransformSelect, TransformVerb } from '../api/types';
 
 /** The project key/scale as a setKey op (the roll header's key selectors commit it). */
 const setKeyOp = (key: number, scale: number) => ({ op: 'setKey' as const, key, scale });
-import { audition, chanKindLabel, channels, closeRoll, curPat, moveNotesToNewPattern, patPlayhead, putNotes, rollFront, selChan, selectChannel, toggleRollMax } from '../state/pattern';
+import {
+  audition, chanKindLabel, channels, closeRoll, curPat, moveNotesToNewPattern, patFrom, patLoopOf, patMode, patPlayhead, patStartOf, putNotes, rollFront, selChan,
+  selectChannel, setPatLoop, setPatStart, toggleRollMax,
+} from '../state/pattern';
 import { arrVersion, S } from '../state/store';
 import { openMenu, say, U } from '../state/ui';
 import { selectionSpan, vocalsUnder } from '../lib/melody';
 import { fmtPos } from '../lib/format';
-import { openPitchEditor } from '../state/actions';
+import { openPitchEditor, seekSong, switchMode } from '../state/actions';
 import { dblCheck, edgeScroller, panDrag, track, trackFrame } from '../ui/drag';
 import { typingHeld } from '../state/typingKeys';
 import { noteClip, setNoteClip } from '../state/noteClipboard';
@@ -92,6 +99,7 @@ function projectKey(): { root: number; scale: number } {
 
 function Roll(props: { z: number }) {
   let wrap!: HTMLDivElement, cv!: HTMLCanvasElement, phead!: HTMLDivElement, laneCv!: HTMLCanvasElement, laneWrap!: HTMLDivElement;
+  let rulerCv!: HTMLCanvasElement, phRuler!: HTMLDivElement;
   // memos: every read was a find() through the store (thousands per redraw of a big pattern)
   const ptM = createMemo(() => curPat()!), chM = createMemo(() => selChan()!);
   const pt = () => ptM(), ch = () => chM();
@@ -248,7 +256,7 @@ function Roll(props: { z: number }) {
   onMount(() => onCleanup(addFrameTask(() => {
     const p = curPat(); if (!p || !phead || !U.rollWin) return;
     const b = patPlayhead(p);
-    if (b < 0) { phead.style.opacity = '0'; playingNow = false; followHold = false; lastBeat = -1; return; }
+    if (b < 0) { phead.style.opacity = phRuler.style.opacity = '0'; playingNow = false; followHold = false; lastBeat = -1; return; }
     playingNow = true;
     if (b + 1e-6 < lastBeat) followHold = false; // the pattern came round: a new pass
     lastBeat = b;
@@ -258,8 +266,9 @@ function Roll(props: { z: number }) {
       if (to != null) { const sx = clamp(to * geo().pps, 0, maxSx()); if (Math.abs(sx - view().sx) > 0.5) setViewS(v => ({ ...v, sx })); }
     }
     const x = rollX(geo(), b * 4);
-    phead.style.opacity = x >= KW ? '0.85' : '0';
+    phead.style.opacity = phRuler.style.opacity = x >= KW ? '0.85' : '0';
     phead.style.transform = `translateX(${Math.round(x)}px)`;
+    phRuler.style.transform = `translateX(${Math.round(x) - KW}px)`;
   })));
   onMount(() => {
     const up = () => { dragging = false; };
@@ -287,6 +296,81 @@ function Roll(props: { z: number }) {
     if (sx !== view().sx) userScrolled();
     setViewS(v => ({ ...v, sx, sy }));
   });
+
+  // ---- the time ruler (ui/timeRuler, as in the Playlist), in beats of the pattern. Click = where
+  // playback starts: in SONG mode with the pattern in the playlist the song jumps to that beat of
+  // it, else the pattern loop starts there (PAT mode). Drag = the part of the pattern its loop
+  // plays (PAT mode); double-click = all of it again. Not edits: nothing to undo.
+  /** The playlist clip of this pattern a click goes to in SONG mode (null: the pattern loop instead). */
+  const songClip = () => (patMode() || U.patPlaying ? null : clipOfPattern(S.project.clips, pt().id, U.playing ? curBeat() : U.start));
+  const rollSeek = (b: number) => {
+    const p = pt(), c = songClip(), at = U.playing ? curBeat() : U.start;
+    const s = c ? songBeatIn(c, p.len, b, at) : null;
+    if (s != null) { seekSong(s); return; }
+    setPatStart(p.id, b);
+    if (!patMode()) switchMode(true); // not in the song (or not that beat of it): the pattern loop plays it
+    say(t('b.pr.startAt', { pos: fmtPos(b) }));
+  };
+  const ruler: RulerHost = {
+    beatAt: x => (x - rulerCv.getBoundingClientRect().left + geo().sx) / geo().pps / 4,
+    bw: () => geo().pps * 4,
+    unit: alt => (alt ? 0 : rollSnap() / 4),
+    max: () => pt().len,
+    loop: () => patLoopOf(pt().id),
+    edit: () => ({ set: r => setPatLoop(pt().id, r), end: () => {} }),
+    clear: () => { setPatLoop(pt().id, null); say(t('b.pr.loopAll')); },
+    seek: rollSeek,
+    drawn: r => {
+      setPatStart(pt().id, r.a);
+      if (!patMode()) switchMode(true);
+      say(t('b.pr.loopSet', { a: fmtPos(r.a), b: fmtPos(r.b) }));
+    },
+    track: (m, u, c) => { dragging = true; track(m, ev => { dragging = false; u(ev); }, c); },
+    key: 'rollRuler' + props.z,
+  };
+  /** The start marker: the song's in SONG mode (where this pattern plays at it), else the loop's. */
+  const rulerStart = () => {
+    const p = pt(), c = songClip();
+    return c ? patBeatAt(c, p.len, U.start) : patFrom(p);
+  };
+  const drawRulerNow = () => {
+    const W = gridW(); if (!rulerCv || W <= 1) return;
+    fitCanvas(rulerCv, W, RULER_H);
+    const g = rulerCv.getContext('2d')!, dpr = window.devicePixelRatio || 1, G = geo();
+    g.setTransform(dpr, 0, 0, dpr, 0, 0);
+    drawRuler(g, G.sx, W, G.pps * 4, patLoopOf(pt().id), rulerStart());
+    // past the pattern's end: room to draw in, not part of the pattern yet
+    const xe = pt().len * 4 * G.pps - G.sx;
+    if (xe < W) { g.fillStyle = rgba(T.viz, 0.55); g.fillRect(Math.max(0, xe), 0, W - Math.max(0, xe), RULER_H - 1); }
+  };
+  let rafRuler = 0;
+  createEffect(() => {
+    view(); size(); pt().len; pt().id; patLoopOf(pt().id); patStartOf(pt().id); rulerStart(); themeVersion(); void fonts.epoch;
+    if (!rafRuler) rafRuler = requestAnimationFrame(() => { rafRuler = 0; untrack(drawRulerNow); });
+  });
+  onCleanup(() => cancelAnimationFrame(rafRuler));
+  // ---- the overview bar on top (as in the Playlist): the pattern's notes under the view's thumb
+  const paintOverview = (g: CanvasRenderingContext2D, W: number, H: number, span: number) => {
+    const ns = notesRaw(), id = ch().id, m = chansMap();
+    if (!ns.length) return;
+    let lo = 127, hi = 0;
+    for (const n of ns) { const k = keyOf(n, m.get(n.ch)); lo = Math.min(lo, k); hi = Math.max(hi, k); }
+    lo -= 2; hi += 2;
+    const rh = Math.max(1, (H - 4) / (hi - lo + 1)), xs = W / span;
+    // the pattern's end
+    const xe = stepsOf(pt()) * xs;
+    if (xe < W) { g.fillStyle = rgba(T.viz, 0.45); g.fillRect(xe, 0, W - xe, H); }
+    for (const own of [false, true]) {
+      g.fillStyle = own ? ch().color : rgba(T.fg4, 0.5);
+      g.globalAlpha = own ? 0.9 : 1;
+      for (const n of ns) {
+        if ((n.ch === id) !== own) continue;
+        const k = keyOf(n, m.get(n.ch));
+        g.fillRect(n.step * xs, 2 + (hi - k) * rh, Math.max(1, n.len * xs - 0.5), Math.max(1, rh));
+      }
+    }
+    g.globalAlpha = 1;
+  };
 
   const pos = (e: PointerEvent | MouseEvent | WheelEvent) => {
     const r = cv.getBoundingClientRect(), G = geo();
@@ -844,6 +928,18 @@ function Roll(props: { z: number }) {
         <span class="note mono" style={{ 'align-self': 'center', 'font-size': '10px', color: 'var(--fg5)' }}>{sel().size ? t('b.pe.nSel', { n: sel().size }) : notesText(chanNotes().length)}{t('b.pe.newNote', { len: lastLenText() })}</span>
       </div>
       <div class="rollgrid">
+        <div class="ovrow" style={{ 'padding-left': KW + 'px' }}>
+          <ZoomScrollbar orient="h" class="ov" range={hRange} limits={hLimits} onChange={setH} title={t('b.pr.hbarTip')}
+            paint={paintOverview} paintKey={() => [data(), ch().id, pt().len, chansMap()]} />
+        </div>
+        <div class="rollruler">
+          <div class="corner" style={{ width: KW + 'px' }} />
+          <div class="rcv">
+            <canvas ref={rulerCv} title={t('b.pr.rulerTip')} onPointerDown={e => { if (propsFor()) setPropsFor(null); rulerDown(ruler, e); }}
+              onPointerMove={e => { if (!e.buttons) rulerCv.style.cursor = rulerCursor(ruler, e); }} />
+            <div ref={phRuler} class="pphead" />
+          </div>
+        </div>
         <div ref={wrap} class="parea">
           <canvas ref={cv} style={{ position: 'absolute', inset: 0, width: '100%', height: '100%', 'touch-action': 'none' }}
             onPointerDown={down} onPointerMove={move} onPointerLeave={() => { ptr = null; }} onWheel={wheel} onContextMenu={e => e.preventDefault()} />
@@ -851,9 +947,6 @@ function Roll(props: { z: number }) {
           <Show when={propsFor()} keyed>{idx => <PropsPop idx={idx} />}</Show>
         </div>
         <ZoomScrollbar orient="v" range={vRange} limits={vLimits} onChange={setV} title={t('b.pr.vbarTip')} />
-        <div style={{ 'padding-left': KW + 'px', display: 'grid', 'min-width': '0' }}>
-          <ZoomScrollbar orient="h" range={hRange} limits={hLimits} onChange={setH} title={t('b.pr.hbarTip')} />
-        </div>
       </div>
       <div class="lanerow" style={{ height: LANE_H + 'px' }}>
         <div ref={laneWrap} class="lanecv">

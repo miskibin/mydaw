@@ -32,6 +32,10 @@ import { FXMETA, Icon } from '../ui/icons';
 import { NumField, parseNum, Segmented } from '../ui/Knob';
 import { rgba, T, theme, themeVersion } from '../ui/theme';
 import { moveWindow } from './FxWindow';
+import { drawRuler, rulerCursor, rulerDown as rulerPress, RULER_H, type RulerHost } from '../ui/timeRuler';
+import { ZoomScrollbar } from '../ui/ZoomScrollbar';
+import type { ZRange } from '../lib/zoomBar';
+import { TOTAL } from '../lib/clipOps';
 import { PitchCorrectButton } from './PitchCorrectButton';
 
 type Tool = 'main' | 'drift' | 'formant' | 'gain' | 'split' | 'pencil';
@@ -44,7 +48,7 @@ const TOOLS: { id: Tool; key: string; label: TranslationKey; icon: string; tip: 
   { id: 'pencil', key: '6', label: 'd.pitch.tool.pencil', icon: 'M4 20l4.5-1L19 8.5 15.5 5 5 15.5z', tip: 'd.pitch.tip.pencil' },
 ];
 const SCALES = ['Chromatic', 'Major', 'Minor', 'Maj pent', 'Min pent'];
-const KW = 46, RH = 22, BH = 48;
+const KW = 46, RH = RULER_H, BH = 48;
 
 const anCache = new Map<string, PitchAnalysis>();
 
@@ -250,7 +254,7 @@ function PitchBody(props: { clipId: number }) {
     const stop = addFrameTask(() => {
       const W = area.clientWidth, H = area.clientHeight;
       if (!W || !H) return;
-      if (W !== size.W || H !== size.H) { const first = !size.W; size = { W, H }; if (first) fitView(); dirty = true; }
+      if (W !== size.W || H !== size.H) { const first = !size.W; size = { W, H }; if (first) fitView(); else bumpView(); dirty = true; }
       if (dirty) { dirty = false; draw(W, H); }
       // playhead (telemetry), as a DOM line — no canvas redraw per frame
       const f = tele.frame;
@@ -292,30 +296,23 @@ function PitchBody(props: { clipId: number }) {
       b.textBaseline = 'alphabetic';
     }) as CanvasImageSource, 0, 0, W, H);
     g.save(); g.beginPath(); g.rect(KW, 0, W - KW, H); g.clip();
-    // beat grid + ruler
+    // beat grid, and the ruler (ui/timeRuler, as in the Playlist) in song beats
     const sp = spbSrc(), b0 = c().start + (tAt(KW) - t0()) / sp, b1 = c().start + (tAt(W) - t0()) / sp;
     const beatX = (bt: number) => X(t0() + (bt - c().start) * sp);
     const step = view.pps * sp < 14 ? 4 : 1;
-    g.fillStyle = T.rulerBg; g.fillRect(KW, 0, W - KW, RH);
-    g.font = '500 9px "Geist Mono Variable", monospace';
-    for (let bt = Math.ceil(b0 / step) * step; bt <= b1; bt += step) {
+    for (let bt = Math.max(0, Math.ceil(b0 / step) * step); bt <= b1; bt += step) {
       const x = Math.round(beatX(bt)) + 0.5, bar = bt % 4 === 0;
       g.strokeStyle = bar ? T.vizGrid2 : T.vizGrid; g.beginPath(); g.moveTo(x, RH); g.lineTo(x, H - BH); g.stroke();
-      if (bar || view.pps * sp > 40) { g.fillStyle = bar ? T.fg3 : T.fg5; g.fillText(fmtPos(bt), x + 3, 14); }
     }
-    g.fillStyle = T.vizAxis; g.fillRect(KW, RH - 1, W - KW, 1);
-    // the song's loop range (ruler band + faint column) and start marker, as in the Playlist
     const lp = S.project.loop;
+    g.save(); g.translate(KW, 0);
+    drawRuler(g, KW - beatX(0), W - KW, view.pps * sp, lp, U.start, RH);
+    g.restore();
+    // the song's loop range as a faint column, as in the Playlist
     if (lp) {
-      const xa = X(tOfBeat(lp.a)), xb = X(tOfBeat(lp.b));
-      if (xb > KW && xa < W) {
-        g.fillStyle = rgba(T.green, 0.05); g.fillRect(xa, RH, xb - xa, H - RH - BH);
-        g.fillStyle = rgba(T.green, 0.35); g.fillRect(xa, RH - 5, xb - xa, 4);
-        g.fillStyle = T.green; g.fillRect(Math.round(xa), RH - 7, 1, 7); g.fillRect(Math.round(xb) - 1, RH - 7, 1, 7);
-      }
+      const xa = beatX(lp.a), xb = beatX(lp.b);
+      if (xb > KW && xa < W) { g.fillStyle = rgba(T.green, 0.05); g.fillRect(xa, RH, xb - xa, H - RH - BH); }
     }
-    const xs = X(tOfBeat(U.start));
-    if (xs >= KW && xs <= W) { g.fillStyle = T.fg3; g.beginPath(); g.moveTo(xs - 4, RH - 8); g.lineTo(xs + 4, RH - 8); g.lineTo(xs, RH - 2); g.closePath(); g.fill(); }
     // outside the clip region
     g.fillStyle = T.shade;
     if (X(t0()) > KW) g.fillRect(KW, RH, X(t0()) - KW, H - RH);
@@ -450,12 +447,12 @@ function PitchBody(props: { clipId: number }) {
 
   const down = (e: PointerEvent) => {
     root.focus();
-    if (!an()) return;
     const { x, y } = pos(e);
+    if (y < RH && x >= KW && e.button === 0) return rulerPress(ruler, e);
+    if (!an()) return;
     if (e.button === 1 || (e.button === 0 && e.altKey && tool() !== 'pencil' && tool() !== 'main')) return pan(e);
     if (e.button !== 0) return;
     e.preventDefault();
-    if (y < RH) return rulerDown(e, x);
     if (x < KW) return;
     const i = hitNote(x, y), sp = hitSplit(x, y), tk = tool();
     if (tk === 'pencil') return pencil(e);
@@ -490,25 +487,22 @@ function PitchBody(props: { clipId: number }) {
     let lx = e.clientX, ly = e.clientY;
     track(ev => { view.t -= (ev.clientX - lx) / view.pps; const dm = (ev.clientY - ly) / rowH(); view.lo += dm; view.hi += dm; lx = ev.clientX; ly = ev.clientY; bumpView(); }, null, 'grabbing');
   };
-  // ---- ruler: like the Playlist's — click = start marker (playback jumps there), drag = loop range
-  // (the project's loop, one undo step), double-click = no loop. Snaps to 1/16 beat; Alt = free.
+  // ---- ruler (ui/timeRuler, the Playlist's gestures) in song beats: click = start marker (playback
+  // jumps there), drag = the project's loop (one undo step), drag its edge = resize it, Shift+drag
+  // inside = move it, double-click = no loop. Snaps to 1/16 note; Alt = free.
   const beatOf = (ts: number) => c().start + (ts - t0()) / spbSrc();
   const tOfBeat = (b: number) => t0() + (b - c().start) * spbSrc();
-  const snapBeat = (b: number, free: boolean) => Math.max(0, free ? b : Math.round(b * 4) / 4);
-  const rulerDown = (e: PointerEvent, x: number) => {
-    if (dblCheck('pruler' + props.clipId)) { if (S.project.loop) { A.setLoop(null, t('a.pl.deleteLoop')); say(t('a.pl.loopDeleted')); } return; }
-    const r = cv.getBoundingClientRect(), b0 = snapBeat(beatOf(tAt(x)), e.altKey);
-    let g: Gesture | null = null;
-    track(ev => {
-      const b1 = snapBeat(beatOf(tAt(ev.clientX - r.left)), ev.altKey);
-      if (!g && Math.abs(ev.clientX - e.clientX) > 4) g = new Gesture(t('a.pl.loop'));
-      const a = Math.min(b0, b1), z = Math.max(b0, b1), now = S.project.loop;
-      if (g && z - a > 1e-6 && !(now && now.a === a && now.b === z)) g.update([{ op: 'setLoop', loop: { a, b: z } }]);
-    }, () => {
-      if (!g) { A.seekSong(b0); return; }
-      g.end();
-      if (S.project.loop) { A.seekSong(S.project.loop.a); say(t('d.pitch.say.loop', { a: fmtPos(S.project.loop.a), b: fmtPos(S.project.loop.b) })); }
-    }, 'ew-resize');
+  const ruler: RulerHost = {
+    beatAt: x => beatOf(tAt(x - cv.getBoundingClientRect().left)),
+    bw: () => view.pps * spbSrc(),
+    unit: alt => (alt ? 0 : 0.25),
+    max: () => TOTAL,
+    loop: () => S.project.loop ?? null,
+    edit: label => { const g = new Gesture(label); return { set: r => g.update([{ op: 'setLoop', loop: { a: r.a, b: r.b } }]), end: () => g.end() }; },
+    clear: () => { A.setLoop(null, t('a.pl.deleteLoop')); say(t('a.pl.loopDeleted')); },
+    seek: b => A.seekSong(b),
+    drawn: r => { A.seekSong(r.a); say(t('d.pitch.say.loop', { a: fmtPos(r.a), b: fmtPos(r.b) })); },
+    key: 'pruler' + props.clipId,
   };
   const pencil = (e: PointerEvent) => {
     const erase = e.altKey, r = cv.getBoundingClientRect();
@@ -535,13 +529,15 @@ function PitchBody(props: { clipId: number }) {
     }, 'crosshair');
   };
   const move = (e: PointerEvent) => {
-    if (e.buttons || !an()) return;
+    if (e.buttons) return;
     const { x, y } = pos(e);
+    if (y < RH) { cv.style.cursor = x >= KW ? rulerCursor(ruler, e) : 'default'; return; }
+    if (!an()) return;
     const i = x > KW && y > RH && y < size.H - BH ? hitNote(x, y) : -1, sp = x > KW ? hitSplit(x, y) : -1;
     const h = hover();
     if (!h || h.note !== i || h.split !== sp) setHover({ note: i, split: sp });
     const t = tool();
-    cv.style.cursor = y < RH ? 'pointer' : t === 'pencil' ? 'crosshair' : t === 'split' ? (sp >= 0 ? 'col-resize' : i >= 0 ? 'text' : 'default') : i >= 0 ? 'ns-resize' : 'default';
+    cv.style.cursor = t === 'pencil' ? 'crosshair' : t === 'split' ? (sp >= 0 ? 'col-resize' : i >= 0 ? 'text' : 'default') : i >= 0 ? 'ns-resize' : 'default';
   };
   const wheel = (e: WheelEvent) => {
     e.preventDefault(); e.stopPropagation();
@@ -634,6 +630,30 @@ function PitchBody(props: { clipId: number }) {
     if (i === 0 && applied()) offRef();
     if (i === 1) startDraft();
     setMode(i);
+  };
+  // ---- the overview bar on top (as in the Playlist): the whole take, in source seconds, with the
+  // clip's part lit and its notes at the pitch they sound at
+  const ovTotal = () => Math.max(src()?.dur ?? 0, t1());
+  const ovView = (): ZRange => { viewV(); return { pos: view.t, len: Math.max(1, size.W - KW) / view.pps }; };
+  const ovLimits = () => { viewV(); const w = Math.max(1, size.W - KW); return { total: ovTotal(), minLen: w / 4000, maxLen: w / 10 }; };
+  const ovChange = (r: ZRange) => { view.pps = clamp(Math.max(1, size.W - KW) / r.len, 10, 4000); view.t = r.pos; bumpView(); };
+  const paintOverview = (g: CanvasRenderingContext2D, W: number, H: number, span: number) => {
+    const xs = W / span, col = src()?.color ?? FXMETA.tune.color;
+    g.fillStyle = rgba(T.viz, 0.5); g.fillRect(0, 0, W, H);
+    g.fillStyle = rgba(col, 0.14); g.fillRect(t0() * xs, 0, (t1() - t0()) * xs, H);
+    const a = an(); if (!a) return;
+    const ns = notes(), cs = centers();
+    let lo = Infinity, hi = -Infinity;
+    for (let i = 0; i < ns.length; i++) { const p = cs[i]; if (p == null) continue; const m = p + ns[i].shift / 100; lo = Math.min(lo, m); hi = Math.max(hi, m); }
+    if (!(hi >= lo)) return;
+    lo -= 1; hi += 1;
+    const ky = (H - 4) / Math.max(1, hi - lo), th = Math.max(1.5, Math.min(3, ky));
+    for (let i = 0; i < ns.length; i++) {
+      const p = cs[i]; if (p == null) continue;
+      const n = ns[i], inClip = n.end > t0() && n.start < t1();
+      g.fillStyle = rgba(col, inClip ? 0.95 : 0.35);
+      g.fillRect(n.start * xs, 2 + (hi - p - n.shift / 100) * ky - th / 2, Math.max(1, (n.end - n.start) * xs), th);
+    }
   };
   const refreshAnalysis = () => { anCache.clear(); setTarget(null); load(); };
   onMount(() => {
@@ -768,6 +788,10 @@ function PitchBody(props: { clipId: number }) {
         <div style={{ flex: 1 }} />
         <button class="smallbtn" disabled={!an()} title={an() ? t('d.pitch.copy.tip') : t('d.pitch.copy.wait')} onClick={copyNotes}>{sel().size ? t('d.pitch.copy.sel', { n: sel().size }) : t('d.pitch.copy.all')}</button>
         <button class="smallbtn" disabled={!tune()} title={sel().size ? t('d.pitch.reset.tip1') : t('d.pitch.reset.tip2')} onClick={resetNotes}>{sel().size ? t('d.pitch.reset.notes') : t('d.pitch.reset')}</button>
+      </div>
+      <div class="ovrow" style={{ 'padding-left': KW + 'px', 'padding-right': '0' }}>
+        <ZoomScrollbar orient="h" class="ov" range={ovView} limits={ovLimits} onChange={ovChange} title={t('d.pitch.ovTip')}
+          paint={paintOverview} paintKey={() => [an(), centers(), JSON.stringify(c().tune ?? null), c().offset, c().len, c().stretch, src()?.color]} />
       </div>
       <div ref={area} class="parea">
         <canvas ref={cv} style={{ position: 'absolute', inset: 0, width: '100%', height: '100%', 'touch-action': 'none' }}

@@ -153,11 +153,6 @@ a { color: var(--blue); }
 /* the overview bar on top replaces the native horizontal scrollbar (vertical one stays) */
 .plscroll::-webkit-scrollbar:horizontal { height: 0; }
 /* FL-style overview scrollbar on top: minimap of the song + a wide, easy-to-grab thumb */
-.ploverview { flex: none; height: 28px; padding: 2px 14px 2px 0; background: var(--bg1); border-bottom: 1px solid var(--bg0); box-sizing: border-box; }
-.ploverview .ovtrack { position: relative; height: 24px; border-radius: 4px; background: var(--bg3); overflow: hidden; }
-.ploverview canvas { position: absolute; inset: 0; width: 100%; height: 100%; }
-.ploverview .ovthumb { position: absolute; top: 0; bottom: 0; pointer-events: none; border-radius: 4px;
-  background: color-mix(in srgb, var(--fg-hi) 14%, transparent); box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--fg-hi) 45%, transparent); }
 .rulerRow { position: sticky; top: 0; z-index: 5; display: flex; height: 26px; }
 .plhead { position: sticky; left: 0; z-index: 6; flex: none; background: var(--bg5); border-right: 1px solid var(--bg0); border-bottom: 1px solid var(--bg0); display: flex; align-items: center; justify-content: space-between; padding: 0 10px; }
 .ruler { position: absolute; left: 0; top: 0; display: block; height: 26px; cursor: pointer; }
@@ -536,10 +531,15 @@ select option { background: var(--bg4); color: var(--fg); }
 .plab { display: flex; flex-direction: column; gap: 2px; font: 600 8px var(--sans); color: var(--fg5); letter-spacing: .08em; }
 .plab .sel { height: 24px; }
 /* piano roll: note grid with zoom scrollbars (right = key height, bottom = time) */
-.rollgrid { flex: 1; min-height: 0; display: grid; grid-template-columns: minmax(0, 1fr) 14px; grid-template-rows: minmax(0, 1fr) 14px; background: var(--bg1); border-bottom: 1px solid var(--bg0); }
-.rollgrid > .parea { min-width: 0; }
-.rollgrid > .zbar.v { margin: 1px 1px 1px 2px; }
-.rollgrid .zbar.h { margin: 2px 1px 1px 0; }
+.rollgrid { flex: 1; min-height: 0; display: grid; grid-template-columns: minmax(0, 1fr) 14px; grid-template-rows: 28px 26px minmax(0, 1fr); background: var(--bg1); border-bottom: 1px solid var(--bg0); }
+.rollgrid > .ovrow { grid-column: 1 / -1; padding-right: 17px; }
+.rollgrid > .parea { min-width: 0; grid-row: 3; grid-column: 1; }
+.rollgrid > .zbar.v { margin: 1px 1px 1px 2px; grid-row: 3; grid-column: 2; }
+/* the Piano roll's time ruler (ui/timeRuler, as in the Playlist) */
+.rollruler { grid-row: 2; grid-column: 1; display: flex; min-width: 0; height: 26px; }
+.rollruler .corner { flex: none; background: var(--bg5); border-right: 1px solid var(--bg0); border-bottom: 1px solid var(--bg0); box-sizing: border-box; }
+.rollruler .rcv { position: relative; flex: 1; min-width: 0; overflow: hidden; }
+.rollruler canvas { position: absolute; inset: 0; width: 100%; height: 100%; display: block; cursor: pointer; touch-action: none; }
 .roll .lanerow { padding-right: 14px; }
 /* piano roll: shortcut hint (full list on hover) and the note properties popover (double-click a note) */
 .roll .rollhint { min-width: 0; overflow: hidden; text-overflow: ellipsis; cursor: help; }
@@ -558,6 +558,10 @@ select option { background: var(--bg4); color: var(--fg); }
 .zbar.v .zthumb { left: 0; right: 0; }
 .zbar:hover .zthumb { background: color-mix(in srgb, var(--fg-hi) 20%, transparent); }
 .zgrip { position: absolute; }
+/* overview bar: a zoom scrollbar over a minimap of the whole content (Playlist, Piano roll, Pitch editor) */
+.zbar.ov { height: 24px; overflow: hidden; }
+.zbar .zmini { position: absolute; inset: 0; width: 100%; height: 100%; pointer-events: none; }
+.ovrow { flex: none; height: 28px; padding: 2px 14px 2px 0; background: var(--bg1); border-bottom: 1px solid var(--bg0); box-sizing: border-box; display: grid; min-width: 0; }
 .zgrip::after { content: ''; position: absolute; background: var(--fg4); border-radius: 1px; opacity: .7; }
 .zgrip:hover::after { background: var(--fg-hi); opacity: 1; }
 .zbar.h .zgrip { top: 0; bottom: 0; width: 8px; cursor: ew-resize; }

@@ -65,7 +65,9 @@ PATTERNS & CHANNELS  (steps: x = on, 1-9 = velocity 10-90 %, . = off; spaces and
   pattern --id N --ch C --notes '[{"step":0,"len":4,"p":36,"v":0.9}]'  piano-roll notes (p = MIDI key)
   pattern --id N --ch C --clear            remove channel C's notes from the pattern
   pattern --id N [--bars N (minimum)] [--swing 0..100] [--name TEXT]      (--new instead of --id: a new pattern)
-  pattern --id N --play | --stop           loop the pattern on its own (stops the song)
+  pattern --id N --play [--from B] [--loop A:B] | --stop
+                                           loop the pattern on its own (stops the song), from
+                                           beat B, only beats A..B of it
 
 TAKES & COMPING  (times in timeline beats; add --clip ID when a track has several comps)
   takes --track N                          takes, comp regions and crossfades of the track
@@ -669,7 +671,19 @@ fn run(cx: &Cx, cmd: &str, a: &Args) -> Result<Value, Fail> {
             if a.has("play") || a.has("stop") {
                 let id =
                     if a.has("stop") { None } else { Some(a.num("id").map_err(u)?.ok_or_else(|| u("--play needs --id".into()))? as u64) };
-                return send(cx, a, "pattern_play", json!({ "id": id }));
+                let mut args = json!({ "id": id });
+                if let Some(b) = a.num("from").map_err(u)? {
+                    args["from"] = json!(b);
+                }
+                if let Some(v) = a.get("loop") {
+                    let r = v
+                        .split_once(':')
+                        .and_then(|(x, y)| Some((x.trim().parse::<f64>().ok()?, y.trim().parse::<f64>().ok()?)))
+                        .filter(|(x, y)| x.is_finite() && y.is_finite())
+                        .ok_or_else(|| u(format!("--loop wants A:B in beats, not `{v}`")))?;
+                    args["range"] = json!([r.0, r.1]);
+                }
+                return send(cx, a, "pattern_play", args);
             }
             let mut args = json!({ "new": a.has("new"), "clear": a.has("clear") });
             if let Some(id) = a.num("id").map_err(u)? {

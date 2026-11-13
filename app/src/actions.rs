@@ -34,7 +34,7 @@ pub trait Host {
 }
 
 /// Commands that need the audio device, the musician's undo history or the app's window.
-pub const LIVE_ONLY: &[&str] = &["play", "stop", "pattern_play", "comp_audition", "note_audition", "undo", "redo", "open"];
+pub const LIVE_ONLY: &[&str] = &["play", "stop", "pattern_play", "pattern_loop", "comp_audition", "note_audition", "undo", "redo", "open"];
 
 fn live_only_error(cmd: &str) -> String {
     let why = match cmd {
@@ -57,6 +57,18 @@ fn need_u64(a: &Value, k: &str) -> R<u64> {
 fn need_str<'a>(a: &'a Value, k: &str) -> R<&'a str> {
     arg(a, k).and_then(Value::as_str).ok_or(format!("`{k}` (string) is required"))
 }
+/// A `[from, to]` pair of beats (`null` or missing = none).
+fn beat_range(a: &Value, k: &str) -> R<Option<(f64, f64)>> {
+    match arg(a, k) {
+        None | Some(Value::Null) => Ok(None),
+        Some(Value::Array(v)) if v.len() == 2 => match (v[0].as_f64(), v[1].as_f64()) {
+            (Some(x), Some(y)) => Ok(Some((x, y))),
+            _ => Err(format!("`{k}` must be two numbers (beats)")),
+        },
+        Some(_) => Err(format!("`{k}` must be [from, to] in beats")),
+    }
+}
+
 fn opt_f64(a: &Value, k: &str) -> Option<f64> {
     arg(a, k).and_then(Value::as_f64)
 }
@@ -1073,7 +1085,7 @@ pub fn control(app: &dyn Host, cmd: &str, a: &Value, if_revision: Option<u64>) -
         }
         "context" => Ok(context(app, arg(a, "full").and_then(Value::as_bool).unwrap_or(false))),
         "catalog" => Ok(
-            json!({ "effects": catalog::catalog(), "commands": ["status","context","catalog","schema","apply","undo","redo","play","stop","render","import","add_fx","set_param","load_preset","save","open","pitch_analyze","pitch_target","melody_channels","melody_reference","tune_ref","f0_model","music_analyze","auto_vocal_plan","bake_rider","make_unique","takes","comp","flatten_comp","comp_audition","channels","pattern","pattern_play","note_audition","vst3_scan","vst3_add","vst3_params","vst3_set_param"] }),
+            json!({ "effects": catalog::catalog(), "commands": ["status","context","catalog","schema","apply","undo","redo","play","stop","render","import","add_fx","set_param","load_preset","save","open","pitch_analyze","pitch_target","melody_channels","melody_reference","tune_ref","f0_model","music_analyze","auto_vocal_plan","bake_rider","make_unique","takes","comp","flatten_comp","comp_audition","channels","pattern","pattern_play","pattern_loop","note_audition","vst3_scan","vst3_add","vst3_params","vst3_set_param"] }),
         ),
         "schema" => Ok(schema()),
         "apply" => {
@@ -1120,8 +1132,15 @@ pub fn control(app: &dyn Host, cmd: &str, a: &Value, if_revision: Option<u64>) -
         "pattern" => pattern(app, a, if_revision),
         "pattern_play" => {
             let id = arg(a, "id").and_then(as_index);
-            e.pattern_play(id).map_err(|x| x.to_string())?;
-            Ok(json!({ "patternPlaying": id }))
+            let from = opt_f64(a, "from").unwrap_or(0.0);
+            let range = beat_range(a, "range")?;
+            e.pattern_play(id, from, range).map_err(|x| x.to_string())?;
+            Ok(json!({ "patternPlaying": id, "from": from, "range": range.map(|(x, y)| [x, y]) }))
+        }
+        "pattern_loop" => {
+            let range = beat_range(a, "range")?;
+            e.pattern_loop(range).map_err(|x| x.to_string())?;
+            Ok(json!({ "range": range.map(|(x, y)| [x, y]) }))
         }
         "note_audition" => {
             let p = e.project();

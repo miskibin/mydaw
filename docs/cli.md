@@ -147,6 +147,7 @@ wave pattern --id 2 --ch hat --clear
 wave pattern --id 2 --bars 2 --swing 55 --name "Hats B"
 wave pattern --new --name Fill --bars 1           # → its id in the reply
 wave pattern --id 2 --play                        # loop it on its own (stops the song); --stop
+wave pattern --id 2 --play --from 4 --loop 4:8    # from beat 4, looping beats 4–8 of it
 ```
 
 `--ch` takes a channel id or name (`kick`, `Hats 2` …). With `apply`, the ops are
