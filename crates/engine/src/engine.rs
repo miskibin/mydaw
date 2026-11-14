@@ -416,7 +416,7 @@ impl Engine {
         *self.midi_fast.tx.lock() = Some(midi_tx);
         let mut c = self.core.lock();
         // everything is rebuilt for the new rate: hosted plugins keep their state through the project
-        self.snapshot_plugin_states(&mut c);
+        self.snapshot_plugin_states(&mut c.project);
         for id in c.live_fx.drain().collect::<Vec<_>>() {
             self.factory.release(id);
         }
@@ -1577,7 +1577,7 @@ impl Engine {
 
     pub fn save(&self, path: &Path) -> Result<(), EngineError> {
         let mut c = self.core.lock();
-        self.snapshot_plugin_states(&mut c);
+        self.snapshot_plugin_states(&mut c.project);
         let dir = path.parent().unwrap_or(Path::new("."));
         let mut p = c.project.clone();
         // move recordings that live in the scratch folder next to the project
@@ -1615,13 +1615,31 @@ impl Engine {
     /// were never saved.
     pub fn save_copy(&self, path: &Path) -> Result<(), EngineError> {
         let mut c = self.core.lock();
-        self.snapshot_plugin_states(&mut c);
+        self.snapshot_plugin_states(&mut c.project);
         let p = c.project.clone();
         drop(c);
         if let Some(dir) = path.parent() {
             std::fs::create_dir_all(dir).map_err(|e| format!("{}: {e}", dir.display()))?;
         }
         write_project_file(&p, path, false)
+    }
+
+    /// Exports the current project and its audio sources without changing the open document.
+    pub fn export_project_zip(&self, path: &Path, if_revision: Option<u64>) -> Result<(), EngineError> {
+        let c = self.core.lock();
+        if c.take.is_some() || self.midi_take.lock().rec.is_some() {
+            return Err(EngineError::Msg("recording: stop it first".into()));
+        }
+        if let Some(r) = if_revision {
+            if r != c.revision {
+                return Err(EngineError::Msg(format!("REVISION_CONFLICT: project is at revision {}, not {r}", c.revision)));
+            }
+        }
+        let origin = c.path.clone();
+        let mut project = c.project.clone();
+        self.snapshot_plugin_states(&mut project);
+        drop(c);
+        crate::project_zip::write(project, path, origin.as_deref()).map_err(EngineError::Msg)
     }
 
     /// Opens a copy written by [`Engine::save_copy`] as an unsaved project with unsaved
@@ -1782,7 +1800,7 @@ impl Engine {
         let (project, mut store_snapshot, stretches, takes, keys) = {
             let mut guard = self.core.lock();
             let c = &mut *guard;
-            self.snapshot_plugin_states(c);
+            self.snapshot_plugin_states(&mut c.project);
             let mut map = HashMap::new();
             let mut stretches = vec![];
             let bpm = c.project.bpm;
@@ -1922,9 +1940,9 @@ impl Engine {
 
     // ------------------------------------------------------------ internals
 
-    fn snapshot_plugin_states(&self, c: &mut Core) {
+    fn snapshot_plugin_states(&self, project: &mut Project) {
         let factory = &self.factory;
-        for m in c.project.inserts.iter_mut() {
+        for m in project.inserts.iter_mut() {
             for f in m.fx.iter_mut() {
                 if let Some(pl) = f.plugin.as_mut() {
                     if let Some(st) = factory.state(f.id) {
@@ -2548,12 +2566,15 @@ pub fn backup_path(path: &Path) -> PathBuf {
     path.with_file_name(format!("{stem} (backup).wave"))
 }
 
+pub(crate) fn project_document(p: &Project) -> serde_json::Value {
+    serde_json::json!({ "format": "wave-project", "version": 2, "project": p })
+}
+
 /// Serializes `p` and replaces `path` atomically (temp file + rename). With `backup`,
 /// the file being replaced is kept as [`backup_path`] first; a failed backup never
 /// blocks the save.
 fn write_project_file(p: &Project, path: &Path, backup: bool) -> Result<(), EngineError> {
-    let doc = serde_json::json!({ "format": "wave-project", "version": 2, "project": p });
-    let text = serde_json::to_string_pretty(&doc).map_err(|e| e.to_string())?;
+    let text = serde_json::to_string_pretty(&project_document(p)).map_err(|e| e.to_string())?;
     let tmp = path.with_extension("wave.tmp");
     std::fs::write(&tmp, text).map_err(|e| e.to_string())?;
     if backup && path.is_file() {

@@ -89,6 +89,7 @@ FILES
   WAV options: --wav-bits 24|32 (default 32-bit float); --dither (24-bit PCM only)
                --wrap-tail (carry effects into the start of the loop)
   save [--path FILE] | open <FILE>          (app; with -p the file is saved for you, --save-as copies)
+  export-project --out FILE.zip            package the project and its audio sources for sharing
 
 PITCH  (Tune to Reference: pull a vocal take onto another performance of the same melody)
   tune-ref --clip ID --reference SOURCE | --melody CHANNEL [--correction 0..100 --vibrato 0..100
@@ -793,6 +794,13 @@ fn run(cx: &Cx, cmd: &str, a: &Args) -> Result<Value, Fail> {
                     "stems": a.has("stems"), "master": !a.has("no-master"),
                 }),
             )
+        }
+        "export-project" => {
+            if a.has("dry-run") {
+                return Err(u("export-project writes a ZIP; omit --dry-run".into()));
+            }
+            let out = std::path::absolute(a.need("out").map_err(u)?).map_err(|e| u(e.to_string()))?;
+            send(cx, a, "export_project_zip", json!({ "out": out.display().to_string() }))
         }
         // in file mode the project is saved after the command (see `on_file`)
         "save" if cx.doc.is_some() => Ok(json!({})),

@@ -643,6 +643,21 @@ async fn project_save(app: St<'_>, handle: AppHandle, save_as: Option<bool>) -> 
     Ok(json!({ "path": path.display().to_string() }))
 }
 
+#[tauri::command]
+async fn project_export_zip(app: St<'_>, handle: AppHandle, if_revision: u64) -> R<Value> {
+    let suggested = app
+        .engine
+        .state()
+        .path
+        .as_deref()
+        .and_then(|p| PathBuf::from(p).file_stem().map(|s| format!("{}.zip", s.to_string_lossy())))
+        .unwrap_or_else(|| "Song.zip".into());
+    let path = handle.dialog().file().add_filter("ZIP", &["zip"]).set_file_name(suggested).blocking_save_file();
+    let Some(path) = path.and_then(|p| p.into_path().ok()) else { return Ok(json!({ "cancelled": true })) };
+    let engine = app.engine.clone();
+    tauri::async_runtime::spawn_blocking(move || actions::export_project_zip(&engine, &path, Some(if_revision))).await.map_err(es)?
+}
+
 /// Autosave tick for a project that was never saved: writes (or, once it has a file or
 /// nothing to lose, removes) the crash-recovery copy. `true` when a copy was written.
 #[tauri::command]
@@ -1022,6 +1037,7 @@ pub fn run(project_arg: Option<&str>) {
             project_open,
             take_project_open_requests,
             project_save,
+            project_export_zip,
             recovery_write,
             recovery_list,
             recovery_restore,

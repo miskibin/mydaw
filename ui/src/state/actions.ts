@@ -164,6 +164,23 @@ export async function projectSave(saveAs = false): Promise<boolean> {
     say(t('d.act.saved', { path: r.path })); await resync(); return true;
   } catch (e) { say(t('d.act.savefail', { err: String(e) })); return false; }
 }
+export async function projectExportZip() {
+  if (U.projectZipBusy || U.openingProject) return;
+  flushNotebook();
+  endWheelGestures();
+  setU('projectZipBusy', true);
+  try {
+    const revision = await enqueue(async () => projectRevision());
+    say(t('d.act.zipWorking'));
+    const result = await be().projectExportZip(revision);
+    if (result.cancelled) say(t('d.act.exportcancel'));
+    else say(t('d.act.zipDone', { path: result.path }));
+  } catch (e) {
+    say(t('d.act.zipFailed', { err: String(e) }));
+  } finally {
+    setU('projectZipBusy', false);
+  }
+}
 /** Autosave tick for a project without a file: keeps its crash-recovery copy current. */
 export async function recoveryTick() {
   try { await enqueue(() => be().recoveryWrite()); } catch (e) { console.warn('[wave] recovery copy:', e); }

@@ -103,6 +103,7 @@ about 17 % of one core at 48 kHz with 64-sample blocks, and the oscillators stay
 | **Vocals** | Pitch editor, live correction, Tune to Reference, vocal rider, vocal chain |
 | **Plugins and audio** | VST3 effects after a crash-proof scan (their own windows on Windows, WAVE's parameter list on Linux); WASAPI and ASIO on Windows, ALSA and JACK, including PipeWire's JACK, on Linux |
 | **Export** | Offline bounce of the song or a loop to 32-bit float WAV or MP3 |
+| **Portable projects** | File → Export project as ZIP packages the current arrangement, samples and recordings for sharing |
 | **Language** | English and Polish |
 
 ## WAVE and FL Studio, honestly
@@ -165,6 +166,11 @@ change, and a benchmark that counts allocations in the audio callback.
 Download the installer from the [latest release](https://github.com/miskibin/wave-DAW/releases/latest).
 The Windows build includes ASIO support (Settings → Audio → ASIO) and the WAVE Keys piano.
 On Windows, double-click a `.wave` project in File Explorer to open it in WAVE.
+
+To share an editable project, choose **File → Export project as ZIP**. Unzip the whole archive
+and open the `.wave` file inside it. Keep the `Audio` folder beside the project. The ZIP includes
+the project's samples and recorded takes. WAVE looks for third-party plugins at the locations
+stored in the project. WAVE Keys uses its bundled or separately installed piano library.
 If WAVE is already running, its window comes to the front and prompts you about any unsaved changes before switching projects.
 Linux packages are attached to the same release.
 

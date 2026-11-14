@@ -28,6 +28,7 @@ wave new song.wave --template sketch --bpm 140      # or --template empty (defau
 wave -p song.wave context                           # any read: nothing is written
 wave -p song.wave pattern --id 1 --ch kick --steps "x... x... x... x..."   # saved back to song.wave
 wave -p song.wave render --out song.wav             # or --stems --out stems/
+wave -p song.wave export-project --out song.zip      # without saving changes to song.wave
 wave -p song.wave bpm 150 --save-as song-150.wave   # song.wave stays as it was
 wave -p song.wave apply --file ops.json --dry-run   # try it: the reply has dryRun.changed, nothing is saved
 ```
@@ -50,6 +51,14 @@ missing sources play silence, as in the app).
   piano is loaded, or the command fails with `KEYS_MISSING` instead of rendering silence;
   pitch-edited clips use the installed RMVPE model as the app does). VST3 effects load from the
   scan cache. `vst3-params` and `vst3-set` work, and the plugin's state is saved in the file.
+
+### Share an editable project
+
+Run `wave export-project --out song.zip` to package the current project in the running app,
+including unsaved edits. Use `-p song.wave` to package a saved file. Unzip the archive and open
+the `.wave` project with its adjacent `Audio` folder. Plugin settings travel in the project.
+Install the plugins separately at the locations stored in the project. A missing audio source
+fails the export and any existing output ZIP is preserved.
 
 ### Scripts: many commands, one load
 

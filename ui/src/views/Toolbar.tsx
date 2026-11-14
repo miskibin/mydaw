@@ -139,7 +139,7 @@ export function Toolbar() {
         </div>
         <div class="tbhint" data-drag>
           <span class="hled" style={{ background: S.transport.rec && U.playing ? 'var(--red)' : U.playing ? 'var(--green)' : 'var(--fg6)' }} />
-          <span data-drag class="readout" data-readout>{U.readout}</span>
+          <span data-drag class="readout" data-readout title={U.readout}>{U.readout}</span>
           <Show when={U.alt}><span class="offgrid">OFF GRID</span></Show>
           <Show when={prefs().hints}><span data-drag class="hinttxt">{hint()}</span></Show>
           <div class="row inrow" title={t('a.tb.inLevel')} style={{ gap: '6px', display: T().rec || T().monitor ? 'flex' : 'none' }}>
@@ -250,6 +250,7 @@ function MenuBar() {
       { t: 'item', label: t('a.mn.saveAs'), kbd: 'Ctrl+Shift+S', act: () => void A.projectSave(true) },
       { t: 'sep' },
       { t: 'item', label: t('a.mn.export'), kbd: 'Ctrl+Shift+R', act: () => setU('exportOpen', true) },
+      { t: 'item', label: t('a.mn.exportProjectZip'), disabled: U.projectZipBusy || U.openingProject, act: () => void A.projectExportZip() },
       { t: 'sep' },
       { t: 'item', label: t('a.mn.settings'), act: () => setU('settings', true) },
       ...(win ? [{ t: 'sep' } as MenuItem, { t: 'item', label: t('a.mn.exit'), kbd: 'Alt+F4', act: () => void win.close() } as MenuItem] : []),

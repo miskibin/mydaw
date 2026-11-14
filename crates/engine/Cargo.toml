@@ -18,6 +18,8 @@ thiserror.workspace = true
 log.workspace = true
 parking_lot.workspace = true
 mp3lame-encoder = "0.3.0"
+tempfile = "3"
+zip = { version = "9.5", default-features = false, features = ["deflate-flate2-zlib-rs"] }
 
 [dev-dependencies]
 hound.workspace = true
