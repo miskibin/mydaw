@@ -144,6 +144,35 @@ describe('opening a project', () => {
   });
 });
 
+describe('exporting a project ZIP', () => {
+  it('flushes notebook edits and keeps the project dirty at its current path', async () => {
+    const path = 'C:\\Muzyka\\Demo.wave';
+    await A.projectOpen(path);
+    await mock.applyOps([{ op: 'putNotebook', notebook: { pages: [{ id: 8000, name: 'Verse', text: '', startBar: 1 }] } }]);
+    await A.projectSave();
+    (await import('./notebook')).typeText(8000, 'A new line');
+    const send = vi.spyOn(mock, 'projectExportZip');
+    await A.projectExportZip();
+    expect(send).toHaveBeenCalledWith((await mock.getState()).revision);
+    expect(store.S.path).toBe(path);
+    expect(store.S.dirty).toBe(true);
+    expect(store.S.project.notebook?.pages[0].text).toBe('A new line');
+    const { U } = await import('./ui');
+    expect(U.projectZipBusy).toBe(false);
+    expect(U.readout).toContain('Demo.zip');
+  });
+
+  it('reports cancellation and allows another export', async () => {
+    mock.dismissNextDialog = true;
+    await A.projectExportZip();
+    const { U } = await import('./ui');
+    expect(U.readout).toBe('Export cancelled');
+    expect(U.projectZipBusy).toBe(false);
+    await A.projectExportZip();
+    expect(U.readout).toContain('Song.zip');
+  });
+});
+
 describe('other actions while a project is opening', () => {
   it('refuse with feedback that fits the action', async () => {
     const ui = await import('./ui');

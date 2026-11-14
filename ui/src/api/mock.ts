@@ -1004,6 +1004,13 @@ export class MockBackend implements Backend {
     return { path: this.path };
   }
 
+  async projectExportZip(ifRevision: number): Promise<SaveResult> {
+    if (!this.dialog()) return { cancelled: true };
+    if (this.rec) throw new Error('recording: stop it first');
+    if (ifRevision !== this.revision) throw new Error('REVISION_CONFLICT: project changed');
+    return { path: this.path?.replace(/\.wave$/i, '.zip') ?? 'Song.zip' };
+  }
+
   // ---------- crash recovery (app/src/recovery.rs) ----------
   /** This session's copy of a project that was never saved. */
   private recovery: { project: Project; savedMs: number } | null = null;

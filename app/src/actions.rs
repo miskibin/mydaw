@@ -3,7 +3,7 @@
 //! The actions run against a [`Host`]: the running app (`App`), or a project file opened
 //! by `wave --project FILE` with no window and no audio device (`headless::Headless`).
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use serde_json::{json, Value};
@@ -13,6 +13,15 @@ use wave_engine::{Engine, FxKind, Op, PluginRef, RefTune};
 use crate::plugins::Plugins;
 
 pub type R<T> = Result<T, String>;
+
+pub fn export_project_zip(engine: &Engine, out: &Path, if_revision: Option<u64>) -> R<Value> {
+    let mut out = out.to_path_buf();
+    if out.extension().is_none() {
+        out.set_extension("zip");
+    }
+    engine.export_project_zip(&out, if_revision).map_err(|e| e.to_string())?;
+    Ok(json!({ "path": out.display().to_string() }))
+}
 
 /// What an action needs from the process it runs in.
 pub trait Host {
@@ -1091,7 +1100,7 @@ pub fn control(app: &dyn Host, cmd: &str, a: &Value, if_revision: Option<u64>) -
         }
         "context" => Ok(context(app, arg(a, "full").and_then(Value::as_bool).unwrap_or(false))),
         "catalog" => Ok(
-            json!({ "effects": catalog::catalog(), "commands": ["status","context","catalog","schema","apply","undo","redo","play","stop","render","import","add_fx","set_param","load_preset","save","open","pitch_analyze","pitch_target","pitch_inspect","pitch_compare","pitch_suggest","pitch_edit","pitch_render","melody_channels","melody_reference","tune_ref","f0_model","music_analyze","auto_vocal_plan","bake_rider","make_unique","takes","comp","flatten_comp","comp_audition","channels","pattern","pattern_play","pattern_loop","note_audition","vst3_scan","vst3_add","vst3_params","vst3_set_param"] }),
+            json!({ "effects": catalog::catalog(), "commands": ["status","context","catalog","schema","apply","undo","redo","play","stop","render","import","add_fx","set_param","load_preset","save","open","export_project_zip","pitch_analyze","pitch_target","pitch_inspect","pitch_compare","pitch_suggest","pitch_edit","pitch_render","melody_channels","melody_reference","tune_ref","f0_model","music_analyze","auto_vocal_plan","bake_rider","make_unique","takes","comp","flatten_comp","comp_audition","channels","pattern","pattern_play","pattern_loop","note_audition","vst3_scan","vst3_add","vst3_params","vst3_set_param"] }),
         ),
         "schema" => Ok(schema()),
         "apply" => {
@@ -1110,6 +1119,7 @@ pub fn control(app: &dyn Host, cmd: &str, a: &Value, if_revision: Option<u64>) -
             Ok(json!({ "playing": false }))
         }
         "render" => render(app, a),
+        "export_project_zip" => export_project_zip(e, Path::new(need_str(a, "out")?), if_revision),
         "import" => import(app, a),
         "add_fx" => {
             let kind = parse_kind(need_str(a, "type")?)?;

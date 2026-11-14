@@ -606,17 +606,13 @@ export function Playlist() {
     if (e.button === 2) return rightDown(e, h, p);
     if (e.button !== 0) return;
     e.preventDefault(); closeMenu();
-    let tool = U.tool;
-    if (modK && !id && (tool === 'draw' || tool === 'paint')) tool = 'select';
+    const tool = U.tool;
     if (tool === 'erase') return eraseDrag(id);
     if (tool === 'mute') return muteDrag(id);
     if (tool === 'slice') { if (id) A.sliceAt(id, snapRound(p.beat, unit(e.altKey)), false); return; }
-    // a new box replaces the selection; Shift adds to it. (Ctrl only turns the pencil into the
-    // select tool: it used to make every box additive, so an old selection never went away.)
-    if (tool === 'select' && !id) return marqueeDrag(p, e.shiftKey);
+    if (modK || (tool === 'select' && id == null)) return marqueeDrag(e, p, id);
     if (h) {
       const clip = h.c;
-      if (modK) { setU('sel', U.sel.includes(clip.id) ? U.sel.filter(x => x !== clip.id) : [...U.sel, clip.id]); return; }
       if (clip.kind !== 'comp') setU('cur', { kind: clip.kind, ref: clip.ref });
       if (h.edge === 'menu') { if (!U.sel.includes(clip.id)) setU('sel', [clip.id]); return openClipMenu(e.clientX, e.clientY, clip, p); }
       if (h.edge === 'fi' || h.edge === 'fo') return fadeDrag(e, clip, h.edge);
@@ -777,11 +773,16 @@ export function Playlist() {
     track(ev => { const p = pt(ev); set(hit(p.x, p.y)?.c.id); }, () => g.end());
   }
 
-  function marqueeDrag(p: { x: number; y: number }, additive: boolean) {
-    const base = additive ? [...U.sel] : [];
+  function marqueeDrag(e: PointerEvent, p: { x: number; y: number }, clickId: Id | null) {
+    const initial = [...U.sel];
+    const base = e.shiftKey ? initial : [];
     const x0 = p.x, y0 = p.y;
-    setU({ marquee: { x0, y0, x1: x0, y1: y0 }, sel: base });
-    trackEdge(ev => {
+    // Over a clip, wait for drag movement so a plain Ctrl+click can still toggle it.
+    let dragging = clickId == null;
+    if (dragging) setU({ marquee: { x0, y0, x1: x0, y1: y0 }, sel: base });
+    const update = (ev: PointerEvent) => {
+      if (!dragging && Math.abs(ev.clientX - e.clientX) + Math.abs(ev.clientY - e.clientY) < 3) return;
+      dragging = true;
       const q = pt(ev), bw = U.bw, t = tops();
       const ax = Math.min(x0, q.x), bx = Math.max(x0, q.x), ay = Math.min(y0, q.y), by = Math.max(y0, q.y);
       const clips = unwrap(S.project).clips;
@@ -790,7 +791,15 @@ export function Playlist() {
       // the box moves every frame, the selection only when it crosses a clip
       const same = sel.length === cur.length && sel.every((id, i) => id === cur[i]);
       setU(same ? { marquee: { x0, y0, x1: q.x, y1: q.y } } : { marquee: { x0, y0, x1: q.x, y1: q.y }, sel });
-    }, () => { setU('marquee', null); say(tl('a.pl.selected', { n: U.sel.length })); }, 'crosshair');
+    };
+    trackEdge(update, ev => {
+      if (ev.type === 'pointerup' && clickId != null && !dragging) {
+        update(ev);
+        if (!dragging) setU('sel', initial.includes(clickId) ? initial.filter(id => id !== clickId) : [...initial, clickId]);
+      }
+      setU('marquee', null);
+      say(tl('a.pl.selected', { n: U.sel.length }));
+    }, 'crosshair');
   }
 
   function rightDown(e: PointerEvent, h: Hit | null, p: { beat: number; track: number }) {

@@ -29,6 +29,7 @@ pub mod dsp;
 pub mod engine;
 pub mod keys;
 pub mod pitch_api;
+mod project_zip;
 pub mod rt;
 pub mod sources;
 pub mod synth;

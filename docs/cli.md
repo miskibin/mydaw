@@ -28,6 +28,7 @@ wave new song.wave --template sketch --bpm 140      # or --template empty (defau
 wave -p song.wave context                           # any read: nothing is written
 wave -p song.wave pattern --id 1 --ch kick --steps "x... x... x... x..."   # saved back to song.wave
 wave -p song.wave render --out song.wav             # or --stems --out stems/
+wave -p song.wave export-project --out song.zip      # without saving changes to song.wave
 wave -p song.wave bpm 150 --save-as song-150.wave   # song.wave stays as it was
 wave -p song.wave apply --file ops.json --dry-run   # try it: the reply has dryRun.changed, nothing is saved
 ```
@@ -51,6 +52,14 @@ missing sources play silence, as in the app).
   pitch-edited clips use the installed RMVPE model as the app does). VST3 effects load from the
   scan cache. `vst3-params` and `vst3-set` work, and the plugin's state is saved in the file.
 
+### Share an editable project
+
+Run `wave export-project --out song.zip` to package the current project in the running app,
+including unsaved edits. Use `-p song.wave` to package a saved file. Unzip the archive and open
+the `.wave` project with its adjacent `Audio` folder. Plugin settings travel in the project.
+Install the plugins separately at the locations stored in the project. A missing audio source
+fails the export and any existing output ZIP is preserved.
+
 ### Scripts: many commands, one load
 
 ```sh
@@ -66,8 +75,9 @@ render --out preview.wav
 ```
 
 On a file the project is loaded once and saved once, at the end. The first line that fails stops
-the script and **nothing is written**; the error names the line (`line 2 (`pattern`): …`). The
-reply lists each line's result. Without `--project`, a script runs against the running app line
+the script before the project is saved. The error names the failing line and command. Renders and
+ZIP exports write their own output when their line runs. For ZIP export, omit `--dry-run`.
+The reply lists each line's result. Without `--project`, a script runs against the running app line
 by line: lines before a failing one stay applied, each as its own undo step. Options of the whole
 run (`--project`, `--session`, `--save-as`, `--dry-run`, `--force`, `--pretty`) go before
 `script`, not on its lines; a leading `wave` on a line is ignored. Relative paths in a line are

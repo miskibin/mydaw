@@ -89,6 +89,7 @@ FILES
   WAV options: --wav-bits 24|32 (default 32-bit float); --dither (24-bit PCM only)
                --wrap-tail (carry effects into the start of the loop)
   save [--path FILE] | open <FILE>          (app; with -p the file is saved for you, --save-as copies)
+  export-project --out FILE.zip            package the project and its audio sources for sharing
 
 PITCH  (Tune to Reference: pull a vocal take onto another performance of the same melody)
   tune-ref --clip ID --reference SOURCE | --melody CHANNEL [--correction 0..100 --vibrato 0..100
@@ -562,6 +563,9 @@ fn script(cx: &Cx, a: &Args) -> Result<Value, Fail> {
         if let Some(s) = a.get("session") {
             la.opts.push(("session".into(), Some(s.into())));
         }
+        if a.has("dry-run") {
+            la.opts.push(("dry-run".into(), None));
+        }
         match run(cx, &cmd, &la) {
             Ok(v) => results.push(json!({ "line": n, "command": cmd, "result": v })),
             Err(e) => {
@@ -793,6 +797,13 @@ fn run(cx: &Cx, cmd: &str, a: &Args) -> Result<Value, Fail> {
                     "stems": a.has("stems"), "master": !a.has("no-master"),
                 }),
             )
+        }
+        "export-project" => {
+            if a.has("dry-run") {
+                return Err(u("export-project writes a ZIP; omit --dry-run".into()));
+            }
+            let out = std::path::absolute(a.need("out").map_err(u)?).map_err(|e| u(e.to_string()))?;
+            send(cx, a, "export_project_zip", json!({ "out": out.display().to_string() }))
         }
         // in file mode the project is saved after the command (see `on_file`)
         "save" if cx.doc.is_some() => Ok(json!({})),
@@ -1447,6 +1458,20 @@ mod tests {
                 other => panic!("{other:?}"),
             }
         }
+    }
+
+    #[test]
+    fn a_dry_run_script_refuses_project_zip_export() {
+        let d = dir("dry-run-zip");
+        let p = project(&d);
+        let f = FakeFiles::default();
+        let script = d.join("export.txt");
+        std::fs::write(&script, "bpm 90\nexport-project --out song.zip\n").unwrap();
+        match file(&f, &["script", &script.display().to_string(), "--project", &p, "--dry-run"]) {
+            Err(Fail::Usage(m)) => assert!(m.starts_with("line 2 (`export-project`): export-project writes a ZIP; omit --dry-run"), "{m}"),
+            other => panic!("{other:?}"),
+        }
+        assert!(f.saves().is_empty());
     }
 
     #[test]
