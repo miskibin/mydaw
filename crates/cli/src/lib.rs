@@ -84,8 +84,8 @@ TRANSPORT  (running app only)
 FILES
   render --out file.wav|.mp3 [--from B --to B --tail SEC --rate HZ --format wav|mp3 --kbps 128|192|256|320]
                                            bounce offline (mp3 chosen by .mp3 extension); prints level stats
-  render --stems --out FOLDER [--no-master] [--from B --to B --tail SEC --rate HZ]
-                                           one WAV per mixer insert with sound (named after it) + Master.wav
+  render --stems --out FOLDER [--no-master] [--from B --to B --tail SEC --rate HZ --format wav|mp3 --kbps 128|192|256|320]
+                                           one file per mixer insert with sound, plus the optional master mix
   WAV options: --wav-bits 24|32 (default 32-bit float); --dither (24-bit PCM only)
                --wrap-tail (carry effects into the start of the loop)
   save [--path FILE] | open <FILE>          (app; with -p the file is saved for you, --save-as copies)

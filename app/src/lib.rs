@@ -707,9 +707,7 @@ async fn export_audio(
 ) -> R<Value> {
     let fmt = actions::ExportFormat::parse(format.as_deref(), mp3_kbps, wav_bits, dither.unwrap_or(false))?;
     let wrap = wrap_tail.unwrap_or(false);
-    if wrap && !matches!(fmt, actions::ExportFormat::Wav(_)) {
-        return Err("wrap tail requires WAV export".into());
-    }
+    fmt.check_wrap(wrap)?;
     let ext = fmt.extension();
     if !(sample_rate == 44_100 || sample_rate == 48_000) {
         return Err("sample rate must be 44100 or 48000".into());
@@ -754,12 +752,8 @@ async fn export_audio(
     }
 }
 
-/// Stem export (FL Studio's *Split mixer tracks*): one WAV per mixer insert that has
-/// sound, named after the insert, plus `Master.wav` when `include_master`. Opens a native folder
-/// dialog first and writes the files straight into the chosen folder.
-///
-/// Progress goes out as `export-progress` events `{ done, total, name }`; call `export_cancel` to
-/// abort (no file is left behind, see `actions::render_stems_to_dir`).
+/// Export one WAV or MP3 per mixer insert with sound, plus the optional master mix,
+/// into a native folder selection. Emits `export-progress` as files render.
 #[tauri::command]
 #[allow(clippy::too_many_arguments)]
 async fn export_stems(
@@ -769,12 +763,15 @@ async fn export_stems(
     tail: f64,
     sample_rate: u32,
     include_master: bool,
+    format: Option<String>,
+    mp3_kbps: Option<u32>,
     wav_bits: Option<u32>,
     dither: Option<bool>,
     wrap_tail: Option<bool>,
 ) -> R<Value> {
-    let encoding = actions::WavEncoding::parse(wav_bits, dither.unwrap_or(false))?;
+    let fmt = actions::ExportFormat::parse(format.as_deref(), mp3_kbps, wav_bits, dither.unwrap_or(false))?;
     let wrap = wrap_tail.unwrap_or(false);
+    fmt.check_wrap(wrap)?;
     if !(sample_rate == 44_100 || sample_rate == 48_000) {
         return Err("sample rate must be 44100 or 48000".into());
     }
@@ -799,7 +796,7 @@ async fn export_stems(
         };
         // a stem export must not start while the piano is still loading (its stems would be silent)
         keys::wait(&a);
-        actions::render_stems_to_dir(&a.engine, &dir, bounce, &a.export_cancel, include_master, encoding, &progress)
+        actions::render_stems_to_dir(&a.engine, &dir, bounce, &a.export_cancel, include_master, fmt, &progress)
     })
     .await
     .map_err(es)?;

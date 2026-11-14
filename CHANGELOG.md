@@ -4,11 +4,24 @@ What changed in each release of WAVE. The newest version comes first; its sectio
 shown in the app after an update and is published as the release notes (see
 `docs/releasing.md`). Write for musicians: what you can do now, not how it works inside.
 
-## Unreleased
+## 0.9.15 — 2026-11-14
+
+### Added
+- **Export stems as MP3.** Choose Stems and MP3 in the Export dialog, pick a bitrate,
+  and get one file per mixer insert with sound, plus the optional master mix.
+- **Share a project as a ZIP.** File → Export project as ZIP packages the project and its referenced
+  audio so it can open from a new folder. Unzip it and open the included `.wave` file.
+- **Shape sampler hits with Fade In and Fade Out.** Set fades at the edges of the selected
+  sample region. Step sequencer hits ring out while piano roll notes can follow the sampler gate.
+- **Edit vocal pitch from the command line.** Use `wave pitch` to inspect vocal notes, preview
+  shifts and apply edits that open in WAVE's Pitch Editor.
 
 ### Changed
-- **The `wave` command prints readable numbers.** Replies show at most four decimal places, so a
-  note velocity reads 0.47 instead of 0.4699999988079071.
+- The Playlist, Piano Roll and Pitch Editor share the same time ruler and overview controls.
+- The `wave` command prints numbers with up to four decimal places.
+
+### Fixed
+- Ctrl-drag starts a selection rectangle in the Playlist even when you start over a clip.
 
 ## 0.9.14 — 2026-11-13
 

@@ -226,23 +226,25 @@ and stems.
 wave render --stems --out stems/ --from 0 --to 32     # a folder, created if needed
 wave render --stems --out stems/ --no-master          # without Master.wav
 wave render --stems --out stems/ --wav-bits 24 --dither
+wave render --stems --out stems/ --format mp3 --kbps 192
 ```
 
-writes one stereo WAV per mixer insert that has sound, named after the insert
-(`Drums.wav`, `Bass.wav`; a repeated name becomes `Bass (2).wav`), like FL Studio's *Split mixer
-tracks*. In the app: **Eksport → Wynik: Stemy**, then pick the folder.
+writes one stereo file per mixer insert that has sound, named after the insert
+(`Drums.wav`, `Bass.wav`; a repeated name becomes `Bass (2).wav`). In the app, choose
+**Export → Output: Stems**, select WAV or MP3, then pick the folder.
 
 - A stem is what the insert plays after its own effects, fader, pan and width, **before the
-  master**: the master's effects and fader are not in it. `Master.wav` is the normal mix with the
-  master's effects (leave it out with `--no-master`), so the stems add up to it only while the
-  master effects are linear (a limiter or compressor on the master is not).
-- Every file has the same length and starts at `--from`, so they line up when dropped into another
-  project. The range and the effect tail work as in a normal bounce.
+  master**. The optional `Master` file contains the normal mix with the master's effects.
+  Use `--no-master` to leave it out. Nonlinear effects on the master, such as a limiter,
+  can make the mix sound different from the sum of the stems.
+- Every bounce uses the same range and effect tail. Use WAV for sample-accurate alignment in
+  editors that ignore MP3 encoder delay and padding.
 - Muted inserts and inserts with nothing routed into them get no file, and neither does one that
   turns out silent in the range (the reply lists those under `skipped`). Solo is ignored, so a
   soloed insert does not silence the other stems; a muted track or channel stays silent.
-- WAV only (`--format mp3` is refused), as in FL Studio. If anything fails or is cancelled no
-  file is left in the folder; existing files with the same names are replaced when it succeeds.
+- WAV is the default. MP3 supports 128, 192, 256 and 320 kbps (default 320).
+  Files are staged during export and moved into place after all stems are encoded.
+  Existing files with the same names are replaced.
 - The reply lists every file with its level statistics (`files`), so an agent can check each stem.
 
 ## Tune to Reference

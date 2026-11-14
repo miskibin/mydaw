@@ -64,6 +64,12 @@ describe('stem export in the mock', () => {
     expect(seen[0]).toMatchObject({ total: 4, name: 'Master' });
     expect(seen.at(-1)).toMatchObject({ done: 4, total: 4, name: '' });
   });
+  it('uses MP3 for every file including the master', async () => {
+    const be = new MockBackend();
+    const r = done(await be.exportStems({ ...opts, format: 'mp3', mp3Kbps: 192 }));
+    expect(r.format).toBe('mp3');
+    expect(r.files.map(f => f.file)).toEqual(['Master.mp3', 'Drums.mp3', 'Hats.mp3', 'Bass.mp3']);
+  });
   it('can leave the master out', async () => {
     const be = new MockBackend();
     const r = done(await be.exportStems({ ...opts, includeMaster: false }));
