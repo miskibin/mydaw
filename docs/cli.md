@@ -75,8 +75,9 @@ render --out preview.wav
 ```
 
 On a file the project is loaded once and saved once, at the end. The first line that fails stops
-the script and **nothing is written**; the error names the line (`line 2 (`pattern`): …`). The
-reply lists each line's result. Without `--project`, a script runs against the running app line
+the script before the project is saved. The error names the failing line and command. Renders and
+ZIP exports write their own output when their line runs. For ZIP export, omit `--dry-run`.
+The reply lists each line's result. Without `--project`, a script runs against the running app line
 by line: lines before a failing one stay applied, each as its own undo step. Options of the whole
 run (`--project`, `--session`, `--save-as`, `--dry-run`, `--force`, `--pretty`) go before
 `script`, not on its lines; a leading `wave` on a line is ignored. Relative paths in a line are

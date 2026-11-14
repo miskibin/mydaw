@@ -166,13 +166,13 @@ change, and a benchmark that counts allocations in the audio callback.
 Download the installer from the [latest release](https://github.com/miskibin/wave-DAW/releases/latest).
 The Windows build includes ASIO support (Settings → Audio → ASIO) and the WAVE Keys piano.
 On Windows, double-click a `.wave` project in File Explorer to open it in WAVE.
+If WAVE is already running, its window comes to the front and prompts you about any unsaved changes before switching projects.
+Linux packages are attached to the same release.
 
 To share an editable project, choose **File → Export project as ZIP**. Unzip the whole archive
 and open the `.wave` file inside it. Keep the `Audio` folder beside the project. The ZIP includes
 the project's samples and recorded takes. WAVE looks for third-party plugins at the locations
 stored in the project. WAVE Keys uses its bundled or separately installed piano library.
-If WAVE is already running, its window comes to the front and prompts you about any unsaved changes before switching projects.
-Linux packages are attached to the same release.
 
 ## Build from source
 

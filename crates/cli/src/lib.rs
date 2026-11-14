@@ -563,6 +563,9 @@ fn script(cx: &Cx, a: &Args) -> Result<Value, Fail> {
         if let Some(s) = a.get("session") {
             la.opts.push(("session".into(), Some(s.into())));
         }
+        if a.has("dry-run") {
+            la.opts.push(("dry-run".into(), None));
+        }
         match run(cx, &cmd, &la) {
             Ok(v) => results.push(json!({ "line": n, "command": cmd, "result": v })),
             Err(e) => {
@@ -1455,6 +1458,20 @@ mod tests {
                 other => panic!("{other:?}"),
             }
         }
+    }
+
+    #[test]
+    fn a_dry_run_script_refuses_project_zip_export() {
+        let d = dir("dry-run-zip");
+        let p = project(&d);
+        let f = FakeFiles::default();
+        let script = d.join("export.txt");
+        std::fs::write(&script, "bpm 90\nexport-project --out song.zip\n").unwrap();
+        match file(&f, &["script", &script.display().to_string(), "--project", &p, "--dry-run"]) {
+            Err(Fail::Usage(m)) => assert!(m.starts_with("line 2 (`export-project`): export-project writes a ZIP; omit --dry-run"), "{m}"),
+            other => panic!("{other:?}"),
+        }
+        assert!(f.saves().is_empty());
     }
 
     #[test]
