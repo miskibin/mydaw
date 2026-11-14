@@ -314,7 +314,7 @@ client: take them from `project.nextId` and increase locally (the engine bumps
 | `recovery_write` | – | `bool`; the autosave tick for a project with no file: writes its crash-recovery copy (`<data>/WAVE/Recovery/<session>.wave`), or removes it once the project has a file or nothing unsaved |
 | `recovery_list` / `recovery_restore` / `recovery_discard` | – / `{id}` / `{id}` | `[{id, savedMs}]` newest first (copies of sessions that did not exit normally) / `{state, warnings}` (opened as an unsaved project) / – |
 | `export_audio` | `{useLoop, tail, sampleRate, format?, mp3Kbps?, wavBits?, dither?, wrapTail?}` | `{out, fromBeat, toBeat, tail, stats}` or `{cancelled:true}`; native save dialog; stereo WAV (32-bit float by default or 24-bit PCM) or MP3 |
-| `export_stems` | `{useLoop, tail, sampleRate, includeMaster, wavBits?, dither?, wrapTail?}` | `{dir, fromBeat, toBeat, tail, files, skipped}` or `{cancelled:true}`; native folder dialog; one WAV per insert with sound, optional master mix |
+| `export_stems` | `{useLoop, tail, sampleRate, includeMaster, format?, mp3Kbps?, wavBits?, dither?, wrapTail?}` | `{dir, fromBeat, toBeat, tail, format, files, skipped}` or `{cancelled:true}`; native folder dialog; one WAV or MP3 per insert with sound, optional master mix |
 | `export_cancel` | – | – (abort an in-flight `export_audio` before a file is written) |
 | `vst3_scan` | `{rescan}` | `[{path,cid,name,vendor,category}]` |
 | `vst3_editor` | `{fxId, open}` | – (native window) |

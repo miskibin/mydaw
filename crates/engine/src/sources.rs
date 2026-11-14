@@ -660,7 +660,7 @@ pub fn to_i16_dithered(interleaved: &[f32]) -> Vec<i16> {
 /// Encodes interleaved stereo float to a CBR MP3 (LAME) with an optional ID3v2 title.
 /// `kbps` must be one of 128, 192, 256, 320; `sr` 44100 or 48000.
 pub fn write_mp3(path: &Path, interleaved: &[f32], sr: u32, kbps: u32, title: Option<&str>) -> Result<(), String> {
-    use mp3lame_encoder::{Bitrate, Builder, FlushNoGap, Id3Tag, InterleavedPcm, Mode, Quality};
+    use mp3lame_encoder::{Bitrate, Builder, FlushGap, Id3Tag, InterleavedPcm, Mode, Quality};
     let brate = match kbps {
         128 => Bitrate::Kbps128,
         192 => Bitrate::Kbps192,
@@ -677,6 +677,7 @@ pub fn write_mp3(path: &Path, interleaved: &[f32], sr: u32, kbps: u32, title: Op
     b.set_brate(brate).map_err(|e| format!("mp3: {e:?}"))?;
     b.set_mode(Mode::JointStereo).map_err(|e| format!("mp3: {e:?}"))?;
     b.set_quality(Quality::Best).map_err(|e| format!("mp3: {e:?}"))?;
+    b.set_to_write_vbr_tag(true).map_err(|e| format!("mp3: {e:?}"))?;
     if let Some(t) = title.filter(|t| !t.is_empty()) {
         let t = t.as_bytes();
         b.set_id3_tag(Id3Tag { title: t, artist: b"", album: b"", album_art: b"", year: b"", comment: b"" })
@@ -691,7 +692,14 @@ pub fn write_mp3(path: &Path, interleaved: &[f32], sr: u32, kbps: u32, title: Op
         enc.encode_to_vec(InterleavedPcm(chunk), &mut out).map_err(|e| format!("mp3: {e:?}"))?;
     }
     out.reserve(7200);
-    enc.flush_to_vec::<FlushNoGap>(&mut out).map_err(|e| format!("mp3: {e:?}"))?;
+    enc.flush_to_vec::<FlushGap>(&mut out).map_err(|e| format!("mp3: {e:?}"))?;
+    // Replace the reserved Info frame with the final frame count and encoder delay/padding.
+    // Decoders that read it recover the original bounce length and alignment.
+    let mut tag = Vec::with_capacity(enc.lame_tag_size());
+    enc.lame_tag_encode_to_vec(&mut tag).ok_or("mp3: cannot write the seek and padding tag")?;
+    let tag_start = enc.id3v2_tag_size();
+    let tag_frame = out.get_mut(tag_start..tag_start + tag.len()).ok_or("mp3: missing reserved tag frame")?;
+    tag_frame.copy_from_slice(&tag);
     if let Some(dir) = path.parent() {
         std::fs::create_dir_all(dir).map_err(|e| e.to_string())?;
     }

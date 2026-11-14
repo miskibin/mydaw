@@ -19,6 +19,7 @@ fn mp3_size_header_and_decode() {
         let bytes = std::fs::read(&path).unwrap();
         assert_eq!(&bytes[..3], b"ID3", "ID3v2 tag leads the file");
         assert!(bytes.windows(7).any(|w| w == b"My Song"), "title is in the tag");
+        assert!(bytes.windows(4).any(|w| w == b"Info"), "CBR seek and padding tag");
         let expect = kbps as f64 * 1000.0 / 8.0 * 2.0;
         let ratio = bytes.len() as f64 / expect;
         assert!((0.9..=1.1).contains(&ratio), "size {} vs {expect} (ratio {ratio})", bytes.len());

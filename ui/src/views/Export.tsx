@@ -3,7 +3,7 @@ import { be } from '../api/backend';
 import { t } from '../lib/i18n';
 import { baseName } from '../lib/format';
 import { exportRange, exportSeconds, fmtExportLen, hasLoop, stemInserts } from '../lib/export';
-import type { ExportProgress } from '../api/types';
+import type { ExportAudioOptions, ExportProgress } from '../api/types';
 import { S } from '../state/store';
 import { say, setU, U } from '../state/ui';
 import { Segmented } from '../ui/Knob';
@@ -19,24 +19,26 @@ export function Export() {
 }
 
 function ExportDialog() {
-  const saved = (() => { try { return (JSON.parse(localStorage.getItem(FKEY) ?? '{}') ?? {}) as { mp3?: boolean; kb?: number; stems?: boolean; master?: boolean; wavBits?: number; dither?: boolean }; } catch { return {}; } })();
+  const saved = (() => { try { return (JSON.parse(localStorage.getItem(FKEY) ?? '{}') ?? {}) as { mp3?: boolean; stemsMp3?: boolean; kb?: number; stems?: boolean; master?: boolean; wavBits?: number; dither?: boolean }; } catch { return {}; } })();
   const loopOk = () => hasLoop(S.project.loop);
   const [useLoop, setUseLoop] = createSignal(false);
   const [tailI, setTailI] = createSignal<0 | 1 | 2 | 3>(1); // 2 s
   const [rateI, setRateI] = createSignal(0); // 48 kHz
-  const [mp3, setMp3] = createSignal(!!saved.mp3);
+  const [mixMp3, setMixMp3] = createSignal(!!saved.mp3);
+  const [stemsMp3, setStemsMp3] = createSignal(!!saved.stemsMp3);
   const [kbI, setKbI] = createSignal(Math.max(0, KBPS.indexOf((saved.kb ?? 320) as 320)));
   const [stems, setStems] = createSignal(!!saved.stems);
-  const [master, setMaster] = createSignal(saved.master !== false); // Master.wav next to the stems, on by default
+  const [master, setMaster] = createSignal(saved.master !== false);
   const [wavBits, setWavBits] = createSignal<24 | 32>(saved.wavBits === 24 ? 24 : 32);
   const [dither, setDither] = createSignal(saved.dither === true);
-  const remember = () => { try { localStorage.setItem(FKEY, JSON.stringify({ mp3: mp3(), kb: KBPS[kbI()], stems: stems(), master: master(), wavBits: wavBits(), dither: dither() })); } catch { /* ignore */ } };
-  const wav = () => stems() || !mp3();
+  const remember = () => { try { localStorage.setItem(FKEY, JSON.stringify({ mp3: mixMp3(), stemsMp3: stemsMp3(), kb: KBPS[kbI()], stems: stems(), master: master(), wavBits: wavBits(), dither: dither() })); } catch { /* ignore */ } };
+  const mp3 = () => stems() ? stemsMp3() : mixMp3();
+  const setMp3 = (value: boolean) => { (stems() ? setStemsMp3 : setMixMp3)(value); remember(); };
+  const wav = () => !mp3();
   const canWrap = () => wav() && useLoop() && loopOk();
   const tailChoice = () => tailI() === WRAP && !canWrap() ? 1 : tailI();
   const tailSeconds = () => TAILS[tailChoice()];
   const wavDepth = () => wavBits() === 24 ? '24-bit PCM' : '32-bit float';
-  const wavOptions = () => ({ wavBits: wavBits(), dither: wavBits() === 24 && dither(), wrapTail: tailChoice() === WRAP });
   const [prog, setProg] = createSignal<ExportProgress | null>(null);
   onMount(() => {
     const un = be().on('export-progress', p => setProg(p));
@@ -56,8 +58,11 @@ function ExportDialog() {
     setBusy(true); setU('exportBusy', true); setErr(null); setProg(null);
     try {
       const common = { useLoop: useLoop() && loopOk(), tail: tailSeconds(), sampleRate: RATES[rateI()] };
+      const options: ExportAudioOptions = mp3()
+        ? { ...common, format: 'mp3', mp3Kbps: KBPS[kbI()] }
+        : { ...common, format: 'wav', wavBits: wavBits(), dither: wavBits() === 24 && dither(), wrapTail: tailChoice() === WRAP };
       if (stems()) {
-        const r = await be().exportStems({ ...common, includeMaster: master(), ...wavOptions() });
+        const r = await be().exportStems({ ...options, includeMaster: master() });
         setU('exportBusy', false);
         if (!U.exportOpen) return; // dialog was closed (Escape) while bouncing
         if (r.cancelled) {
@@ -72,9 +77,7 @@ function ExportDialog() {
         setU('exportOpen', false);
         return;
       }
-      const r = await be().exportAudio(mp3()
-        ? { ...common, format: 'mp3', mp3Kbps: KBPS[kbI()] }
-        : { ...common, format: 'wav', ...wavOptions() });
+      const r = await be().exportAudio(options);
       setU('exportBusy', false);
       if (!U.exportOpen) return; // dialog was closed (Escape) while bouncing
       if (r.cancelled) {
@@ -147,18 +150,17 @@ function ExportDialog() {
               value={() => rateI()}
               pick={i => setRateI(i as 0 | 1)}
             />
-            <Show when={!stems()} fallback={<>
+            <Show when={stems()}>
               <label>{t('a.ex.master')}</label>
               <Segmented options={[t('a.ex.masterOn'), t('a.ex.masterOff')]} value={() => (master() ? 0 : 1)} pick={i => { setMaster(i === 0); remember(); }}
                 title={t('a.ex.masterTip')} />
-            </>}>
-              <label>{t('a.ex.format')}</label>
-              <Segmented options={['WAV', 'MP3']} value={() => (mp3() ? 1 : 0)} pick={i => { setMp3(i === 1); remember(); }}
-                title={t('a.ex.formatTip')} />
-              <Show when={mp3()}>
-                <label>{t('a.ex.mp3q')}</label>
-                <Segmented options={KBPS.map(k => k + ' kbps')} value={() => kbI()} pick={i => { setKbI(i); remember(); }} title={t('a.ex.mp3qTip')} />
-              </Show>
+            </Show>
+            <label>{t('a.ex.format')}</label>
+            <Segmented options={['WAV', 'MP3']} value={() => (mp3() ? 1 : 0)} pick={i => setMp3(i === 1)}
+              title={t('a.ex.formatTip')} />
+            <Show when={mp3()}>
+              <label>{t('a.ex.mp3q')}</label>
+              <Segmented options={KBPS.map(k => k + ' kbps')} value={() => kbI()} pick={i => { setKbI(i); remember(); }} title={t('a.ex.mp3qTip')} />
             </Show>
             <Show when={wav()}>
               <label>{t('a.ex.bitDepth')}</label>
@@ -172,7 +174,9 @@ function ExportDialog() {
             </Show>
             <label>{t('a.ex.file')}</label>
             <span class="note mono">{stems()
-              ? t('a.ex.fileStems', { n: nFiles(), depth: wavDepth() })
+              ? mp3()
+                ? t('a.ex.fileStemsMp3', { n: nFiles(), kbps: KBPS[kbI()] })
+                : t('a.ex.fileStems', { n: nFiles(), depth: wavDepth() })
               : mp3() ? t('a.ex.fileMp3', { kbps: KBPS[kbI()] }) : t('a.ex.fileWav', { depth: wavDepth() })}</span>
             <label>{t('a.ex.length')}</label>
             <span class="note mono">{fmtExportLen(seconds())} · {RATES[rateI()]} Hz</span>

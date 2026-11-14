@@ -1078,7 +1078,8 @@ export class MockBackend implements Backend {
   async exportStems(opts: ExportStemsOptions): Promise<ExportStemsResult> {
     this.exportAbort = false;
     const { from, to } = exportRange(this.p, opts.useLoop);
-    const tail = opts.wrapTail ? 0 : opts.tail;
+    const format = opts.format ?? 'wav';
+    const tail = opts.format !== 'mp3' && opts.wrapTail ? 0 : opts.tail;
     const secs = exportSeconds(from, to, this.p.bpm, tail);
     const jobs = [
       ...(opts.includeMaster ? [{ name: 'Master', master: true }] : []),
@@ -1092,13 +1093,13 @@ export class MockBackend implements Backend {
       await delay(40);
       if (this.exportAbort) return { cancelled: true };
       files.push({
-        name: jobs[i].name, file: `${stems[i]}.wav`, master: jobs[i].master,
+        name: jobs[i].name, file: `${stems[i]}.${format}`, master: jobs[i].master,
         stats: { seconds: secs, sampleRate: opts.sampleRate, peakDbfs: -6.1, rmsDbfs: -18.2, crestDb: 12.1, clippedSamples: 0, silent: false },
       });
     }
     this.emit('export-progress', { done: jobs.length, total: jobs.length, name: '' });
     const dir = this.path ? this.path.replace(/[\\/][^\\/]*$/, '') : 'C:\\Users\\michal\\Music';
-    return { dir, fromBeat: from, toBeat: to, tail, format: 'wav', files, skipped: [] };
+    return { dir, fromBeat: from, toBeat: to, tail, format, files, skipped: [] };
   }
   async exportCancel() { this.exportAbort = true; }
 
