@@ -350,6 +350,11 @@ pub struct SamplerState {
     /// the same group, itself included. A closed hat that cuts the open one.
     #[serde(default)]
     pub cut: u8,
+    /// Source milliseconds at the audible edges of the selected sample region.
+    #[serde(default, rename = "fadeInMs")]
+    pub fade_in_ms: f32,
+    #[serde(default, rename = "fadeOutMs")]
+    pub fade_out_ms: f32,
 }
 
 fn sampler_release() -> f32 {
@@ -362,6 +367,7 @@ impl SamplerState {
     pub const ATTACK_MS: (f32, f32) = (0.0, 2000.0);
     pub const DECAY_MS: (f32, f32) = (0.0, 5000.0);
     pub const RELEASE_MS: (f32, f32) = (1.0, 5000.0);
+    pub const FADE_MS: (f32, f32) = (0.0, 5000.0);
     pub const RELEASE_DEFAULT: f32 = 20.0;
     pub const CUT_GROUPS: u8 = 8;
     /// The shortest part that may be selected, as a fraction of the file.
@@ -382,6 +388,9 @@ impl SamplerState {
             || !within(self.release, Self::RELEASE_MS)
         {
             return Err("sampler envelope: attack 0..2000 ms, decay 0..5000 ms, sustain 0..1, release 1..5000 ms".into());
+        }
+        if !within(self.fade_in_ms, Self::FADE_MS) || !within(self.fade_out_ms, Self::FADE_MS) {
+            return Err("sampler fades must be 0..5000 ms".into());
         }
         if self.cut > Self::CUT_GROUPS {
             return Err("sampler cut group is 0 (none) or 1..8".into());
@@ -405,6 +414,8 @@ impl Default for SamplerState {
             sustain: 1.0,
             release: Self::RELEASE_DEFAULT,
             cut: 0,
+            fade_in_ms: 0.0,
+            fade_out_ms: 0.0,
         }
     }
 }
@@ -520,7 +531,9 @@ pub struct Note {
     pub ch: Id,
     /// Start in steps (1/16) from the pattern start.
     pub step: f32,
-    /// Length in steps.
+    /// Length in steps. For a held note, when its note-off comes. For a trigger (`trig`), the
+    /// grid cell it occupies (1 from the Channel Rack): the pattern length counts it, but a
+    /// sampler never stops at it.
     pub len: f32,
     /// MIDI key; `None` = the channel's `root`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -528,6 +541,13 @@ pub struct Note {
     /// Velocity 0..1 (gain).
     #[serde(default = "one", skip_serializing_if = "is_one")]
     pub v: f32,
+    /// A step-sequencer trigger (FL Studio's zero-length step): a note-on without a note-off.
+    /// A sampler plays its part to the end (or until a cut group or its own decay stops it),
+    /// whatever its One-shot / Gate mode. Synth and WAVE Keys channels, which have no end of
+    /// their own, hold it for `len`. `false` = an ordinary held note (the Piano roll's).
+    /// An absent value identifies legacy notes. They play as held notes.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub trig: Option<bool>,
 }
 
 fn is_one(v: &f32) -> bool {
@@ -535,8 +555,13 @@ fn is_one(v: &f32) -> bool {
 }
 
 impl Note {
+    /// A held note: note-on at `step`, note-off `len` steps later.
     pub fn new(ch: Id, step: f32, len: f32, p: Option<u8>) -> Self {
-        Self { ch, step, len, p, v: 1.0 }
+        Self { ch, step, len, p, v: 1.0, trig: Some(false) }
+    }
+    /// A Channel Rack step: a trigger in one grid cell.
+    pub fn trigger(ch: Id, step: f32, p: Option<u8>) -> Self {
+        Self { trig: Some(true), ..Self::new(ch, step, 1.0, p) }
     }
 }
 

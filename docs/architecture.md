@@ -112,14 +112,22 @@ the kit and its mixer routing in every pattern.
   0..2000 ms and `decay` 0..5000 ms to the `sustain` level 0..1 (0 = the decay is the whole
   sound); `cut` 0 = none, 1..8 = a **cut group**: a new note silences every sounding sampler
   note of the group's channels, its own included, when it starts (a closed hat cutting the
-  open one). A part that starts or ends inside the waveform (trimmed or reversed) is faded
-  over 1.5 ms; an untrimmed sample starts exactly as recorded, no fade softens its transient.
+  open one). The waveform's Fade In and Fade Out handles and millisecond fields set
+  `fadeInMs` and `fadeOutMs` (0–5000 source ms). They apply at the audible edges of the
+  selected part, swap sides with Reverse, and are independent of Attack and Release.
+  Each fade is bounded by the region, overlapping fades multiply, and pitch changes the
+  audible duration together with the rest of the sample. The automatic 1.5 ms declick
+  at trimmed or reversed edges still applies. Both fade settings default to zero.
   `putChannel` refuses values out of range (`SamplerState::check`).
 * `note`: `step`/`len` in 16ths, `p` MIDI key (absent = the channel's `root`), `v` velocity
-  0..1 = linear gain (absent = 1). A step-sequencer step is simply a note of length 1 (at
-  the root, or at its own key set in the rack's graph editor), so the step grid and the piano
-  roll edit the same notes; a channel with other lengths, off-grid notes or chords is shown
-  as a mini piano roll in the rack (a click opens the Piano roll).
+  0..1 = linear gain (absent = 1). A Channel Rack step has `trig: true`. It occupies one grid
+  cell and plays a sampler without a note-off, even in Gate mode. Synth and WAVE Keys
+  continue to use the grid duration. Held notes use `trig: false`, and in Gate mode their
+  end starts Release. The Piano Roll shows triggers as short marks. Drag their resize grip
+  or use **Convert to held note** in note properties to give them a duration.
+  Files without `trig` retain their previous Rack layout and playback. Their one-cell notes
+  cannot be distinguished reliably from older Piano Roll notes, so loading keeps them
+  length-bearing. Replacing a legacy step in the Rack creates an explicit trigger.
 * `pattern.len` in beats is **derived**, like FL Studio's automatic pattern length: the end
   of the last note rounded up to a whole bar, at least `minLen` (whole bars, ≥ 1; the bars
   the user keeps on purpose with "+ bar", e.g. a crash every second bar). The engine sets it

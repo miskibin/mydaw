@@ -55,7 +55,7 @@ pub struct Voice {
     /// Samples to wait before the voice starts (sub-block accuracy).
     pub delay: u32,
     t: u32,
-    /// Note length in samples: when a gated sample or a piano note starts its release.
+    /// Note length in samples until release. A step trigger uses `u32::MAX`.
     len: u32,
     phase: f32,
     pub alive: bool,
@@ -165,7 +165,7 @@ impl VoicePool {
     pub fn note_on(&mut self, ch: &ChanRt, idx: usize, dest: Dest, key: u8, vel: f32) -> bool {
         // the same key struck again releases its previous note
         self.release_where(|v| v.held && v.chan_id == ch.id && v.key == key);
-        let Some(i) = self.note_slot(ch, idx, dest, 0, 3600.0, key, vel, 1.0) else { return false };
+        let Some(i) = self.note_slot(ch, idx, dest, 0, Some(3600.0), key, vel, 1.0) else { return false };
         let v = &mut self.voices[i];
         v.held = true;
         v.key = key;
@@ -222,20 +222,30 @@ impl VoicePool {
 
     /// The metronome click.
     pub fn click(&mut self, accent: bool, delay: u32) {
-        self.trigger(VoiceKind::Click { accent }, Dest::Click, NO_CHAN, 0, delay, 0.06, 1.0, 1.0);
+        self.trigger(VoiceKind::Click { accent }, Dest::Click, NO_CHAN, 0, delay, Some(0.06), 1.0, 1.0);
     }
 
     /// A note of channel `ch` (index `idx` in the table). `key` is a MIDI key, `vel` the
     /// velocity 0..1 and `gain` level on top of it (the track gain when the channel skips the track).
     /// Returns false when nothing can play (a sampler channel without audio).
     #[allow(clippy::too_many_arguments)]
-    pub fn note(&mut self, ch: &ChanRt, idx: usize, dest: Dest, delay: u32, len_s: f32, key: u8, vel: f32, gain: f32) -> bool {
+    pub fn note(&mut self, ch: &ChanRt, idx: usize, dest: Dest, delay: u32, len_s: Option<f32>, key: u8, vel: f32, gain: f32) -> bool {
         self.note_slot(ch, idx, dest, delay, len_s, key, vel, gain).is_some()
     }
 
     /// Like [`Self::note`], returning the voice slot that was started.
     #[allow(clippy::too_many_arguments)]
-    fn note_slot(&mut self, ch: &ChanRt, idx: usize, dest: Dest, delay: u32, len_s: f32, key: u8, vel: f32, gain: f32) -> Option<usize> {
+    fn note_slot(
+        &mut self,
+        ch: &ChanRt,
+        idx: usize,
+        dest: Dest,
+        delay: u32,
+        len_s: Option<f32>,
+        key: u8,
+        vel: f32,
+        gain: f32,
+    ) -> Option<usize> {
         let level = vel * gain;
         match ch.kind {
             VoiceKind::Sample => {
@@ -279,7 +289,17 @@ impl VoicePool {
     }
 
     #[allow(clippy::too_many_arguments)]
-    fn trigger(&mut self, kind: VoiceKind, dest: Dest, chan: usize, chan_id: Id, delay: u32, len_s: f32, vel: f32, rate: f64) -> usize {
+    fn trigger(
+        &mut self,
+        kind: VoiceKind,
+        dest: Dest,
+        chan: usize,
+        chan_id: Id,
+        delay: u32,
+        len_s: Option<f32>,
+        vel: f32,
+        rate: f64,
+    ) -> usize {
         // steal the oldest voice if the pool is full
         let idx = match self.voices.iter().position(|v| !v.alive) {
             Some(i) => i,
@@ -293,7 +313,7 @@ impl VoicePool {
             vel: vel.max(0.0),
             rate,
             delay,
-            len: (len_s * self.sr) as u32,
+            len: len_s.map_or(u32::MAX, |seconds| (seconds * self.sr) as u32),
             alive: true,
             ..Voice::dead()
         };
@@ -401,6 +421,11 @@ impl VoicePool {
                 let edge = EDGE_SECONDS * sr;
                 let (edge_in, edge_out) = (m.reverse || m.start > 0.0, m.reverse || m.end < 1.0);
                 let step = v.rate * bend as f64;
+                let span = (hi - lo - 1.0).max(0.0);
+                let fade_in = (m.fade_in * a.sr as f64).min(span);
+                let fade_out = (m.fade_out * a.sr as f64).min(span);
+                let in_scale = if fade_in > 0.0 { fade_in.recip() } else { 0.0 };
+                let out_scale = if fade_out > 0.0 { fade_out.recip() } else { 0.0 };
                 for i in start..n {
                     if v.pos < lo || v.pos >= hi {
                         v.alive = false;
@@ -425,13 +450,19 @@ impl VoicePool {
                         break;
                     }
                     let mut fade = shape * v.env;
-                    if edge_in {
-                        fade *= (t / edge).min(1.0);
-                    }
-                    if edge_out {
-                        let left = if m.reverse { v.pos - lo } else { hi - v.pos };
-                        fade *= (left / step.max(1e-9) / edge as f64).min(1.0) as f32;
-                    }
+                    let from_start = if m.reverse { hi - 1.0 - v.pos } else { v.pos - lo };
+                    let to_end = if m.reverse { v.pos - lo } else { hi - v.pos };
+                    let edge_start = if edge_in { (t / edge).min(1.0) } else { 1.0 };
+                    let edge_end = if edge_out { (to_end / step.max(1e-9) / edge as f64).min(1.0) as f32 } else { 1.0 };
+                    let fade_start = if in_scale > 0.0 { (from_start * in_scale).clamp(0.0, 1.0) as f32 } else { 1.0 };
+                    let fade_end = if out_scale > 0.0 {
+                        let remaining = if m.reverse { to_end } else { to_end - 1.0 };
+                        (remaining * out_scale).clamp(0.0, 1.0) as f32
+                    } else {
+                        1.0
+                    };
+                    fade *= edge_start.min(fade_start);
+                    fade *= edge_end.min(fade_end);
                     let (x, y) = a.sample(v.pos);
                     let (gl, gr) = side(i);
                     out_l[i] += x * gl * fade;

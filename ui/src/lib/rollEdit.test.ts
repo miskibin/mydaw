@@ -131,8 +131,8 @@ describe('note properties', () => {
   });
   it('sets velocity and length on all, moves start and key as a group', () => {
     const r = applyProps(N, [0, 1], CH, { vel: 70, len: 2, start: 4.3, key: 62 })!;
-    expect(r[0]).toEqual({ ch: 1, step: 4.3, len: 2, p: 62, v: 0.7 });
-    expect(r[1]).toEqual({ ch: 1, step: 7.6, len: 2, p: 66, v: 0.7 });
+    expect(r[0]).toEqual({ ch: 1, step: 4.3, len: 2, p: 62, v: 0.7, trig: false });
+    expect(r[1]).toEqual({ ch: 1, step: 7.6, len: 2, p: 66, v: 0.7, trig: false });
     expect(r[2]).toBe(N[2]);
     // a note without its own key keeps it when the key is not changed
     expect(applyProps(N, [3], CH, { vel: 20 })![3]).toEqual({ ch: 1, step: 8, len: 3, v: 0.2 });

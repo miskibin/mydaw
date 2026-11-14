@@ -206,6 +206,7 @@ pub fn layout(notes: &[RecNote], ch: Id, beats_per_bar: f64) -> Option<RecordedC
             len: (((n.end - n.start) * STEPS_PER_BEAT) as f32).max(MIN_NOTE_STEPS),
             p: Some(n.key),
             v: MidiMsg::vel_gain(n.vel),
+            trig: Some(false),
         })
         .collect();
     Some(RecordedClip { start, len, notes })
@@ -337,7 +338,7 @@ mod tests {
         assert_eq!(c.start, 4.0);
         assert_eq!(c.len, 4.0); // up to 6.25 → 2.25 beats in → one bar
         assert_eq!(c.notes.len(), 2);
-        assert_eq!(c.notes[0], Note { ch: 7, step: 2.0, len: 2.0, p: Some(60), v: 1.0 });
+        assert_eq!(c.notes[0], Note { ch: 7, step: 2.0, len: 2.0, p: Some(60), v: 1.0, trig: Some(false) });
         assert_eq!(c.notes[1].step, 4.0);
         assert_eq!(c.notes[1].len, 5.0);
         assert!((c.notes[1].v - 64.0 / 127.0).abs() < 1e-6);

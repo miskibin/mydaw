@@ -61,8 +61,8 @@ PATTERNS & CHANNELS  (steps: x = on, 1-9 = velocity 10-90 %, . = off; spaces and
   channels --ch C --param ID --value V     one knob of a synth (ids in `catalog`) or of WAVE Keys (release ms, dynamics %)
   channels --remove ID|NAME                remove a channel and its notes
   pattern [--id N]                         a pattern as step strings per channel
-  pattern --id N --ch C --steps "x... x... x... x..." [--vel 0.8]   replace channel C's notes
-  pattern --id N --ch C --notes '[{"step":0,"len":4,"p":36,"v":0.9}]'  piano-roll notes (p = MIDI key)
+  pattern --id N --ch C --steps "x... x... x... x..." [--vel 0.8]   replace channel C's notes with step triggers
+  pattern --id N --ch C --notes '[{"step":0,"len":4,"p":36,"v":0.9}]'  piano-roll notes (p = MIDI key, optional trig = true for a trigger)
   pattern --id N --ch C --clear            remove channel C's notes from the pattern
   pattern --id N [--bars N (minimum)] [--swing 0..100] [--name TEXT]      (--new instead of --id: a new pattern)
   pattern --id N --play [--from B] [--loop A:B] | --stop

@@ -549,7 +549,7 @@ pub fn schema() -> Value {
     json!({
         "automation": "an automation plays through a clip of kind `auto` whose `ref` is the automation id; points t = beats from the automation start, v = 0..1 normalised (log params normalised logarithmically); optional per point, for the segment ending there: tension -1..1 (0 = straight) and shape curve|double|hold|stairs (stairs: tension sets 2..16 steps)",
         "units": "time in beats (quarter notes); pattern len in beats (4 = 1 bar, derived from the notes, at least minLen), note step/len in sixteenths, note v (velocity) 0..1, swing 0..1; fades in seconds; vol = fader 0..1 (0.7937 = 0 dB); clip gain in dB; pan -1..1",
-        "patterns": "channels are global (Channel Rack rows, `wave channels`); a pattern note plays channel `ch`; p = MIDI key (absent = the channel's root, the key at which a sampler plays its file unpitched); swing delays notes on odd 16ths by swing × ½ step; the pattern length is derived: the end of the last note rounded up to a bar, at least `minLen` beats (a `len` you send is ignored); when it changes, clips that show exactly one whole pass (offset 0) follow. Easier: `wave pattern --id N --ch C --steps \"x...x...x...x...\"`",
+        "patterns": "channels are global (Channel Rack rows, `wave channels`); a pattern note plays channel `ch`; trig = true for a step trigger without sampler note-off; p = MIDI key (absent = the channel's root, the key at which a sampler plays its file unpitched); swing delays notes on odd 16ths by swing × ½ step; the pattern length is derived: the end of the last note rounded up to a bar, at least `minLen` beats (a `len` you send is ignored); when it changes, clips that show exactly one whole pass (offset 0) follow. Easier: `wave pattern --id N --ch C --steps \"x...x...x...x...\"`",
         "ids": "take new ids from context.nextId and count up",
         "stretch": "audio clips only: `stretch` 0.25..4 = how many times longer the clip plays its audio (2 = half speed); `offset` and `len` are beats of the stretched audio, so stretching a clip from s0 to s1 multiplies its len and offset by s1/s0. Pitch is kept (rendered in the background; the clip plays resampled until it is ready, see state `stretching`) unless `resample` is true (speed and pitch change together, like a turntable)",
         "ops": {
@@ -562,7 +562,7 @@ pub fn schema() -> Value {
             "removeFx": {"fxId": 0},
             "moveFx": {"fxId": 0, "to": 0},
             "putPattern": {"pattern": {"id": 0, "name": "", "color": "#4f8ef7", "minLen": 4, "swing": 0, "notes": [{"ch": "channel id", "step": 0, "len": 1, "p": 36, "v": 1}]}},
-            "putChannel": {"channel": {"id": 0, "name": "Kick", "color": "#4f8ef7", "kind": "sample|synth|keys", "source": "source id (kind sample)", "sampler": "kind sample, optional: {start, end (0..1 of the file), reverse, norm, semi, fine, gate (false = one-shot), attack, decay, release (ms), sustain (0..1), cut (0 = none, 1..8)}", "vol": 0.7937, "pan": 0, "mute": false, "solo": false, "insert": "insert id or null (= the clip's track)", "root": 60}, "index": null},
+            "putChannel": {"channel": {"id": 0, "name": "Kick", "color": "#4f8ef7", "kind": "sample|synth|keys", "source": "source id (kind sample)", "sampler": "kind sample, optional: {start, end (0..1 of the file), reverse, norm, semi, fine, gate (false = one-shot), attack, decay, release, fadeInMs, fadeOutMs (ms), sustain (0..1), cut (0 = none, 1..8)}", "vol": 0.7937, "pan": 0, "mute": false, "solo": false, "insert": "insert id or null (= the clip's track)", "root": 60}, "index": null},
             "removeChannel": {"id": 0},
             "removePattern": {"id": 0},
             "putSource": {"source": "rename/recolour an existing source"},
@@ -729,8 +729,10 @@ pub fn channels(app: &dyn Host, a: &Value, if_revision: Option<u64>) -> R<Value>
                     "decay" => sampler.decay = v,
                     "sustain" => sampler.sustain = v,
                     "release" => sampler.release = v,
+                    "fadeInMs" => sampler.fade_in_ms = v,
+                    "fadeOutMs" => sampler.fade_out_ms = v,
                     "cut" => sampler.cut = value.round().clamp(0.0, 255.0) as u8,
-                    _ => return Err(format!("the sampler has no parameter `{param}` (start, end: 0..1; reverse, norm, gate: 0 or 1; semi, fine; attack, decay, release in ms; sustain 0..1; cut 0..8)")),
+                    _ => return Err(format!("the sampler has no parameter `{param}` (start, end: 0..1; reverse, norm, gate: 0 or 1; semi, fine; attack, decay, release, fadeInMs, fadeOutMs in ms; sustain 0..1; cut 0..8)")),
                 }
             }
         }
@@ -790,12 +792,15 @@ fn pattern_json(p: &wave_engine::Project, pt: &wave_engine::Pattern) -> Value {
                 }
             }
             let s: String = line.chunks(4).map(|g| g.iter().collect::<String>()).collect::<Vec<_>>().join(" ");
-            let simple = notes.iter().all(|n| n.len == 1.0 && n.p.is_none() && n.step.fract() == 0.0);
+            let mut occupied = std::collections::HashSet::new();
+            let simple = notes.iter().all(|n| {
+                n.trig == Some(true) && n.len == 1.0 && n.p.is_none() && n.step.fract() == 0.0 && occupied.insert(n.step as usize)
+            });
             let mut row = json!({ "ch": c.id, "name": c.name, "steps": s });
             if !simple {
                 row["notes"] = json!(notes
                     .iter()
-                    .map(|n| json!({ "step": n.step, "len": n.len, "p": n.p.unwrap_or(c.root), "v": n.v }))
+                    .map(|n| json!({ "step": n.step, "len": n.len, "p": n.p.unwrap_or(c.root), "v": n.v, "trig": n.trig.unwrap_or(false) }))
                     .collect::<Vec<_>>());
             }
             row
@@ -866,16 +871,17 @@ pub fn pattern(app: &dyn Host, a: &Value, if_revision: Option<u64>) -> R<Value> 
             if !(0.0..=1.0).contains(&vel) {
                 return Err("--vel is 0..1".into());
             }
-            pt.notes.extend(parse_steps(s, vel)?.into_iter().map(|(k, v)| Note { v, ..Note::new(ch, k, 1.0, None) }));
+            pt.notes.extend(parse_steps(s, vel)?.into_iter().map(|(k, v)| Note { v, ..Note::trigger(ch, k, None) }));
         }
         if let Some(ns) = notes {
-            let list = ns.as_array().ok_or("--notes is a JSON array of {step, len, p?, v?}")?;
+            let list = ns.as_array().ok_or("--notes is a JSON array of {step, len, p?, v?, trig?}")?;
             for n in list {
                 let step = opt_f64(n, "step").ok_or("each note needs `step` (16ths)")? as f32;
                 let len = opt_f64(n, "len").unwrap_or(1.0) as f32;
                 let key = arg(n, "p").and_then(as_index).map(|k| k.min(127) as u8);
                 let v = opt_f64(n, "v").unwrap_or(1.0) as f32;
-                pt.notes.push(Note { v, ..Note::new(ch, step, len, key) });
+                let trigger = arg(n, "trig").map(|v| v.as_bool().ok_or("note `trig` must be a boolean")).transpose()?.unwrap_or(false);
+                pt.notes.push(Note { v, trig: Some(trigger), ..Note::new(ch, step, len, key) });
             }
         }
     }

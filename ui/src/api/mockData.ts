@@ -258,11 +258,11 @@ export function sketchProject(cat: Catalog): Project {
   const b = p.channels!.find(c => c.id === bass)!;
   b.name = 'Bass';
   if (b.kind === 'sample') b.sampler.gate = true;
-  const note = (ch: number, step: number, len: number, key?: number): Note => key != null ? { ch, step, len, p: key } : { ch, step, len };
+  const note = (ch: number, step: number, len: number, key?: number): Note => ({ ch, step, len, p: key, trig: false });
   p.patterns = [
     { id: 1, name: 'Beat', color: '#4f8ef7', len: 4,
-      notes: ([[0, kick], [4, kick], [8, kick], [12, kick], [10, kick], [4, clap], [12, clap]] as [number, number][]).map(([s, c]) => note(c, s, 1)) },
-    { id: 2, name: 'Hats', color: '#e0a44a', len: 4, notes: [2, 6, 10, 14, 15, 7].map(s => note(hat, s, 1)) },
+      notes: ([[0, kick], [4, kick], [8, kick], [12, kick], [10, kick], [4, clap], [12, clap]] as [number, number][]).map(([s, c]) => ({ ...note(c, s, 1), trig: true })) },
+    { id: 2, name: 'Hats', color: '#e0a44a', len: 4, notes: [2, 6, 10, 14, 15, 7].map(s => ({ ...note(hat, s, 1), trig: true })) },
     { id: 3, name: 'Bass', color: '#7c8cf8', len: 8,
       notes: [[0, 3, 33], [4, 2, 33], [6, 2, 40], [8, 4, 36], [14, 2, 38], [16, 3, 29], [20, 2, 29], [22, 2, 36], [24, 6, 31], [30, 2, 34]].map(([s, l, k]) => note(bass, s, l, k)) },
   ];

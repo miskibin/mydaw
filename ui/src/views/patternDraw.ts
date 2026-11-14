@@ -4,7 +4,7 @@
 import type { Channel, Id, Note, Pattern } from '../api/types';
 import { t } from '../lib/i18n';
 import { mix } from '../lib/color';
-import { BEAT_GAP, gridW, inScale, keyOf, stepAt, stepX, velOf } from '../lib/pattern';
+import { BEAT_GAP, gridW, inScale, keyOf, noteWidth, stepAt, stepX, velOf } from '../lib/pattern';
 import { isBlack, noteName } from '../lib/pitch';
 import type { Layer } from '../ui/frameLoop';
 import { rgba, T, theme } from '../ui/theme';
@@ -226,14 +226,14 @@ export function drawRoll(g: CanvasRenderingContext2D, W: number, H: number, G: R
   for (const n of o.pt.notes) {
     if (n.ch === o.ch.id) continue;
     const c = o.chans.get(n.ch); if (!c) continue;
-    const x = rollX(G, n.step), y = rollY(G, keyOf(n, c)), w = Math.max(2, n.len * G.pps - 1);
+    const x = rollX(G, n.step), y = rollY(G, keyOf(n, c)), w = noteWidth(n, G.pps);
     if (x > W || x + w < G.kw || y > H || y + G.rowH < 0) continue;
     g.fillStyle = rgba(c.color, 0.16); g.fillRect(x, y + 1, w, G.rowH - 2);
   }
   g.font = SANS10; g.textBaseline = 'middle'; g.textAlign = 'left';
   o.pt.notes.forEach((n, i) => {
     if (n.ch !== o.ch.id) return;
-    const k = keyOf(n, o.ch), x = rollX(G, n.step), y = rollY(G, k), w = Math.max(3, n.len * G.pps - 1);
+    const k = keyOf(n, o.ch), x = rollX(G, n.step), y = rollY(G, k), w = noteWidth(n, G.pps);
     if (x > W || x + w < G.kw || y > H || y + G.rowH < 0) return;
     const sel = o.sel.has(i), v = velOf(n);
     g.fillStyle = sel ? mix(o.ch.color, 55, theme.light ? '#000000' : '#ffffff') : mix(o.ch.color, Math.round(45 + 55 * v), T.viz);
@@ -241,7 +241,7 @@ export function drawRoll(g: CanvasRenderingContext2D, W: number, H: number, G: R
     g.strokeStyle = sel ? T.fgHi : rgba('#000000', theme.light ? 0.25 : 0.45); g.lineWidth = 1;
     g.beginPath(); rr(g, x + 0.5, y + 1, w - 1, G.rowH - 2, 2.5); g.stroke();
     // resize grip
-    if (w > 10) { g.fillStyle = rgba(T.onFill, 0.35); g.fillRect(x + w - 3, y + 3, 1, G.rowH - 6); }
+    if (n.trig || w > 10) { g.fillStyle = rgba(T.onFill, 0.35); g.fillRect(x + w - 3, y + 3, 1, G.rowH - 6); }
     if (w > 26 && G.rowH >= 11) { g.fillStyle = rgba(T.onFill, 0.85); g.fillText(noteName(k), x + 4, y + G.rowH / 2 + 0.5); }
   });
   if (o.marquee) {

@@ -16,7 +16,7 @@ import { rgba, T, themeVersion } from '../ui/theme';
 import { curBeat } from '../state/telemetry';
 import { TOTAL_BEATS, type Note } from '../api/types';
 import { clamp } from '../lib/format';
-import { duplicateRight, keyOf, moveNotes, noteAt, notesText, resizeNotes, ROLL_SNAPS, SCALES, scaleMask, snapStep, stepsOf, transpose, velOf } from '../lib/pattern';
+import { duplicateRight, keyOf, moveNotes, noteAt, noteWidth, notesText, resizeNotes, ROLL_SNAPS, SCALES, scaleMask, snapStep, stepsOf, transpose, velOf } from '../lib/pattern';
 import { NOTE_NAMES, noteName } from '../lib/pitch';
 import {
   applyProps, fitRange, fmtLen, fmtStart, followPage, invertSelection, legato, notesOfKey, nudgeVelocity,
@@ -377,24 +377,24 @@ function Roll(props: { z: number }) {
     const x = e.clientX - r.left, y = e.clientY - r.top;
     return { x, y, step: (x - KW + G.sx) / G.pps, key: clamp(127 - Math.floor((y + G.sy) / G.rowH), 0, 127) };
   };
-  const hitNote = (step: number, key: number) => noteAt(notesRaw(), ch().id, unwrap(ch()), step, key);
+  const hitNote = (step: number, key: number) => noteAt(notesRaw(), ch().id, unwrap(ch()), step, key, geo().pps);
   /** Index of another channel's note (a ghost) under (step, key), or −1. */
   const ghostAt = (step: number, key: number) => {
     const ns = notesRaw(), m = chansMap();
     for (let i = ns.length - 1; i >= 0; i--) {
       const n = ns[i]; if (n.ch === ch().id) continue;
-      if (keyOf(n, m.get(n.ch)) === key && step >= n.step - 1e-3 && step < n.step + n.len) return i;
+      if (keyOf(n, m.get(n.ch)) === key && step >= n.step - 1e-3 && step < n.step + noteWidth(n, geo().pps) / geo().pps) return i;
     }
     return -1;
   };
-  const edgeHit = (i: number, x: number) => { const n = notesRaw()[i], G = geo(); return x >= rollX(G, n.step + n.len) - Math.min(6, n.len * G.pps * 0.3); };
+  const edgeHit = (i: number, x: number) => { const n = notesRaw()[i], G = geo(); const width = noteWidth(n, G.pps); return x >= rollX(G, n.step) + width - Math.min(6, width * 0.4); };
   const commitNotes = (notes: Note[], label: string) => commit([putNotes(pt(), notes)], label);
 
   function eraseDrag(e: PointerEvent) {
     const g = new Gesture(t('b.pe.gestDelNotes'));
     let notes = notesRaw(), n0 = notes.length;
     const del = (ev: PointerEvent | MouseEvent) => {
-      const q = pos(ev), i = noteAt(notes, ch().id, unwrap(ch()), q.step, q.key);
+      const q = pos(ev), i = noteAt(notes, ch().id, unwrap(ch()), q.step, q.key, geo().pps);
       if (i < 0) return;
       notes = notes.filter((_, k) => k !== i);
       g.update([putNotes(pt(), notes)]);
@@ -439,7 +439,7 @@ function Roll(props: { z: number }) {
         : resizeNotes(orig, idx, q.step - p0.step, unit(ev.altKey));
       gest.update([putNotes(pt(), notes)]);
       const ln = notes[idx[idx.length - 1]];
-      if (ln) setLastLen(ln.len);
+      if (ln && !ln.trig) setLastLen(ln.len);
       if (mode === 'move' && ln && keyOf(ln, ch()) !== lastKey) { lastKey = keyOf(ln, ch()); audition(ch().id, lastKey, ln.v ?? 1); }
     };
     const es = autoScroll(run, mode === 'resize' ? { x: true } : undefined);
@@ -487,7 +487,7 @@ function Roll(props: { z: number }) {
       const [x0, x1] = [Math.min(sx, q.x), Math.max(sx, q.x)], [y0, y1] = [Math.min(sy, q.y), Math.max(sy, q.y)];
       const s = new Set(base);
       for (const { n, i } of chanNotes()) {
-        const nx = rollX(G, n.step), nw = n.len * G.pps, ny = rollY(G, keyOf(n, ch()));
+        const nx = rollX(G, n.step), nw = noteWidth(n, G.pps), ny = rollY(G, keyOf(n, ch()));
         if (nx < x1 && nx + nw > x0 && ny < y1 && ny + G.rowH > y0) s.add(i);
       }
       setSel(s);
@@ -506,7 +506,7 @@ function Roll(props: { z: number }) {
       lastCell = cell;
       const s = cell * u;
       if (notes.some(n => n.ch === ch().id && Math.abs(n.step - s) < 1e-3)) return;
-      notes = [...notes, { ch: ch().id, step: s, len: lastLen(), p: q.key, ...velProp() }];
+      notes = [...notes, { ch: ch().id, step: s, len: lastLen(), trig: false, p: q.key, ...velProp() }];
       g.update([putNotes(pt(), notes)]);
     };
     const es = autoScroll(run);
@@ -621,7 +621,8 @@ function Roll(props: { z: number }) {
     }
     if (i >= 0) {
       const n = pt().notes[i];
-      setLastLen(n.len); setLastVel(n.v ?? 1);
+      if (!n.trig) setLastLen(n.len);
+      setLastVel(n.v ?? 1);
       const idx = sel().has(i) ? [...sel()].filter(k => k !== i).concat(i) : [i];
       if (!sel().has(i)) setSel(new Set([i]));
       if (edgeHit(i, p.x)) return moveDrag(e, idx, 'resize');
@@ -631,7 +632,7 @@ function Roll(props: { z: number }) {
     // a new note: grid start, last touched length, the row's key
     const s = snapStep(p.step, unit(e.altKey), true);
     if (s < 0 || s + lastLen() > MAX_STEPS) return;
-    const n: Note = { ch: ch().id, step: s, len: lastLen(), p: p.key, ...velProp() };
+    const n: Note = { ch: ch().id, step: s, len: lastLen(), trig: false, p: p.key, ...velProp() };
     const notes = [...notesRaw(), n];
     const g = new Gesture(tool === 'paint' ? t('b.pe.gestPaint') : t('b.pe.gestNew'));
     g.update([putNotes(pt(), notes)]);
@@ -812,7 +813,7 @@ function Roll(props: { z: number }) {
     const init = readProps(notesRaw(), pp.idx, unwrap(ch()));
     const shown = { vel: init.vel == null ? '' : String(init.vel), start: fmtStart(init.start), len: init.len == null ? '' : fmtLen(init.len), key: noteName(init.key) };
     const [err, setErr] = createSignal('');
-    const W = 236, H = pp.idx.length > 1 ? 196 : 176;
+    const W = 236, H = (pp.idx.length > 1 ? 196 : 176) + (pp.idx.some(i => notesRaw()[i]?.trig) ? 27 : 0);
     const place = () => {
       const n = notesRaw()[pp.idx[pp.idx.length - 1]], G = geo(), { w, h } = size();
       if (!n) return { left: 0, top: 0 };
@@ -844,7 +845,7 @@ function Roll(props: { z: number }) {
     const field = (name: 'vel' | 'start' | 'len' | 'key', label: string, tip: string | undefined, ref?: (el: HTMLInputElement) => void) => (
       <label class="rpf" title={tip}>
         <span>{label}</span>
-        <input ref={ref} name={name} value={shown[name]} placeholder={shown[name] ? '' : t('b.pr.pMixed')} spellcheck={false} autocomplete="off" onInput={() => setErr('')} />
+        <input ref={ref} name={name} value={shown[name]} placeholder={shown[name] ? '' : t(name === 'len' && pp.idx.every(i => notesRaw()[i]?.trig) ? 'b.pr.trigger' : 'b.pr.pMixed')} spellcheck={false} autocomplete="off" onInput={() => setErr('')} />
       </label>
     );
     return (
@@ -860,6 +861,13 @@ function Roll(props: { z: number }) {
         {field('vel', t('b.pr.pVel'), undefined, el => (first = el))}
         {field('start', t('b.pr.pStart'), t('b.pr.pStartTip'))}
         {field('len', t('b.pr.pLen'), t('b.pr.pLenTip'))}
+        <Show when={pp.idx.some(i => notesRaw()[i]?.trig)}>
+          <button class="smallbtn" type="button" title={t('b.pr.triggerTip')} onClick={() => {
+            const ids = new Set(pp.idx);
+            commitNotes(notesRaw().map((n, i) => ids.has(i) && n.trig ? { ...n, trig: false } : n), t('b.pr.toHeld'));
+            close();
+          }}>{t('b.pr.toHeld')}</button>
+        </Show>
         {field('key', t('b.pr.pKey'), t('b.pr.pKeyTip'))}
         <div class="rpfoot" classList={{ err: !!err() }}>{err() || t('b.pr.pFoot')}</div>
       </div>

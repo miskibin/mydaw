@@ -11,11 +11,18 @@ const bass: Channel = { id: BASS, name: 'Bass', color: '#7c8cf8', kind: 'sample'
 const steps = (notes: Note[], ch: number) => notes.filter(n => n.ch === ch).map(n => n.step).sort((a, b) => a - b);
 
 describe('step sequencer', () => {
+  it('keeps a trigger when copied and converts it only when resized', () => {
+    const [step] = setStep([], KICK, 4, true);
+    const duplicate = duplicateRight([step], [0]);
+    expect(duplicate.notes[1]).toMatchObject({ step: 8, len: 1, trig: true });
+    expect(resizeNotes([step], [0], 1, 1)[0]).toMatchObject({ step: 4, len: 1, trig: false });
+    expect(step.trig).toBe(true);
+  });
   it('toggles steps without duplicates', () => {
     let n: Note[] = [];
     n = setStep(n, KICK, 4, true);
     n = setStep(n, KICK, 4, true);
-    expect(n).toEqual([{ ch: KICK, step: 4, len: 1 }]);
+    expect(n).toEqual([{ ch: KICK, step: 4, len: 1, trig: true }]);
     expect(isStepOn(n, KICK, 4)).toBe(true);
     n = setStep(n, KICK, 4, false);
     expect(n).toEqual([]);
@@ -50,6 +57,8 @@ describe('step sequencer', () => {
     const n = setVelAt([{ ch: KICK, step: 2, len: 1 }, { ch: KICK, step: 3, len: 1 }], KICK, 2, 0.456);
     expect(n.map(x => x.v)).toEqual([0.46, undefined]);
     expect(isRollRow([{ ch: BASS, step: 0, len: 1 }], bass)).toBe(false);
+    expect(isRollRow([{ ch: BASS, step: 0, len: 1, trig: true }], bass)).toBe(false);
+    expect(isRollRow([{ ch: BASS, step: 0, len: 1, trig: false }], bass)).toBe(true);
     expect(isRollRow([{ ch: BASS, step: 0, len: 1, p: 36 }], bass)).toBe(false);
     expect(isRollRow([{ ch: BASS, step: 0, len: 3, p: 36 }], bass)).toBe(true);
     // a step with its own key (graph editor) is still a step; a chord or an off-grid note is not

@@ -118,7 +118,7 @@ pub fn sketch_project() -> Project {
             min_len: 4.0,
             notes: [(0., kick), (4., kick), (8., kick), (12., kick), (10., kick), (4., clap), (12., clap)]
                 .iter()
-                .map(|&(s, i)| n(i, s, 1.0, None))
+                .map(|&(s, i)| Note::trigger(i, s, None))
                 .collect(),
             swing: 0.0,
         },
@@ -128,7 +128,7 @@ pub fn sketch_project() -> Project {
             color: "#e0a44a".into(),
             len: 4.0,
             min_len: 4.0,
-            notes: [2., 6., 10., 14., 15., 7.].iter().map(|&s| n(hat, s, 1.0, None)).collect(),
+            notes: [2., 6., 10., 14., 15., 7.].iter().map(|&s| Note::trigger(hat, s, None)).collect(),
             swing: 0.0,
         },
         Pattern {

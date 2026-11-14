@@ -109,7 +109,7 @@ export function applyTransform(notes: Note[], verb: TransformVerb, seed: number,
       onsets.forEach((on, i) => {
         if (on) {
           // every fourth emitted onset accents, whatever rotation does to the slots
-          target.push({ ch: verb.ch, step: Math.fround(i * slot), len: Math.fround(Math.min(1, Math.max(0.25, slot))), v: hits++ % 4 === 0 ? 1 : verb.vel ?? 0.7 });
+          target.push({ ch: verb.ch, step: Math.fround(i * slot), len: Math.fround(Math.min(1, Math.max(0.25, slot))), trig: true, v: hits++ % 4 === 0 ? 1 : verb.vel ?? 0.7 });
         }
       });
       break;
@@ -147,7 +147,7 @@ export function applyTransform(notes: Note[], verb: TransformVerb, seed: number,
         let hits = 0;
         onsets.forEach((on, i) => {
           if (on) {
-            target.push({ ch: v.ch, step: Math.fround(i * slot), len: Math.fround(Math.min(1, Math.max(0.25, slot))), p: undefined, v: hits++ % 4 === 0 ? 1 : vel });
+            target.push({ ch: v.ch, step: Math.fround(i * slot), len: Math.fround(Math.min(1, Math.max(0.25, slot))), trig: true, p: undefined, v: hits++ % 4 === 0 ? 1 : vel });
           }
         });
       }
@@ -187,7 +187,7 @@ export function applyTransform(notes: Note[], verb: TransformVerb, seed: number,
           }
           if (d < 0) continue;
           const midi = 48 + (key ?? 0) + degrees[d % n];
-          target.push({ ch: verb.ch, step: bar * 16 + slot, len, p: midi, v: 0.8 });
+          target.push({ ch: verb.ch, step: bar * 16 + slot, len, p: midi, v: 0.8, trig: false });
         }
       }
       break;

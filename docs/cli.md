@@ -142,6 +142,7 @@ step). Each edit is one undo step.
 wave channels                                     # ids, kinds, routing
 wave channels --add snare-studio                  # a sampler of a standard-library sample (file or display name, or the start of one: "kick")
 wave channels --ch "Studio Snare" --param cut --value 1   # one sampler setting: start, end, reverse, norm, semi, fine, gate, attack, decay, sustain, release, cut
+wave channels --ch "Studio Snare" --param fadeOutMs --value 80   # fadeInMs and fadeOutMs in source milliseconds
 wave channels --sample 1001                       # a sampler channel playing source 1001
 wave channels --synth "808 Czysty"                # a synth channel with a factory preset ("" = blank patch)
 wave channels --ch 1005 --preset "Pad Ciepły"     # load a synth preset (ids/names in `wave catalog` → effects.synth)
@@ -164,6 +165,11 @@ wave pattern --id 2 --play --from 4 --loop 4:8    # from beat 4, looping beats 4
 `putPattern` / `putChannel` / `removeChannel` (see `wave schema`). When a pattern's
 length changes (notes added past its end or removed, `--bars`), clips that show exactly one
 whole pass of it follow; clips sized on purpose keep their length.
+
+`--steps` creates explicit triggers. A sampler trigger rings out even in Gate mode.
+`--notes` creates held notes by default. Include `"trig":true` on any trigger in a mixed
+row. When a row contains held notes or cannot be represented as a step string, the reply's
+`notes` array carries `trig` for each event.
 
 ## Takes and comping
 

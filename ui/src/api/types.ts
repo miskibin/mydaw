@@ -96,13 +96,14 @@ export interface KeysStatus { state: 'idle' | 'missing' | 'loading' | 'ready' | 
 export interface SamplerState {
   start: number; end: number; reverse: boolean; norm: boolean; semi: number; fine: number;
   gate: boolean; attack: number; decay: number; sustain: number; release: number; cut: number;
+  fadeInMs?: number; fadeOutMs?: number;
 }
 export const SAMPLER = {
   semi: { min: -24, max: 24 }, fine: { min: -100, max: 100 },
   attack: { min: 0, max: 2000 }, decay: { min: 0, max: 5000 }, release: { min: 1, max: 5000, def: 20 },
-  cutGroups: 8, minSpan: 0.001,
+  fadeMaxMs: 5000, cutGroups: 8, minSpan: 0.001,
 } as const;
-export const samplerDefault = (): SamplerState => ({ start: 0, end: 1, reverse: false, norm: false, semi: 0, fine: 0, gate: false, attack: 0, decay: 0, sustain: 1, release: SAMPLER.release.def, cut: 0 });
+export const samplerDefault = (): SamplerState => ({ start: 0, end: 1, reverse: false, norm: false, semi: 0, fine: 0, gate: false, attack: 0, decay: 0, sustain: 1, release: SAMPLER.release.def, cut: 0, fadeInMs: 0, fadeOutMs: 0 });
 /** What a channel plays: a sample of a project source (the sampler), the built-in synth, or WAVE Keys. */
 export type ChannelSrc = { kind: 'sample'; source: Id; sampler: SamplerState } | { kind: 'synth'; synth: SynthState } | { kind: 'keys'; keys: KeysState };
 /**
@@ -118,7 +119,8 @@ export type Channel = {
  * A pattern note: channel `ch`, `step`/`len` in 16ths, `p` MIDI key (absent = the channel's root),
  * `v` velocity 0..1 (absent = 1).
  */
-export interface Note { ch: Id; step: number; len: number; p?: number; v?: number }
+/** `trig` is true for a step trigger, false for a held note, absent on legacy notes. */
+export interface Note { ch: Id; step: number; len: number; p?: number; v?: number; trig?: boolean }
 /** `len` in beats; `swing` 0..1 (absent = 0). Notes at or past `len` are kept but hidden and silent. */
 /**
  * `len` (beats) is derived by the engine: the end of the last note rounded up to a bar, at least
