@@ -1355,9 +1355,15 @@ mod tests {
         assert_eq!(result["skipped"], serde_json::json!(["Hats"]));
         let expected_frames = (result["files"][0]["stats"]["seconds"].as_f64().unwrap() * f64::from(bounce.rate)).round() as usize;
         for file in names(dir.path()) {
-            let audio = wave_engine::sources::Audio::load(&dir.path().join(file)).unwrap();
+            let audio = wave_engine::sources::Audio::load(&dir.path().join(&file)).unwrap();
             assert_eq!(audio.sr, bounce.rate);
-            assert!(audio.frames.abs_diff(expected_frames) < 2_304, "decoded {} frames", audio.frames);
+            // The in-app MP3 decoder can include the Info frame, encoder delay, and final padding.
+            // Gapless-aware decoding is checked separately against the corresponding WAV.
+            assert!(
+                audio.frames.abs_diff(expected_frames) <= 3 * 1_152,
+                "{file}: decoded {} frames for {expected_frames} source frames",
+                audio.frames
+            );
         }
 
         let wrap = Bounce { wrap: true, ..bounce };
