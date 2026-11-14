@@ -45,9 +45,28 @@ export function SamplerPanel(props: { c: Smp }) {
     );
   };
   const semiSpan = SAMPLER.semi.max - SAMPLER.semi.min, fineSpan = SAMPLER.fine.max - SAMPLER.fine.min;
+  const fadeField = (key: Fade) => (
+    <label title={t('b.sm.fadeTip')}>
+      {t(fadeLabels[key])}
+      <input type="number" min="0" max={SAMPLER.fadeMaxMs} step="0.1" value={s()[key] ?? 0}
+        onChange={e => {
+          const input = e.currentTarget;
+          const ms = input.value === '' ? 0 : input.valueAsNumber;
+          if (!Number.isFinite(ms)) { input.value = String(s()[key] ?? 0); return; }
+          const value = clamp(ms, 0, SAMPLER.fadeMaxMs);
+          input.value = String(value);
+          if (value !== (s()[key] ?? 0)) set({ [key]: value }, fadeLabels[key], t(fadeLabels[key]) + ' ' + msText(value));
+        }} />
+      <span>ms</span>
+    </label>
+  );
   return (
     <>
       <Wave c={c()} />
+      <div class="smpfades">
+        {fadeField('fadeInMs')}
+        {fadeField('fadeOutMs')}
+      </div>
       <div class="chsrc">
         <span class="ell" title={src()?.path ?? ''}>{src() ? baseName(src()!.path) : t('b.cw.noFile')}</span>
         <Show when={src()}>{x => <span class="mono">{(x().dur * (s().end - s().start)).toFixed(2)} s · {Math.round(x().sr / 100) / 10} kHz · {x().ch === 1 ? 'mono' : 'stereo'}</span>}</Show>
@@ -86,6 +105,18 @@ export function SamplerPanel(props: { c: Smp }) {
 
 /** Pixels around a start/end marker that grab it. */
 const GRAB = 7;
+type Fade = 'fadeInMs' | 'fadeOutMs';
+const fadeLabels = { fadeInMs: 'b.sm.fadeIn', fadeOutMs: 'b.sm.fadeOut' } as const;
+const fadeY = { fadeInMs: 10, fadeOutMs: 24 } as const;
+
+/** From the audible edge to the fade handle, in source fractions. */
+function fadeHandle(st: SamplerState, key: Fade, seconds: number) {
+  const fromLeft = (key === 'fadeInMs') !== st.reverse;
+  const edge = fromLeft ? st.start : st.end;
+  const dir = fromLeft ? 1 : -1;
+  const span = Math.min(st.end - st.start, (st[key] ?? 0) / (seconds * 1000));
+  return { edge, dir, at: edge + dir * span };
+}
 
 /** The waveform: the part that plays is bright, the rest dimmed; drag the two markers to trim. */
 function Wave(props: { c: Smp }) {
@@ -124,12 +155,26 @@ function Wave(props: { c: Smp }) {
     g.fillStyle = T.fgHi;
     g.fillRect(Math.round(x0), 0, 1, h); g.fillRect(Math.round(x0), 0, 6, 6);
     g.fillRect(Math.min(w - 1, Math.round(x1) - 1), 0, 1, h); g.fillRect(Math.round(x1) - 6, h - 6, 6, 6);
+    if (src?.dur) {
+      for (const key of ['fadeInMs', 'fadeOutMs'] as const) {
+        const { edge, at } = fadeHandle(st, key, src.dur);
+        const x = clamp(w * at, 4, w - 4), y = fadeY[key];
+        g.strokeStyle = T.blue;
+        g.beginPath(); g.moveTo(w * edge, y + 14); g.lineTo(x, y); g.stroke();
+        g.fillStyle = T.blue; g.fillRect(x - 3, y - 3, 6, 6);
+      }
+    }
     // which way it plays
     g.font = '10px sans-serif'; g.fillStyle = T.fg3;
     g.fillText(st.reverse ? '◀' : '▶', st.reverse ? Math.max(x0 + 8, x1 - 20) : Math.min(x1 - 14, x0 + 10), h - 6);
   };
-  const near = (e: PointerEvent): 'start' | 'end' | null => {
+  const near = (e: MouseEvent): 'start' | 'end' | Fade | null => {
     const r = cv.getBoundingClientRect(), x = e.clientX - r.left, st = s();
+    const seconds = chanSource(props.c)?.dur;
+    if (seconds) for (const key of ['fadeInMs', 'fadeOutMs'] as const) {
+      const { at } = fadeHandle(st, key, seconds);
+      if (Math.abs(e.clientY - r.top - fadeY[key]) <= 6 && Math.abs(x - clamp(at * r.width, 4, r.width - 4)) <= GRAB) return key;
+    }
     const ds = Math.abs(x - st.start * r.width), de = Math.abs(x - st.end * r.width);
     if (Math.min(ds, de) > GRAB) return null;
     // where they touch, the side of the pointer decides
@@ -142,10 +187,23 @@ function Wave(props: { c: Smp }) {
     if (!which) { const c = live(props.c.id); if (c) audition(c.id, c.root, 0.9, true); return; }
     e.preventDefault();
     const r = cv.getBoundingClientRect();
-    const g = new Gesture(t('b.sm.region'));
+    const fade = which === 'fadeInMs' || which === 'fadeOutMs' ? which : null;
+    const g = new Gesture(t(fade ? fadeLabels[fade] : 'b.sm.region'));
     track(ev => {
       const c = live(props.c.id); if (!c) return;
-      const st = settings(c), f = Math.round(clamp((ev.clientX - r.left) / r.width, 0, 1) * 1000) / 1000;
+      const st = settings(c);
+      const fraction = clamp((ev.clientX - r.left) / r.width, 0, 1);
+      if (fade) {
+        const seconds = chanSource(c)?.dur;
+        if (!seconds) return;
+        const { edge, dir } = fadeHandle(st, fade, seconds);
+        const ms = Math.round(10000 * seconds * clamp((fraction - edge) * dir, 0, st.end - st.start)) / 10;
+        const value = Math.min(ms, SAMPLER.fadeMaxMs);
+        g.update([patchOp(c, { [fade]: value })]);
+        say(t(fadeLabels[fade]) + ' · ' + msText(value));
+        return;
+      }
+      const f = Math.round(fraction * 1000) / 1000;
       const patch = which === 'start' ? { start: Math.min(f, st.end - SAMPLER.minSpan) } : { end: Math.max(f, st.start + SAMPLER.minSpan) };
       g.update([patchOp(c, patch)]);
       say(c.name + ' · ' + t(which === 'start' ? 'b.sm.startSay' : 'b.sm.endSay', { pct: Math.round((patch.start ?? patch.end ?? 0) * 100) }));
@@ -153,7 +211,15 @@ function Wave(props: { c: Smp }) {
   };
   const hover = (e: PointerEvent) => { cv.style.cursor = near(e) ? 'ew-resize' : 'pointer'; };
   /** Double click: play the whole file again. */
-  const reset = () => { const c = live(props.c.id); if (c && (settings(c).start !== 0 || settings(c).end !== 1)) commit([patchOp(c, { start: 0, end: 1 })], t('b.sm.region')); };
+  const reset = (e: MouseEvent) => {
+    const c = live(props.c.id); if (!c) return;
+    const target = near(e);
+    if (target === 'fadeInMs' || target === 'fadeOutMs') {
+      if (settings(c)[target]) commit([patchOp(c, { [target]: 0 })], t(fadeLabels[target]));
+    } else if (settings(c).start !== 0 || settings(c).end !== 1) {
+      commit([patchOp(c, { start: 0, end: 1 })], t('b.sm.region'));
+    }
+  };
   onMount(() => {
     const ro = new ResizeObserver(draw); ro.observe(cv);
     onCleanup(() => ro.disconnect());
@@ -161,7 +227,7 @@ function Wave(props: { c: Smp }) {
   createEffect(() => {
     peaksVersion(); themeVersion(); lang();
     void props.c.color; void props.c.source;
-    const st = s(); void [st.start, st.end, st.reverse, st.attack, st.decay, st.sustain, st.semi, st.fine, st.gate];
+    const st = s(); void [st.start, st.end, st.reverse, st.attack, st.decay, st.sustain, st.semi, st.fine, st.gate, st.fadeInMs, st.fadeOutMs];
     draw();
   });
   return <canvas ref={cv} class="chwave" title={t('b.sm.waveTitle')} onPointerDown={down} onPointerMove={hover} onDblClick={reset} />;

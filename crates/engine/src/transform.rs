@@ -227,6 +227,7 @@ pub fn euclidean_fill(notes: &mut Vec<Note>, ch: Id, k: u32, n: u32, rotate: i32
                 len: slot.clamp(0.25, 1.0),
                 p: None,
                 v: if hits.is_multiple_of(4) { 1.0 } else { vel },
+                trig: Some(true),
             });
             hits += 1;
         }
@@ -295,7 +296,7 @@ pub fn melody(notes: &mut Vec<Note>, ch: Id, key_scale: (u8, u32), bars: u32, de
                 continue;
             }
             let midi = (48 + key as i32 + degrees[d as usize] as i32) as u8;
-            notes.push(Note { ch, step: (bar * 16 + slot) as f32, len, p: Some(midi), v: 0.8 });
+            notes.push(Note { ch, step: (bar * 16 + slot) as f32, len, p: Some(midi), v: 0.8, trig: Some(false) });
         }
     }
 }
@@ -309,7 +310,7 @@ mod tests {
     use super::*;
 
     fn note(ch: Id, step: f32, v: f32) -> Note {
-        Note { ch, step, len: 1.0, p: Some(60), v }
+        Note { ch, step, len: 1.0, p: Some(60), v, trig: Some(false) }
     }
 
     #[test]
@@ -359,16 +360,16 @@ mod tests {
     #[test]
     fn scale_aware_quantize_snaps_pitch_into_the_scale() {
         // C major: the C# is equidistant from C and D; pitch::snap keeps the lower
-        let a = &mut [Note { ch: 1, step: 4.0, len: 1.0, p: Some(61), v: 0.8 }];
+        let a = &mut [Note { ch: 1, step: 4.0, len: 1.0, p: Some(61), v: 0.8, trig: Some(false) }];
         quantize(a, 1.0, 1.0, Some((0, 1)), &[(1, 60)]);
         assert_eq!(a[0].p, Some(60));
         // the D# is equidistant from D and E; pitch::snap keeps the lower
-        let b = &mut [Note { ch: 1, step: 4.0, len: 1.0, p: Some(63), v: 0.8 }];
+        let b = &mut [Note { ch: 1, step: 4.0, len: 1.0, p: Some(63), v: 0.8, trig: Some(false) }];
         quantize(b, 1.0, 1.0, Some((0, 1)), &[(1, 60)]);
         assert_eq!(b[0].p, Some(62));
         // every out-of-scale chromatic note ties between its in-scale neighbours;
         // pitch::snap keeps the lower — F# (66) lands on F (65)
-        let c = &mut [Note { ch: 1, step: 4.0, len: 1.0, p: Some(66), v: 0.8 }];
+        let c = &mut [Note { ch: 1, step: 4.0, len: 1.0, p: Some(66), v: 0.8, trig: Some(false) }];
         quantize(c, 1.0, 1.0, Some((0, 1)), &[(1, 60)]);
         assert_eq!(c[0].p, Some(65));
     }
@@ -379,7 +380,7 @@ mod tests {
         let h = &mut [note(1, 4.0, 0.02)];
         humanize(h, 0.0, 0.0, &mut SplitMix64::new(9));
         assert_eq!(h[0].v, 0.02);
-        let s = &mut [note(1, 4.0, 0.02), Note { ch: 1, step: 4.0, len: 1.0, p: Some(64), v: 0.02 }];
+        let s = &mut [note(1, 4.0, 0.02), Note { ch: 1, step: 4.0, len: 1.0, p: Some(64), v: 0.02, trig: Some(false) }];
         strum(s, 0.25, 0.0);
         assert!(s.iter().all(|n| n.v == 0.02));
         // and a full nudge still stays inside 0..=1
@@ -391,11 +392,11 @@ mod tests {
     #[test]
     fn scale_aware_quantize_stays_in_midi_range() {
         // C# major pentatonic (key 1, scale 3): 127 would snap up to 128
-        let a = &mut [Note { ch: 1, step: 0.0, len: 1.0, p: Some(127), v: 0.8 }];
+        let a = &mut [Note { ch: 1, step: 0.0, len: 1.0, p: Some(127), v: 0.8, trig: Some(false) }];
         quantize(a, 1.0, 1.0, Some((1, 3)), &[]);
         assert_eq!(a[0].p, Some(125));
         // the bottom edge: 0 (C) in B major pentatonic (B C# D# F# G#) — nearest in-range is 1
-        let b = &mut [Note { ch: 1, step: 0.0, len: 1.0, p: Some(0), v: 0.8 }];
+        let b = &mut [Note { ch: 1, step: 0.0, len: 1.0, p: Some(0), v: 0.8, trig: Some(false) }];
         quantize(b, 1.0, 1.0, Some((11, 3)), &[]);
         assert_eq!(b[0].p, Some(1));
         // everywhere in range, the bounded snap agrees with pitch::snap
@@ -441,8 +442,8 @@ mod tests {
     fn strum_spreads_a_chord_by_pitch() {
         let notes = &mut [
             note(1, 4.0, 0.8),
-            Note { ch: 1, step: 4.0, len: 1.0, p: Some(64), v: 0.8 },
-            Note { ch: 1, step: 4.0, len: 1.0, p: Some(57), v: 0.8 },
+            Note { ch: 1, step: 4.0, len: 1.0, p: Some(64), v: 0.8, trig: Some(false) },
+            Note { ch: 1, step: 4.0, len: 1.0, p: Some(57), v: 0.8, trig: Some(false) },
         ];
         strum(notes, 0.25, 0.05);
         // array positions stay, offsets follow pitch rank: lowest starts first
@@ -489,8 +490,8 @@ mod tests {
     fn strum_groups_nonadjacent_same_step_notes() {
         let notes = &mut [
             note(1, 4.0, 0.8),
-            Note { ch: 1, step: 8.0, len: 1.0, p: Some(64), v: 0.8 },
-            Note { ch: 1, step: 4.0, len: 1.0, p: Some(57), v: 0.8 },
+            Note { ch: 1, step: 8.0, len: 1.0, p: Some(64), v: 0.8, trig: Some(false) },
+            Note { ch: 1, step: 4.0, len: 1.0, p: Some(57), v: 0.8, trig: Some(false) },
         ];
         strum(notes, 0.25, 0.0);
         // the two step-4 notes form one chord (lowest first) even though they are
@@ -514,8 +515,8 @@ mod tests {
         assert_eq!(q[0].step, 4.0);
         let s = &mut [
             note(1, 4.0, 0.8),
-            Note { ch: 1, step: 4.0, len: 1.0, p: Some(64), v: 0.8 },
-            Note { ch: 1, step: 4.0, len: 1.0, p: Some(57), v: 0.8 },
+            Note { ch: 1, step: 4.0, len: 1.0, p: Some(64), v: 0.8, trig: Some(false) },
+            Note { ch: 1, step: 4.0, len: 1.0, p: Some(57), v: 0.8, trig: Some(false) },
         ];
         strum(s, 0.25, 0.05);
         // array positions stay; the lowest pitch starts first, each next +width

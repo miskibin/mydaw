@@ -46,7 +46,7 @@ export function legato(notes: readonly Note[], idx: readonly number[]): { notes:
     const next = uniq.find(s => s > n.step + EPS);
     if (next == null) continue;
     const len = r6(next - n.step);
-    if (Math.abs(len - n.len) > 1e-6) { out[i] = { ...n, len }; changed++; }
+    if (n.trig || Math.abs(len - n.len) > 1e-6) { out[i] = { ...n, len, trig: false }; changed++; }
   }
   return { notes: out, changed };
 }
@@ -158,7 +158,7 @@ export function parseVel(text: string): number | null {
 /** What the properties popover shows for notes `idx`: velocity (%) and length when they all share one (else null), the earliest start, the lowest key. */
 export function readProps(notes: readonly Note[], idx: readonly number[], chan: Channel | undefined): { vel: number | null; len: number | null; start: number; key: number } {
   const ns = idx.map(i => notes[i]).filter(Boolean);
-  const vs = new Set(ns.map(n => Math.round(velOf(n) * 100))), ls = new Set(ns.map(n => n.len));
+  const vs = new Set(ns.map(n => Math.round(velOf(n) * 100))), ls = new Set(ns.map(n => n.trig ? null : n.len));
   return {
     vel: vs.size === 1 ? [...vs][0] : null,
     len: ls.size === 1 ? [...ls][0] : null,
@@ -183,6 +183,7 @@ export function applyProps(notes: readonly Note[], idx: readonly number[], chan:
     const step = r6(n.step + dS), len = ch.len ?? n.len, key = keyOf(n, chan) + dK;
     if (step < 0 || step + len > MAX_STEP + 1e-9 || key < 0 || key > 127) return null;
     const m: Note = { ...n, step, len };
+    if (ch.len != null) m.trig = false;
     if (dK) m.p = key;
     if (ch.vel != null) m.v = ch.vel / 100;
     out[i] = m;

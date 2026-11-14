@@ -129,6 +129,78 @@ fn gate_stops_with_the_note_and_fades_over_the_release() {
 }
 
 #[test]
+fn a_gate_step_rings_out_and_round_trips_without_changing_short_held_notes() {
+    let (e, ch) = engine("trigger", |s| s.gate = true, &[(0.0, 1.0, None)]);
+    let mut pattern = e.project().patterns[0].clone();
+    pattern.notes[0].trig = None; // a file made before event kinds existed
+    e.apply(&[Op::PutPattern { pattern: pattern.clone() }], false, None).unwrap();
+    let path = tmp("trigger").join("legacy.wave");
+    e.save(&path).unwrap();
+    assert!(e.open(&path).unwrap().is_empty());
+    assert_eq!(e.project().patterns[0].notes[0].trig, None);
+    assert_eq!(peak_in(&render(&e, 4.0), 0.2, 0.99), 0.0);
+
+    pattern.notes[0] = Note::trigger(ch, 0.0, None);
+    e.apply(&[Op::PutPattern { pattern }], false, None).unwrap();
+    let trigger = render(&e, 4.0);
+    assert!(peak_in(&trigger, 0.9, 0.99) > 0.09);
+    assert_eq!(peak_in(&trigger, 1.01, 2.0), 0.0);
+    assert!(e.undo());
+    assert_eq!(peak_in(&render(&e, 4.0), 0.2, 0.99), 0.0);
+    assert!(e.redo());
+    let path = tmp("trigger").join("explicit.wave");
+    e.save(&path).unwrap();
+    assert!(e.open(&path).unwrap().is_empty());
+    assert_eq!(e.project().patterns[0].notes[0].trig, Some(true));
+    assert_eq!(render(&e, 4.0), trigger);
+}
+
+#[test]
+fn sample_fades_follow_the_audible_edges_and_match_the_live_engine() {
+    for reverse in [false, true] {
+        for trigger in [false, true] {
+            let (e, ch) = engine(
+                "fades",
+                |s| {
+                    s.start = 0.25;
+                    s.end = 0.75;
+                    s.reverse = reverse;
+                    s.gate = true;
+                    s.fade_in_ms = 100.0;
+                    s.fade_out_ms = 200.0;
+                },
+                &[(0.0, 8.0, None)],
+            );
+            if trigger {
+                let mut pattern = e.project().patterns[0].clone();
+                pattern.notes = vec![Note::trigger(ch, 0.0, None)];
+                e.apply(&[Op::PutPattern { pattern }], false, None).unwrap();
+            }
+            let out = render(&e, 4.0);
+            let (start, end) = if reverse { (0.1, 0.8) } else { (0.8, 0.1) };
+            assert!(peak_in(&out, 0.04, 0.05) < start * 0.51);
+            assert!(peak_in(&out, 0.11, 0.15) > start * 0.99);
+            assert!(peak_in(&out, 0.37, 0.40) < end * 0.66);
+            assert!(peak_in(&out, 0.49, 0.5) < end * 0.051);
+            assert_eq!(peak_in(&out, 0.51, 2.0), 0.0);
+
+            let mut rt = e.create_rt(SR as f32, 256);
+            e.set_transport(Some(false), Some(false), None, None);
+            e.play(0.0);
+            let (mut left, mut right) = ([0.0; 256], [0.0; 256]);
+            let live: Vec<_> = (0..(SR as usize / 256))
+                .flat_map(|_| {
+                    rt.process(&mut left, &mut right, None);
+                    left
+                })
+                .collect();
+            let diff = live.iter().zip(&out).map(|(a, b)| (a - b).abs()).fold(0.0, f32::max);
+            assert!(diff < 1e-5, "live and offline fades differ by {diff}");
+        }
+    }
+}
+
+#[test]
 fn start_and_end_pick_the_part_that_plays() {
     // the second half only: quiet from the first sample
     let tail = one(|s| s.start = 0.5, 1.0);
@@ -228,6 +300,19 @@ fn a_cut_group_silences_its_sounding_notes() {
     // the cut is at the new note, not earlier: the first note is whole until then
     assert!((peak_in(&cut, 0.40, 0.495) - 0.8).abs() < 0.01);
 
+    let (e, ch) = engine(
+        "trigger-cut",
+        |s| {
+            s.gate = true;
+            s.cut = 1;
+        },
+        &notes,
+    );
+    let mut pattern = e.project().patterns[0].clone();
+    pattern.notes = vec![Note::trigger(ch, 0.0, None), Note::trigger(ch, 4.0, None)];
+    e.apply(&[Op::PutPattern { pattern }], false, None).unwrap();
+    assert_eq!(render(&e, 4.0), cut);
+
     // across channels: a second channel in the group cuts the first; another group does not
     let across = |group: u8| {
         let (e, ch) = engine("cut2", |s| s.cut = 1, &[(0.0, 1.0, None)]);
@@ -273,6 +358,8 @@ fn settings_out_of_range_are_refused() {
     assert!(with(&|s| s.attack = -1.0).is_err());
     assert!(with(&|s| s.sustain = 1.1).is_err());
     assert!(with(&|s| s.release = 0.0).is_err());
+    assert!(with(&|s| s.fade_in_ms = -1.0).is_err());
+    assert!(with(&|s| s.fade_out_ms = 5001.0).is_err());
     assert!(with(&|s| s.cut = 9).is_err());
     assert!(with(&|s| s.cut = 8).is_ok());
     // a refused edit changes nothing, and an accepted one is one undo step

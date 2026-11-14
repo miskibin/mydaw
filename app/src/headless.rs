@@ -178,6 +178,31 @@ mod tests {
     }
 
     #[test]
+    fn pattern_commands_round_trip_triggers_and_sampler_fades() {
+        let dir = tmp("steps");
+        let path = dir.join("steps.wave");
+        let doc = Files.create("sketch").unwrap();
+        let row = |v: serde_json::Value| v["rows"].as_array().unwrap().iter().find(|r| r["name"] == "Kick").unwrap().clone();
+        let steps = row(doc.call("pattern", &json!({"id": 1, "ch": "kick", "steps": "x..."}), None).unwrap());
+        assert!(steps.get("notes").is_none());
+        let both = json!([
+            {"step": 0.0, "len": 1.0, "p": 60, "v": 0.5, "trig": true},
+            {"step": 4.0, "len": 1.0, "p": 60, "v": 0.75, "trig": false}
+        ]);
+        let explicit = row(doc.call("pattern", &json!({"id": 1, "ch": "kick", "notes": both}), None).unwrap());
+        assert_eq!(explicit["notes"], both);
+        doc.call("channels", &json!({"ch": "kick", "param": "fadeInMs", "value": 50}), None).unwrap();
+        doc.save(&path).unwrap();
+        let (reopened, warnings) = Files.open(&path).unwrap();
+        assert!(warnings.is_empty());
+        assert_eq!(row(reopened.call("pattern", &json!({"id": 1}), None).unwrap())["notes"], both);
+        let channels = reopened.call("channels", &json!({}), None).unwrap();
+        let kick = channels.as_array().unwrap().iter().find(|c| c["name"] == "Kick").unwrap();
+        assert_eq!(kick["sampler"]["fadeInMs"], 50.0);
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
     fn transport_undo_and_auditions_need_the_app() {
         let doc = Files.create("sketch").unwrap();
         for cmd in crate::actions::LIVE_ONLY {

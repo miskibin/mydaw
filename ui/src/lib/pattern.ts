@@ -21,6 +21,7 @@ export function samplerError(s: SamplerState | undefined): string | null {
   if (!(within(s.start, 0, 1) && within(s.end, 0, 1) && s.end - s.start >= SAMPLER.minSpan - 1e-6)) return 'sampler start and end are fractions 0..1 of the file, start before end';
   if (!(Number.isInteger(s.semi) && within(s.semi, SAMPLER.semi.min, SAMPLER.semi.max) && within(s.fine, SAMPLER.fine.min, SAMPLER.fine.max))) return 'sampler pitch is -24..24 semitones and -100..100 cents';
   if (!(within(s.attack, SAMPLER.attack.min, SAMPLER.attack.max) && within(s.decay, SAMPLER.decay.min, SAMPLER.decay.max) && within(s.sustain, 0, 1) && within(s.release, SAMPLER.release.min, SAMPLER.release.max))) return 'sampler envelope: attack 0..2000 ms, decay 0..5000 ms, sustain 0..1, release 1..5000 ms';
+  if (!(within(s.fadeInMs ?? 0, 0, SAMPLER.fadeMaxMs) && within(s.fadeOutMs ?? 0, 0, SAMPLER.fadeMaxMs))) return 'sampler fades must be 0..5000 ms';
   if (!(Number.isInteger(s.cut) && within(s.cut, 0, SAMPLER.cutGroups))) return 'sampler cut group is 0 (none) or 1..8';
   return null;
 }
@@ -101,6 +102,7 @@ export function applyPatternOp(p: Project, op: Op, strict: boolean, adopt: <T ex
         if (!(n.step >= 0 && n.len > 0 && isFinite(n.step) && isFinite(n.len))) fail(`pattern ${pt.id}: a note has an invalid step/len`);
         if ((n.step + n.len) > TOTAL_BEATS * 4) fail(`pattern ${pt.id}: notes must end within ${TOTAL_BEATS} beats`);
         if (n.v != null && !(n.v >= 0 && n.v <= 1)) fail('note velocity `v` must be 0..1');
+        if (n.trig != null && typeof n.trig !== 'boolean') fail('note `trig` must be a boolean');
         if (!n.ch) fail('every note needs `ch`');
       }
       if (strict) { const bad = pt.notes.find(n => !(p.channels ?? []).some(c => c.id === n.ch)); if (bad) fail(`no channel with id ${bad.ch}`); }
@@ -164,11 +166,11 @@ export function applyPatternOp(p: Project, op: Op, strict: boolean, adopt: <T ex
 const onStep = (n: Note, ch: Id, s: number) => n.ch === ch && Math.abs(n.step - s) < EPS;
 export const isStepOn = (notes: readonly Note[], ch: Id, s: number) => notes.some(n => onStep(n, ch, s));
 
-/** Notes with step `s` of channel `ch` set on (a 1-step note at the root) or off (every note starting there). */
+/** Notes with step `s` of channel `ch` set on (a trigger at the root) or off (every note starting there). */
 export function setStep(notes: readonly Note[], ch: Id, s: number, on: boolean): Note[] {
   const has = isStepOn(notes, ch, s);
   if (on === has) return notes as Note[];
-  return on ? [...notes, { ch, step: s, len: 1 }] : notes.filter(n => !onStep(n, ch, s));
+  return on ? [...notes, { ch, step: s, len: 1, trig: true }] : notes.filter(n => !onStep(n, ch, s));
 }
 
 /** Every grid cell the pointer passes going from (r0, s0) to (r1, s1), both ends included, in order. */
@@ -187,7 +189,7 @@ export function cellsBetween(r0: number, s0: number, r1: number, s1: number): [n
 /** "Fill each N steps": the channel's steps become 0, N, 2N … up to `steps` (its other notes go). */
 export function fillEvery(notes: readonly Note[], ch: Id, steps: number, n: number): Note[] {
   const keep = notes.filter(x => x.ch !== ch);
-  for (let s = 0; s < steps; s += n) keep.push({ ch, step: s, len: 1 });
+  for (let s = 0; s < steps; s += n) keep.push({ ch, step: s, len: 1, trig: true });
   return keep;
 }
 
@@ -215,16 +217,16 @@ export function pasteChannelNotes(notes: readonly Note[], ch: Id, clip: ChannelC
 }
 
 /**
- * True when the channel's notes in this pattern are more than steps: a length other than one
- * step, an off-grid start, or two notes on one step (a chord). A step may have its own key (the
- * graph editor's key lane, FL's note pitch graph): that is still a step.
+ * A row with held notes, off-grid events or chords needs the mini piano roll.
+ * Legacy rows keep their previous step-grid layout and playback until edited.
  */
 export function isRollRow(notes: readonly Note[], c: Channel): boolean {
   const seen = new Set<number>();
   for (const n of notes) {
     if (n.ch !== c.id) continue;
     const r = Math.round(n.step);
-    if (Math.abs(n.len - 1) > EPS || Math.abs(n.step - r) > EPS || seen.has(r)) return true;
+    const isStep = n.trig ?? Math.abs(n.len - 1) <= EPS;
+    if (!isStep || Math.abs(n.step - r) > EPS || seen.has(r)) return true;
     seen.add(r);
   }
   return false;
@@ -279,8 +281,8 @@ export function resizeNotes(orig: readonly Note[], idx: readonly number[], dLen:
   const min = unit || 0.25;
   for (const i of idx) {
     const n = orig[i];
-    const end = snapStep(n.step + n.len + dLen, unit);
-    out[i] = { ...n, len: Math.max(min, end - n.step) };
+    const end = snapStep(n.step + (n.trig ? 0 : n.len) + dLen, unit);
+    out[i] = { ...n, len: Math.max(min, end - n.step), trig: false };
   }
   return out;
 }
@@ -309,11 +311,15 @@ export function transpose(notes: readonly Note[], idx: readonly number[], semis:
   return out;
 }
 
+/** Width of a note in the Piano Roll, including a grab area for a zero-length trigger. */
+export const noteWidth = (n: Note, pps: number) => n.trig ? 7 : Math.max(3, n.len * pps - 1);
+
 /** Index of the channel's note under (step, key), the topmost (latest) first. */
-export function noteAt(notes: readonly Note[], ch: Id, chan: Channel | undefined, step: number, key: number): number {
+export function noteAt(notes: readonly Note[], ch: Id, chan: Channel | undefined, step: number, key: number, pps?: number): number {
   for (let i = notes.length - 1; i >= 0; i--) {
     const n = notes[i];
-    if (n.ch === ch && keyOf(n, chan) === key && step >= n.step - EPS && step < n.step + n.len) return i;
+    const width = pps ? noteWidth(n, pps) / pps : n.len;
+    if (n.ch === ch && keyOf(n, chan) === key && step >= n.step - EPS && step < n.step + width) return i;
   }
   return -1;
 }

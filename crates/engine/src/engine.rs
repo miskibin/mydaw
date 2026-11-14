@@ -2782,6 +2782,7 @@ fn build_patterns(p: &Project, audio: &HashMap<Id, Arc<Audio>>, keys: Option<&Ar
                     Some(NoteRt {
                         beat: step as f64 / 4.0,
                         len: n.len as f64 / 4.0,
+                        trigger: n.trig == Some(true) && chans[ci].kind == crate::synth::VoiceKind::Sample,
                         chan: ci,
                         key: n.p.unwrap_or(p.channels[ci].root),
                         vel: n.v.clamp(0.0, 1.0),
