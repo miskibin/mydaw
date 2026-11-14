@@ -472,6 +472,7 @@ fn diffs_of(take: &PitchAnalysis, al: &Alignment, shift: f32) -> Vec<f32> {
 /// performance. Alignment is Tune to Reference's (content first, pitch shape second), done again
 /// with the reference moved by a non-octave interval when that is what the first pass finds, so
 /// a reference in another key aligns as well as one in another octave.
+#[allow(clippy::needless_range_loop)] // frames index several parallel curves at once
 pub fn compare(
     take: &PitchAnalysis,
     take_content: &ContentFeatures,
