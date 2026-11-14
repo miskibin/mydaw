@@ -238,6 +238,7 @@ source), `putSource{source}`,
 notes; `select` limits the notes touched by humanize/quantize/strum — the generators
 `euclidFill|euclidDrums|melody` always replace every note of their target channel), `setKey{key, scale}` (project key/scale for the
 scale-aware tools),
+`editTune{clip, edit}` (note-level pitch edits of an audio clip, see [Pitch edits](#pitch-edits-on-audio-clips)),
 `putComp{comp}`, `removeComp{id}`, `putNotebook{notebook}`, `setBpm{bpm}`, `setLoop{loop}`.
 
 Every effect has `mix` (0..1 dry/wet, default 1). Automation:
@@ -593,6 +594,23 @@ movement inside the note toward its centre; `gain` dB). Start from
 `pitch_analyze` notes, edit, send with `putClips`. Rendering is offline and
 latency-free; during a gesture the previous render keeps playing and the new
 one is made at `end_gesture`.
+
+**Note edits are one op.** `editTune {clip, edit}` (`crates/engine/src/tune_edit.rs`) moves,
+resets, splits and merges notes and draws pitch, addressed by note index in the clip's current
+segmentation (`init` = the analysis' notes when the clip has none yet; `base` = a fingerprint of
+the segmentation the indices were read from, refused as `STALE_NOTES` when it changed). The pitch
+editor sends it for every note edit (its drags and macros included) and `wave pitch edit` builds
+the same op, so the two cannot drift apart; `ui/src/lib/pitch.ts` `applyTuneEdit` is the browser
+mock's port, checked against a fixture the engine writes. Tune to Reference settings are still a
+`putClips` of the clip's `tune.reference`.
+
+**Pitch for agents** (`crates/engine/src/pitch_api.rs`, `app/src/pitch_actions.rs`, `wave pitch …`):
+read-only measurement — per-note statistics (sung pitch, cents, kind stable/vibrato/glide/short/
+unsure, confidence, stability), a comparison with another performance (Tune to Reference's
+alignment with a looser timing tolerance for another singer's phrasing, any interval, note
+relations match/merged/split/extra, ornaments, `related` only when most matched notes agree) and
+a cautious proposal (`suggest`) — kept apart from the decision, which the caller makes and applies
+with `editTune`. See [cli.md](cli.md#pitch-editing-for-agents).
 
 **Retune speed.** The correction (edited − sung pitch) follows its target with a one-pole
 lag that reaches 95 % of a change in `speed` ms (Auto-Tune's Retune Speed): a note's own

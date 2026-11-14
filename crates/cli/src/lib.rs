@@ -98,6 +98,21 @@ PITCH  (Tune to Reference: pull a vocal take onto another performance of the sam
   melody-channels --clip ID                channels playing notes over the clip, best fit to the singing first
   pitch-target --clip ID [--full]          the computed target: score, octave, notes (--full: curves)
   f0-model                                 pitch detector in use; RMVPE model install state
+
+PITCH EDITING  (the pitch editor's notes for scripts and agents; indices come from `pitch inspect`)
+  pitch inspect --clip ID [--full [--from S --to S]] [--all]
+                                           notes: sung pitch, cents off, kind (stable/vibrato/glide/short/unsure),
+                                           confidence, edits, resulting pitch; `base` = segmentation fingerprint
+                                           (--full: frame curves; --all: notes outside the clip's region too)
+  pitch compare --clip ID --source SRC | --ref-clip ID
+                                           read-only: interval (any, not only octaves), note matches (match/merged/
+                                           split/extra), ornaments, timing, similarity, unmatched stretches
+  pitch suggest --clip ID [--source SRC] [--max-cents 60 --min-cents 15 --strength 100 --key C --scale major
+                --tuning CENTS]            a cautious proposal with a reason per note and a ready `op`; read-only
+  pitch edit --clip ID [--base FP] [--note I (--shift C | --cents C | --target MIDI) [--drift % --formant C
+             --gain dB --speed MS|none]] [--split I@SEC] [--merge I] [--reset I,J] [--clear]
+             [--json EDIT | --file edit.json] [--max-cents C]      one undo step (the editTune op)
+  pitch render --clip ID --out take.wav [--original]   the clip alone with its edits (or without), 32-bit WAV
   tune-file --take u.wav --reference r.wav --out o.wav [--json target.json]
             [--model rmvpe.onnx | --yin] [same options as tune-ref]   headless; needs no running app
 
@@ -144,6 +159,7 @@ pub trait Doc {
 
 /// Options that are only present or absent; they never take the word after them as a value.
 const SWITCHES: &[&str] = &[
+    "all",
     "clear",
     "dither",
     "dry-run",
@@ -155,6 +171,7 @@ const SWITCHES: &[&str] = &[
     "new",
     "no-master",
     "off",
+    "original",
     "play",
     "pretty",
     "remove-unused",
@@ -981,11 +998,152 @@ fn run(cx: &Cx, cmd: &str, a: &Args) -> Result<Value, Fail> {
             send(cx, a, "melody_channels", json!({"clipId": a.num("clip").map_err(u)?.ok_or_else(|| u("missing --clip".into()))? as u64}))
         }
         "f0-model" => send(cx, a, "f0_model", json!({})),
+        "pitch" => pitch(cx, a),
         "tune-file" => tune_file(a),
         "script" => script(cx, a),
         "new" => Err(u("`new` creates a file; run it on its own, without --project".into())),
         other => Err(u(format!("unknown command `{other}`"))),
     }
+}
+
+/// `wave pitch inspect|compare|suggest|edit|render`: the pitch editor for scripts and agents.
+fn pitch(cx: &Cx, a: &Args) -> Result<Value, Fail> {
+    let u = Fail::Usage;
+    let verb = a.pos.get(1).map(String::as_str).ok_or_else(|| u("pitch inspect|compare|suggest|edit|render --clip ID …".into()))?;
+    let clip = a.num("clip").map_err(u)?.ok_or_else(|| u("missing --clip".into()))? as u64;
+    let mut args = json!({ "clipId": clip });
+    let num_into = |args: &mut Value, flag: &str, key: &str| -> Result<(), Fail> {
+        if let Some(v) = a.num(flag).map_err(u)? {
+            args[key] = json!(v);
+        }
+        Ok(())
+    };
+    let reference = |args: &mut Value| -> Result<(), Fail> {
+        num_into(args, "source", "source")?;
+        num_into(args, "ref-clip", "referenceClip")
+    };
+    match verb {
+        "inspect" => {
+            args["full"] = json!(a.has("full"));
+            args["all"] = json!(a.has("all"));
+            num_into(&mut args, "from", "from")?;
+            num_into(&mut args, "to", "to")?;
+            send(cx, a, "pitch_inspect", args)
+        }
+        "compare" => {
+            reference(&mut args)?;
+            if args.get("source").is_none() && args.get("referenceClip").is_none() {
+                return Err(u("pitch compare needs --source ID (the reference's source) or --ref-clip ID".into()));
+            }
+            send(cx, a, "pitch_compare", args)
+        }
+        "suggest" => {
+            reference(&mut args)?;
+            for (f, k) in [("min-cents", "minCents"), ("max-cents", "maxCents"), ("strength", "strength"), ("tuning", "tuning")] {
+                num_into(&mut args, f, k)?;
+            }
+            if let Some(k) = a.get("key") {
+                args["key"] = json!(k);
+            }
+            if let Some(sc) = a.get("scale") {
+                args["scale"] = json!(sc);
+            }
+            send(cx, a, "pitch_suggest", args)
+        }
+        "edit" => pitch_edit_args(a, clip, args).and_then(|args| send(cx, a, "pitch_edit", args)),
+        "render" => {
+            args["out"] = json!(a.need("out").map_err(u)?);
+            args["original"] = json!(a.has("original"));
+            send(cx, a, "pitch_render", args)
+        }
+        other => Err(u(format!("unknown pitch verb `{other}` (inspect, compare, suggest, edit, render)"))),
+    }
+}
+
+/// The arguments of `pitch_edit`: a whole edit as JSON (`--json`/`--file`: the `edit` of an
+/// editTune op, or the whole op as `pitch suggest` prints it), plus quick flags.
+fn pitch_edit_args(a: &Args, clip: u64, mut args: Value) -> Result<Value, Fail> {
+    let u = Fail::Usage;
+    let text = match (a.get("json"), a.get("file")) {
+        (Some(j), _) => Some(j.to_string()),
+        (None, Some(f)) => Some(std::fs::read_to_string(f).map_err(|e| u(format!("{f}: {e}")))?),
+        _ => None,
+    };
+    if let Some(t) = text {
+        let mut v: Value = serde_json::from_str(&t).map_err(|e| u(format!("the edit is not JSON: {e}")))?;
+        // a whole `pitch suggest` result: its ready op
+        if v.get("op").is_some_and(Value::is_object) {
+            v = v["op"].clone();
+        } else if v.get("suggestions").is_some() {
+            return Err(u("this `pitch suggest` result has no edits (its `op` is null): nothing to apply".into()));
+        }
+        if v.get("op").and_then(Value::as_str) == Some("editTune") {
+            if v.get("clip").and_then(Value::as_u64).is_some_and(|c| c != clip) {
+                return Err(u(format!("the op edits clip {}, not --clip {clip}", v["clip"])));
+            }
+            v = v["edit"].clone();
+        }
+        let Value::Object(m) = v else { return Err(u("the edit is a JSON object".into())) };
+        for (k, x) in m {
+            args[k] = x;
+        }
+    }
+    let push = |args: &mut Value, key: &str, x: Value| match args.get_mut(key).and_then(Value::as_array_mut) {
+        Some(l) => l.push(x),
+        None => args[key] = json!([x]),
+    };
+    if let Some(i) = a.num("note").map_err(u)? {
+        let mut n = json!({ "i": i as u64 });
+        for (f, k) in [("shift", "shift"), ("cents", "shiftBy"), ("target", "target"), ("formant", "formant"), ("gain", "gain")] {
+            if let Some(v) = a.num(f).map_err(u)? {
+                n[k] = json!(v);
+            }
+        }
+        if let Some(d) = a.num("drift").map_err(u)? {
+            if !(0.0..=100.0).contains(&d) {
+                return Err(u("--drift is a percentage 0..100".into()));
+            }
+            n["drift"] = json!(d / 100.0);
+        }
+        match a.get("speed") {
+            Some("none") => n["speed"] = Value::Null,
+            Some(_) => n["speed"] = json!(a.num("speed").map_err(u)?),
+            None => {}
+        }
+        if n.as_object().is_some_and(|m| m.len() == 1) {
+            return Err(u(
+                "--note I needs --shift C, --cents C, --target MIDI, --drift %, --formant C, --gain dB or --speed MS|none".into()
+            ));
+        }
+        push(&mut args, "notes", n);
+    }
+    for sp in a.get_all("split") {
+        let (i, t) = sp.split_once('@').ok_or_else(|| u("--split is NOTE@SECONDS (e.g. 4@12.35)".into()))?;
+        let i: u64 = i.trim().parse().map_err(|_| u(format!("--split: bad note `{i}`")))?;
+        let t: f64 = t.trim().parse().map_err(|_| u(format!("--split: bad time `{t}`")))?;
+        push(&mut args, "split", json!({ "i": i, "at": t }));
+    }
+    for key in ["merge", "reset"] {
+        for x in a.get_all(key).iter().flat_map(|x| x.split(',')) {
+            let i: u64 = x.trim().parse().map_err(|_| u(format!("--{key} is a comma list of note indices")))?;
+            push(&mut args, key, json!(i));
+        }
+    }
+    if a.has("clear") {
+        args["clear"] = json!(true);
+    }
+    if let Some(b) = a.get("base") {
+        args["base"] = json!(b);
+    }
+    if let Some(m) = a.num("max-cents").map_err(u)? {
+        args["maxCents"] = json!(m);
+    }
+    if args.as_object().is_some_and(|m| m.len() == 1) {
+        return Err(u(
+            "pitch edit: nothing to do (--note I --shift C, --split I@T, --merge I, --reset I, --clear, or --json/--file)".into()
+        ));
+    }
+    Ok(args)
 }
 
 /// Tune to Reference on two files, offline: no app, no project.
@@ -1356,5 +1514,73 @@ mod tests {
         assert_eq!(serde_json::to_string(&v["tiny"]).unwrap(), "0.0"); // no "-0.0"
         assert_eq!(v["big"], json!(6000.0));
         assert_eq!(serde_json::to_string(&v["notes"][0]["v"]).unwrap(), "0.47");
+    }
+}
+
+#[cfg(test)]
+mod pitch_args_tests {
+    use super::*;
+
+    fn args(s: &[&str]) -> Args {
+        Args::parse(s.iter().map(|x| x.to_string()).collect())
+    }
+
+    #[test]
+    fn quick_flags_build_one_edit() {
+        let a = args(&[
+            "pitch",
+            "edit",
+            "--clip",
+            "5",
+            "--note",
+            "3",
+            "--cents",
+            "-20",
+            "--drift",
+            "40",
+            "--speed",
+            "none",
+            "--split",
+            "2@1.5",
+            "--split",
+            "7@3.25",
+            "--merge",
+            "4,6",
+            "--reset",
+            "1",
+            "--base",
+            "abc",
+            "--max-cents",
+            "80",
+        ]);
+        let v = pitch_edit_args(&a, 5, json!({ "clipId": 5 })).unwrap();
+        assert_eq!(v["notes"], json!([{ "i": 3, "shiftBy": -20.0, "drift": 0.4, "speed": null }]));
+        assert_eq!(v["split"], json!([{ "i": 2, "at": 1.5 }, { "i": 7, "at": 3.25 }]));
+        assert_eq!(v["merge"], json!([4, 6]));
+        assert_eq!(v["reset"], json!([1]));
+        assert_eq!(v["base"], "abc");
+        assert_eq!(v["maxCents"], 80.0);
+    }
+
+    #[test]
+    fn a_suggested_op_is_accepted_as_the_edit_and_mistakes_are_usage_errors() {
+        let op = r#"{"op":"editTune","clip":5,"edit":{"base":"f00","notes":[{"i":1,"shift":-30}]}}"#;
+        let v = pitch_edit_args(&args(&["pitch", "edit", "--clip", "5", "--json", op]), 5, json!({ "clipId": 5 })).unwrap();
+        assert_eq!(v, json!({ "clipId": 5, "base": "f00", "notes": [{ "i": 1, "shift": -30 }] }));
+        let plan = format!(r#"{{"suggestions":[],"op":{op}}}"#);
+        let v2 = pitch_edit_args(&args(&["pitch", "edit", "--clip", "5", "--json", &plan]), 5, json!({ "clipId": 5 })).unwrap();
+        assert_eq!(v2, v, "a whole `pitch suggest` result is its op");
+        let wrong = pitch_edit_args(&args(&["pitch", "edit", "--clip", "6", "--json", op]), 6, json!({ "clipId": 6 }));
+        assert!(matches!(wrong, Err(Fail::Usage(m)) if m.contains("clip 5")));
+        for bad in [
+            vec!["pitch", "edit", "--clip", "5"],
+            vec!["pitch", "edit", "--clip", "5", "--note", "2"],
+            vec!["pitch", "edit", "--clip", "5", "--split", "2-1.5"],
+            vec!["pitch", "edit", "--clip", "5", "--merge", "x"],
+            vec!["pitch", "edit", "--clip", "5", "--note", "1", "--drift", "150"],
+            vec!["pitch", "edit", "--clip", "5", "--json", "{not json"],
+        ] {
+            assert!(matches!(pitch_edit_args(&args(&bad), 5, json!({ "clipId": 5 })), Err(Fail::Usage(_))), "{bad:?}");
+        }
     }
 }

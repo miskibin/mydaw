@@ -28,10 +28,12 @@ pub mod denoise;
 pub mod dsp;
 pub mod engine;
 pub mod keys;
+pub mod pitch_api;
 pub mod rt;
 pub mod sources;
 pub mod synth;
 pub mod telemetry;
+pub mod tune_edit;
 pub mod tune_render;
 pub mod vocal;
 

@@ -1,7 +1,7 @@
 // Pitch helpers shared by the Pitch Correct window and the pitch editor: note names and scales
 // (a port of crates/engine/src/pitch.rs `scale_mask` / `snap`), the scrolling pitch-graph
 // mapping, and the clip `tune` edit operations (mirroring crates/engine/src/tune_render.rs).
-import type { ClipTune, NoteEdit, PitchAnalysis, PitchTarget, RefTune } from '../api/types';
+import type { ClipTune, NoteEdit, PitchAnalysis, PitchTarget, RefTune, TuneEdit } from '../api/types';
 
 export const hzToMidi = (hz: number) => 69 + 12 * Math.log2(hz / 440);
 export const midiToHz = (m: number) => 440 * Math.pow(2, (m - 69) / 12);
@@ -209,6 +209,113 @@ export function editNotes(tune: ClipTune, idx: Iterable<number>, patch: (n: Note
   const out = cloneTune(tune);
   for (const i of idx) { const n = out.notes[i]; if (n) Object.assign(n, patch(n, i)); }
   return out;
+}
+
+// ---------------------------------------------------------------- editTune (tune_edit.rs)
+
+/** FNV-1a 64 over the note edges in whole microseconds — tune_edit.rs `fingerprint`. */
+export function segmentationFingerprint(spans: [number, number][]): string {
+  let h = 0xcbf29ce484222325n;
+  const eat = (x: number) => {
+    let v = BigInt.asUintN(64, BigInt(x));
+    for (let k = 0; k < 8; k++) { h ^= v & 0xffn; h = BigInt.asUintN(64, h * 0x100000001b3n); v >>= 8n; }
+  };
+  eat(spans.length);
+  for (const [a, b] of spans) { eat(Math.round(a * 1e6)); eat(Math.round(b * 1e6)); }
+  return h.toString(16).padStart(16, '0');
+}
+
+const TUNE_EDIT_KEYS = new Set(['base', 'init', 'clear', 'reset', 'notes', 'split', 'merge', 'erasePencil', 'pencil']);
+const NOTE_PATCH_KEYS = new Set(['i', 'shift', 'shiftBy', 'drift', 'formant', 'gain', 'speed']);
+const blankNote = (start: number, end: number): NoteEdit => ({ start, end, shift: 0, drift: 0, formant: 0, gain: 0 });
+
+function checkValues(k: number, n: NoteEdit) {
+  if (!(Number.isFinite(n.shift) && Math.abs(n.shift) <= 2400)) throw new Error(`note ${k}: shift must be within ±2400 cents`);
+  if (!(Number.isFinite(n.formant) && Math.abs(n.formant) <= 2400)) throw new Error(`note ${k}: formant must be within ±2400 cents`);
+  if (!(n.drift >= 0 && n.drift <= 1)) throw new Error(`note ${k}: drift must be 0..1`);
+  if (!(n.gain >= -24 && n.gain <= 12)) throw new Error(`note ${k}: gain must be -24..12 dB`);
+  if (n.speed != null && !(n.speed >= 0 && n.speed <= 1000)) throw new Error(`note ${k}: speed must be 0..1000 ms`);
+}
+
+/** The `editTune` op on a clip's tune (null = no edits) — a port of tune_edit.rs `apply` for the browser mock.
+ *  Returns the new tune (null = nothing left to render); throws on an invalid edit, changing nothing. */
+export function applyTuneEdit(tune: ClipTune | null | undefined, e: TuneEdit): ClipTune | null {
+  for (const k of Object.keys(e)) if (!TUNE_EDIT_KEYS.has(k)) throw new Error(`unknown field "${k}"`);
+  for (const p of e.notes ?? []) for (const k of Object.keys(p)) if (!NOTE_PATCH_KEYS.has(k)) throw new Error(`unknown field "${k}"`);
+  const t: ClipTune = { notes: (tune?.notes ?? []).map(n => ({ ...n })), pencil: (tune?.pencil ?? []).map(p => [p[0], p[1]] as [number, number]) };
+  if (tune?.reference) t.reference = tune.reference;
+  if (!t.notes.length && e.init) {
+    t.notes = e.init.map(s => blankNote(s[0], s[1]));
+    t.notes.forEach((n, k) => {
+      if (!(Number.isFinite(n.start) && Number.isFinite(n.end) && n.start >= 0 && n.end > n.start)) throw new Error(`init: note ${k} has an invalid range`);
+      if (k > 0 && n.start < t.notes[k - 1].end - 1e-9) throw new Error(`init: notes ${k - 1} and ${k} overlap or are out of order`);
+    });
+  }
+  const n = t.notes.length;
+  if (e.base != null) {
+    const now = segmentationFingerprint(t.notes.map(x => [x.start, x.end]));
+    if (e.base !== now) throw new Error(`STALE_NOTES: the clip's notes changed since they were read (base ${e.base}, now ${now}); inspect it again`);
+  }
+  const idx = (i: number, what: string) => {
+    if (Number.isInteger(i) && i >= 0 && i < n) return i;
+    throw new Error(n === 0 ? `${what}: the clip has no notes yet; pass "init"` : `${what}: no note ${i} (the clip has ${n})`);
+  };
+  if (e.clear) {
+    if ((e.reset?.length ?? 0) || (e.notes?.length ?? 0) || (e.split?.length ?? 0) || (e.merge?.length ?? 0)) throw new Error('"clear" removes every note edit; it cannot be combined with reset, notes, split or merge');
+    t.notes = []; t.pencil = [];
+  }
+  for (const i of e.reset ?? []) { const k = idx(i, 'reset'); t.notes[k] = blankNote(t.notes[k].start, t.notes[k].end); }
+  const patched = new Array<boolean>(n).fill(false);
+  for (const p of e.notes ?? []) {
+    const k = idx(p.i, 'notes');
+    if (patched[k]) throw new Error(`notes: note ${k} is listed twice`);
+    patched[k] = true;
+    const nt = t.notes[k];
+    if (p.shift != null) nt.shift = p.shift;
+    if (p.shiftBy != null) nt.shift += p.shiftBy;
+    if (p.drift != null) nt.drift = p.drift;
+    if (p.formant != null) nt.formant = p.formant;
+    if (p.gain != null) nt.gain = p.gain;
+    if ('speed' in p) { if (p.speed == null) delete nt.speed; else nt.speed = p.speed; }
+    checkValues(k, nt);
+  }
+  const cuts: [number, number][] = [];
+  for (const sp of e.split ?? []) {
+    const k = idx(sp.i, 'split'), nt = t.notes[k];
+    if (!(Number.isFinite(sp.at) && sp.at - nt.start >= MIN_NOTE - 1e-9 && nt.end - sp.at >= MIN_NOTE - 1e-9)) throw new Error(`split: ${sp.at} s is not inside note ${k} with ${MIN_NOTE * 1000} ms to spare`);
+    cuts.push([k, sp.at]);
+  }
+  cuts.sort((a, b) => a[0] - b[0] || a[1] - b[1]);
+  for (let j = 1; j < cuts.length; j++) if (cuts[j][0] === cuts[j - 1][0] && cuts[j][1] - cuts[j - 1][1] < MIN_NOTE - 1e-9) throw new Error(`split: two cuts in one note are closer than ${MIN_NOTE * 1000} ms`);
+  const merges = [...new Set(e.merge ?? [])].sort((a, b) => a - b);
+  for (const i of merges) {
+    idx(i, 'merge');
+    if (!(i + 1 < n)) throw new Error(`merge: note ${i} is the last one; it has no next note to merge with`);
+    if (Math.abs(t.notes[i].end - t.notes[i + 1].start) > 1e-6) throw new Error(`merge: notes ${i} and ${i + 1} do not touch`);
+    for (const j of [i, i + 1]) if (cuts.some(c => c[0] === j)) throw new Error(`note ${j} is both split and merged in one edit`);
+    if (patched[i + 1]) throw new Error(`merge: note ${i + 1} is merged into note ${i}, its own edits in "notes" would be lost`);
+  }
+  const out: NoteEdit[] = [];
+  for (let k = 0; k < t.notes.length;) {
+    const nt = { ...t.notes[k] };
+    let j = k;
+    while (merges.includes(j)) { j++; nt.end = t.notes[j].end; }
+    let from = nt.start;
+    for (const c of cuts) if (c[0] === k) { out.push({ ...nt, start: from, end: c[1] }); from = c[1]; }
+    out.push({ ...nt, start: from });
+    k = j + 1;
+  }
+  t.notes = out;
+  for (const r of e.erasePencil ?? []) {
+    if (!(Number.isFinite(r[0]) && Number.isFinite(r[1]) && r[1] >= r[0])) throw new Error('erasePencil: each range is [from, to] seconds with to ≥ from');
+    t.pencil = erasePencil(t.pencil, r[0], r[1]);
+  }
+  if (e.pencil?.length) {
+    if (e.pencil.length < 2) throw new Error('pencil: a stroke needs at least 2 points');
+    if (e.pencil.some(p => !(Number.isFinite(p[0]) && p[0] >= 0 && p[1] >= 0 && p[1] <= 127))) throw new Error('pencil: points are [seconds ≥ 0, midi 0..127]');
+    t.pencil = addPencil(t.pencil, e.pencil);
+  }
+  return t.notes.length || t.pencil?.length || t.reference ? t : null;
 }
 
 /** Main tool: a note centred at `center` dragged by `rawCents` → shift snapped to the scale (free with `free`). */

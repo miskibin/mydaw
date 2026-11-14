@@ -138,6 +138,13 @@ pub enum Op {
     PutNotebook {
         notebook: Notebook,
     },
+    /// Note-level pitch edits of an audio clip (`crate::tune_edit`): move, reset, split and
+    /// merge notes and draw pitch, addressed by note index in the clip's current segmentation.
+    /// Nothing else of the clip changes.
+    EditTune {
+        clip: Id,
+        edit: crate::tune_edit::TuneEdit,
+    },
     SetBpm {
         bpm: f64,
     },
@@ -553,6 +560,16 @@ pub fn apply(p: &mut Project, op: &Op) -> Result<Dirty, OpError> {
             }
             p.patterns.retain(|x| x.id != *id);
             p.clips.retain(|c| !(c.kind == ClipKind::Pat && c.source == *id));
+            d.timeline = true;
+        }
+        Op::EditTune { clip, edit } => {
+            let Some(c) = p.clips.iter_mut().find(|c| c.id == *clip) else {
+                return Err(OpError::Missing { what: "clip", id: *clip });
+            };
+            if c.kind != ClipKind::Audio {
+                return Err(OpError::Invalid(format!("clip {clip}: only audio clips have pitch edits")));
+            }
+            c.tune = crate::tune_edit::apply(c.tune.as_ref(), edit).map_err(|m| OpError::Invalid(format!("clip {clip}: {m}")))?;
             d.timeline = true;
         }
         Op::TransformNotes { pattern: pid, verb, seed, select } => {

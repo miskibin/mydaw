@@ -174,6 +174,14 @@ export interface NoteEdit { start: number; end: number; shift: number; drift: nu
 /** `pencil`: hand-drawn `[seconds, midi]` points, sorted; gaps > 30 ms end a run.
  *  `reference`: Tune to Reference — the base pitch comes from another performance; notes and pencil apply on top. */
 export interface ClipTune { notes: NoteEdit[]; pencil?: [number, number][]; reference?: RefTune | null }
+/** `editTune`: note-level pitch edits (crates/engine/src/tune_edit.rs). Indices name the notes as they were before
+ *  the op (`init` when the clip has none yet); parts apply as clear, reset, notes, split, merge, erasePencil, pencil.
+ *  `base` = segmentation fingerprint the indices were read from (refused when it changed). */
+export interface TuneEdit {
+  base?: string; init?: [number, number][]; clear?: boolean; reset?: number[];
+  notes?: { i: number; shift?: number; shiftBy?: number; drift?: number; formant?: number; gain?: number; speed?: number | null }[];
+  split?: { i: number; at: number }[]; merge?: number[]; erasePencil?: [number, number][]; pencil?: [number, number][];
+}
 /** Tune to Reference: `source` = the reference audio; correction/vibrato/influence 0..1;
  *  `octave` in semitones (multiple of 12), null = automatic; key 0..11 and scale 0..4 for the non-reference share. */
 export interface RefTune {
@@ -361,6 +369,7 @@ export type Op =
   | { op: 'setLoop'; loop: LoopRange | null }
   | { op: 'putAutomation'; automation: Automation }
   | { op: 'transformNotes'; pattern: Id; verb: TransformVerb; seed?: number; select?: TransformSelect }
+  | { op: 'editTune'; clip: Id; edit: TuneEdit }
   | { op: 'setKey'; key: number | null; scale?: number }
   | { op: 'removeAutomation'; id: Id }
   | { op: 'putComp'; comp: Comp }

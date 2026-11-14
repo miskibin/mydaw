@@ -113,14 +113,16 @@ fn read_notes(path: &Path) -> Option<Vec<(f64, f64)>> {
 pub fn index(root: &Path) -> Result<Vec<Item>, String> {
     let ann = root.join("Annotated VocalSet");
     let mut wavs = vec![];
-    walk(&root.join("audio"), &mut wavs);
+    // `audio` (as documented) or `FULL` (how VocalSet11.zip unpacks)
+    let audio_dir = ["audio", "FULL"].iter().map(|d| root.join(d)).find(|d| d.is_dir()).unwrap_or_else(|| root.join("audio"));
+    walk(&audio_dir, &mut wavs);
     let by_stem: HashMap<String, PathBuf> = wavs
         .into_iter()
         .filter(|p| p.extension().is_some_and(|e| e.eq_ignore_ascii_case("wav")))
         .filter_map(|p| Some((p.file_stem()?.to_str()?.to_lowercase(), p)))
         .collect();
     if by_stem.is_empty() {
-        return Err(format!("no .wav files under {}", root.join("audio").display()));
+        return Err(format!("no .wav files under {}", audio_dir.display()));
     }
     let mut items = vec![];
     for k in 1..=4 {
@@ -157,7 +159,7 @@ pub fn spread<T>(v: &[T], n: usize) -> Vec<&T> {
 
 /// Per-frame error in cents put onto `audio`: note `k` off by `detune[k]`, drifting
 /// by `drift` cents per second as it is held, gliding between notes.
-fn offsets(frames: usize, notes: &[(f64, f64)], detune: &[f32], drift: f32) -> Vec<f32> {
+pub(crate) fn offsets(frames: usize, notes: &[(f64, f64)], detune: &[f32], drift: f32) -> Vec<f32> {
     let at = |k: usize, t: f64| detune[k] + drift * (t - notes[k].0).max(0.0) as f32;
     (0..frames)
         .map(|f| {
@@ -177,7 +179,7 @@ fn offsets(frames: usize, notes: &[(f64, f64)], detune: &[f32], drift: f32) -> V
 }
 
 /// The recording with `off` (cents per frame) added to its pitch by the editor's own PSOLA.
-fn detuned(audio: &Audio, off: &[f32], est: Option<&dyn F0Estimator>) -> Audio {
+pub(crate) fn detuned(audio: &Audio, off: &[f32], est: Option<&dyn F0Estimator>) -> Audio {
     let a = analyze_with(&mono_of(audio), audio.sr as f32, est);
     let n = a.curve.len();
     let target_f0: Vec<f32> = (0..n).map(|f| a.curve[f] + off.get(f).copied().unwrap_or(0.0) / 100.0).collect();
@@ -198,7 +200,7 @@ fn detuned(audio: &Audio, off: &[f32], est: Option<&dyn F0Estimator>) -> Audio {
 }
 
 /// Frames within 40 ms of silence or of a note edge, or inside a fast glide/trill.
-fn edges(truth: &[f32], notes: &[(f64, f64)]) -> Vec<bool> {
+pub(crate) fn edges(truth: &[f32], notes: &[(f64, f64)]) -> Vec<bool> {
     let n = truth.len();
     let near_note_edge = |f: usize| {
         let t = f as f64 / RATE as f64;
@@ -212,7 +214,7 @@ fn edges(truth: &[f32], notes: &[(f64, f64)]) -> Vec<bool> {
         .collect()
 }
 
-fn note_pitch(curve: &[f32], (a, b): (f64, f64)) -> Option<f32> {
+pub(crate) fn note_pitch(curve: &[f32], (a, b): (f64, f64)) -> Option<f32> {
     let hi = (((b - 0.03) * RATE as f64) as usize).min(curve.len());
     let lo = (((a + 0.05) * RATE as f64) as usize).min(hi);
     let mut v: Vec<f32> = curve[lo..hi].iter().copied().filter(|x| x.is_finite()).collect();
@@ -223,7 +225,7 @@ fn note_pitch(curve: &[f32], (a, b): (f64, f64)) -> Option<f32> {
     Some(v[v.len() / 2])
 }
 
-fn frames_of(a: &Audio) -> usize {
+pub(crate) fn frames_of(a: &Audio) -> usize {
     (a.seconds() * RATE as f64) as usize + 1
 }
 

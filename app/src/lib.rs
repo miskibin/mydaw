@@ -9,6 +9,7 @@ mod headless;
 mod keys;
 mod library;
 mod models;
+mod pitch_actions;
 mod plugins;
 mod project_launch;
 mod recovery;
